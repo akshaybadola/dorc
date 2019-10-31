@@ -97,8 +97,8 @@ control = Tag("control")
 # TODO: Change the whole "returns" and "expects" paradigm to "requires" and "provides".
 # TODO: The trainer should return the controls and properties in a more wholesome way.
 #       Currently it's very hacky and will be error prone in the future.
-class Wrapper:
-    """The :class: `Wrapper` class is envisioned as
+class Trainer:
+    """The :class: `Trainer` class is envisioned as
     an interface to any training procedure.
     """
     def __init__(self, model_params, criteria, optimizer, model_defs, update_functions,

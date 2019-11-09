@@ -1,12 +1,14 @@
 # import ipdb
 import time
 
+from .device import DevicePoll
 
 # Perhaps decouple the Epoch entirely from the wrapper
 # with a tcp socket like thingy
 class Epoch:
     def __init__(self, wrp, extra_reportables):
         self.wrp = wrp
+        self.device_poll = DevicePoll(self.wrp._device_handles)
         self.keep_time = {}
         self.extra_reportables = {}
         for step in ["train", "val", "test"]:
@@ -75,10 +77,18 @@ class Epoch:
         self._current_loop = "train"
         for i, batch in enumerate(self.wrp.train_loader):
             start = time.time()
+            self.device_poll.start()
             received = self.wrp._train_step(self.wrp, batch)
+            self.device_poll.end()
             end = time.time()
             if self.keep_time["train"]:
                 received["time"] = end - start
+            received["gpu_util"] = self.device_poll.gpu_util
+            received["gpu_max_mem"] = self.device_poll.gpu_max_mem
+            received["gpu_min_mem"] = self.device_poll.gpu_min_mem
+            received["cpu_util"] = self.device_poll.cpu_util
+            received["cpu_max_mem"] = self.device_poll.cpu_max_mem
+            received["cpu_min_mem"] = self.device_poll.cpu_min_mem
             self.batch_num["train"] += 1
             self._run_post_batch_hooks(**{"step": "train", **received})
             if self.wrp.aborted:  # has to be here else, break won't work
@@ -136,6 +146,12 @@ class Epoch:
     #     if self.wrp.aborted:
     #         pass
 
+    # TODO: log GPU, CPU, Memory per batch
+    #       GPU, CPU usage is a problem as they'll be idle when
+    #       being reported. They have to be collected while running.
+    # FIXME: This thingy is making an assumption that the other thingy will be
+    #        in kwargs, which isn't quite right. How do I fix this? There will
+    #        have to be checks that "x" value is not reportable.
     def _log_post_batch_hook(self, **kwargs):
         step = kwargs["step"]
         metric_names = self.wrp._metrics[step]

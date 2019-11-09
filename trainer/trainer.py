@@ -1,91 +1,15 @@
 import re
 import os
-import sys
-import json
 import time
 import torch
-import logging
-import psutil
-import pynvml
 from threading import Thread
 import numpy as np
 from torch.utils.data import DataLoader
 
+from .device import init_nvml, gpu_util, cpu_info, memory_info
+from .util import _dump, get_backup_num, gen_file_and_stream_logger
 from .epoch import Epoch
-
-
-def get_backup_num(filedir, filename):
-    backup_files = [x for x in os.listdir(filedir) if x.startswith(filename)]
-    backup_maybe_nums = [b.split('.')[-1] for b in backup_files]
-    backup_nums = [int(x) for x in backup_maybe_nums
-                   if any([_ in x for _ in list(map(str, range(10)))])]
-    if backup_nums:
-        cur_backup_num = max(backup_nums) + 1
-    else:
-        cur_backup_num = 0
-    return cur_backup_num
-
-
-def gen_file_and_stream_logger(logdir, log_file_name):
-    logger = logging.getLogger('default_logger')
-    formatter = logging.Formatter(datefmt='%Y/%m/%d %I:%M:%S %p', fmt='%(asctime)s %(message)s')
-    if not os.path.exists(logdir):
-        os.mkdir(logdir)
-    if not log_file_name.endswith('.log'):
-        log_file_name += '.log'
-    log_file = os.path.abspath(os.path.join(logdir, log_file_name))
-    if os.path.exists(log_file):
-        backup_num = get_backup_num(logdir, log_file_name)
-        os.rename(log_file, log_file + '.' + str(backup_num))
-    file_handler = logging.FileHandler(log_file)
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setLevel(logging.INFO)
-    stream_handler.setFormatter(formatter)
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-    logger.addHandler(stream_handler)
-    logger.setLevel(logging.DEBUG)
-    return logger
-
-
-def gen_file_logger(logdir, log_file_name):
-    logger = logging.getLogger('default_logger')
-    formatter = logging.Formatter(datefmt='%Y/%m/%d %I:%M:%S %p', fmt='%(asctime)s %(message)s')
-    if not os.path.exists(logdir):
-        os.mkdir(logdir)
-    if not log_file_name.endswith('.log'):
-        log_file_name += '.log'
-    # existing_files = [f for f in os.listdir(logdir) if f.startswith(log_file_name)]
-    log_file = os.path.abspath(os.path.join(logdir, log_file_name))
-    if os.path.exists(log_file):
-        backup_num = get_backup_num(logdir, log_file_name)
-        os.rename(log_file, log_file + '.' + str(backup_num))
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-    logger.setLevel(logging.DEBUG)
-    return logger
-
-
-def _dump(x):
-    return json.dumps(x, default=lambda o: f"<<non-serializable: {type(o).__qualname__}>>")
-
-
-class Tag:
-    def __init__(self, x):
-        self.tag = x
-        self._funcs = []
-
-    def __call__(self, f):
-        # if self.tag not in f.__dict__:
-        #     f.__dict__[self.tag] = True
-        #     self._funcs.append(f)
-        if f not in self._funcs:
-            self._funcs.append(f)
-        return f
-control = Tag("control")
+from .helpers import control
 
 
 # Protocol:
@@ -250,17 +174,18 @@ class Trainer:
         self._post_epoch_hooks_to_run = ["validate", "test", "save", "log"]
         self._set_device()
         if "extra_report" not in self._trainer_params:
+            self._logger.debug("No Extra Reportables")
             self.extra_report = {}
         self._epoch = 0
         self._init_nvml()
 
     def _init_nvml(self):
         self._logger.info("Initializing nvml")
+        # CHECK: I don't remember how the order is printed.
         # Assumes torch.cuda devices are of the same order as PCI BUS for
         # getting correct info with pynvml
         if self._gpus[0] != -1:
-            pynvml.nvmlInit()
-            self._device_handles = {x: pynvml.nvmlDeviceGetHandleByIndex(x) for x in self._gpus}
+            self._device_handles = init_nvml(self._gpus)
 
     def _init_models(self):
         self._logger.info("Initializing Models")
@@ -457,22 +382,6 @@ class Trainer:
     def _define_controls(self):
         pass
 
-    def _memory_info(self):
-        info = psutil.virtual_memory()
-        return {"total": info.total, "used": info.used}
-
-    def _cpu_info(self):
-        return {"cpu_count": psutil.cpu_count(), "cpu_util": psutil.cpu_percent()}
-
-    def _gpu_util(self):
-        def _get_util(h):
-            info = pynvml.nvmlDeviceGetUtilizationRates(h)
-            return {"gpu": info.gpu, "memory": info.memory}
-        if self._gpus[0] != -1:
-            return {gpu_id: _get_util(h) for gpu_id, h in self._device_handles.items()}
-        else:
-            return None
-
     # FIXME: resume_best can only be done if an index is kept which keeps
     #        track of what's best.
     # TODO: So basically save all the metrics outside in a separate file
@@ -572,8 +481,9 @@ class Trainer:
 
     @property
     def system_info(self):
-        return {"gpu_util": self._gpu_util(), "cpu_info": self._cpu_info(),
-                "memory": self._memory_info()}
+        return {"gpu_util": gpu_util(self._device_handles) if self._gpus[0] != -1 else None,
+                "cpu_info": cpu_info(),
+                "memory": memory_info()}
 
     @property
     def device(self):
@@ -801,6 +711,7 @@ class Trainer:
             #       variablesthingies.
             # TODO: What if run has to be aborted in the middle?
             #       Ensure that run returns
+            # TODO: What if the thread dies in the middle?
             self._epoch_runner.reset()
             t = Thread(target=self._epoch_runner.run_train)
             t.start()
@@ -889,148 +800,3 @@ class Trainer:
         hook_prefixes = self.post_epoch_hooks_to_run
         for hook in hook_prefixes:
             all_hooks["_".join(["", hook, "post_epoch_hook"])](self)
-
-
-class ClassificationTrainStep:
-    def __init__(self):
-        self.returns = [("metric", "cross_entropy_loss"), ("io", "outputs"), ("io", "labels"),
-                        ("var", "total")]
-
-    # DONE: Apply data parallel here
-    def _train_step(self, wrp, batch, model_name):
-        wrp.optimizers["default"].zero_grad()
-        wrp.models[model_name].train()
-        if wrp.device == "parallel":
-            inputs, labels = batch[0].cuda(), batch[1].cuda()
-        else:
-            inputs, labels = batch[0].to(wrp.device), batch[1].to(wrp.device)
-        outputs = wrp.models[model_name](inputs)
-        loss = wrp.criteria["cross_entropy_loss"](outputs, labels)
-        loss.backward()
-        wrp.optimizers["default"].step()
-        return {"cross_entropy_loss": loss.data.item().detach(), "outputs": outputs.detach(),
-                "labels": labels.detach(), "total": len(labels)}
-
-
-class ClassificationTestStep:
-    def __init__(self):
-        self.returns = [("metric", "cross_entropy_loss"), ("io", "outputs"), ("io", "labels"),
-                        ("var", "total")]
-
-    # DONE: Apply data parallel here maybe
-    def __call__(self, wrp, batch):
-        with torch.no_grad():
-            wrp._set_models_eval()
-            if wrp.device == "parallel":
-                inputs, labels = batch[0].cuda(), batch[1].cuda()
-            else:
-                inputs, labels = batch[0].to(wrp.device), batch[1].to(wrp.device)
-            outputs = wrp.model(inputs)
-            loss = wrp.criteria["cross_entropy_loss"](outputs, labels)
-        return {"cross_entropy_loss": loss.data.item().detach(), "outputs": outputs.detach(),
-                "labels": labels, "total": len(labels)}
-
-
-# NOTE: Why are these functions doing this requires provides anyway? Is this
-#       type checking or error checking? If I want robust adherence to a spec, I
-#       should make provides and requires abstract functions. Checkable has
-#       "virtual" functions/properties "provides" and "requires" like below. It
-#       is to facilitate module interaction. Two components can easily and
-#       immediately know if they can work together or not, instead of making
-#       assumptions, forcing things and creating subtle difficulties later.
-#
-#       On the theoretical front, generally functions would be defined by the
-#       signatures, leaving the implementation to the programmer. However, I
-#       would like to have a deeper understanding of the components so that
-#       these things aren't just defined by the signature but also their
-#       behaviour. Can static typing help here?
-#
-#       Adhering to an Interface solves these problems, but what if the
-#       interface is needed to be flexible? In the below example, metrics needs
-#       to be a list, but there's an additional attribute that needs to be there
-#       which is when the function is to be called. Should I make it a property?
-#       @property
-#       def when(self):
-#           return "train_end"
-#
-#       In CheckAccuracy below the data structure of metrics is implicit, while
-#       it actually is checked at CheckFunc. Perhaps a better check can be put
-#       there. Except we won't know the type and structure of "metrics" until
-#       it's called, which may leak an error later in the code. Perhaps mypy or
-#       pyright can help here.  Perhaps I should use type annotations for the
-#       functions. They seem like a good idea, especially since they can
-#       describe complicated types. To facilitate communication over the network
-#       they should be json-serializable also.
-class CheckFunc:
-    def __init__(self, when):
-        """Example metrics:
-
-        {'train': {'loss': {0: 7.294781831594614}, 'samples': {0: 6561}, 'perplexity': {}},
-        'val': {'loss': {}, 'samples': {0: 0}, 'perplexity': {}, 'sentence_metrics': {}},
-        'test': {'loss': {}, 'samples': {0: 0}, 'perplexity': {}, 'sentence_metrics': {}}}
-
-        :returns: None
-        :rtype: None
-
-        """
-        assert when in ["train", "val", "test"]
-        self._requires = {}
-        self._provides = {}
-
-    @property
-    def requires(self):
-        if not isinstance(self._requires["metrics"], list):
-            metrics = self._requires.pop("metrics")
-            assert isinstance(metrics, str)
-            self._requires["metrics"] = [metrics]
-        return self._requires
-
-    @property
-    def provides(self):
-        return self._provides
-
-    def __call__(self, metrics) -> bool:
-        return False
-
-
-class CheckGreater(CheckFunc):
-    def __init__(self, when):
-        super().__init__(when)
-
-    def __call__(self, metrics):
-        raise NotImplementedError
-
-
-class CheckGreaterName(CheckGreater):
-    def __init__(self, when, name):
-        super().__init__(when)
-        self._name = name
-        self._requires = {"when": when, "metrics": name}
-
-    def __call__(self, metrics):
-        vals = [*metrics[self._name].items()]
-        if vals:
-            vals.sort(key=lambda x: x[0])
-            vals = [v[1] for v in vals]
-            if vals[-1] > vals[:-1]:
-                return True
-            else:
-                return False
-        else:
-            return False
-
-
-class CheckAccuracy(CheckGreaterName):
-    def __init__(self, when):
-        super().__init__(when, "accuracy")
-
-
-# Example of using extra metrics
-# extra_metrics = {"train": {"accuracy": {"function": accuracy,
-#                                         "inputs": ["outputs", "batch[1]"]}},
-#                  "val": {"accuracy": {"function": accuracy,
-#                                       "inputs": ["outputs", "batch[1]"]}}}
-def accuracy(outputs, labels):
-    _, predicted = torch.max(outputs, 1)
-    correct = (predicted == labels).sum()
-    return float(correct)/len(predicted)

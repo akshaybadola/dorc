@@ -6,7 +6,7 @@ def cpu_info():
     return {"cpu_count": psutil.cpu_count(), "cpu_util": psutil.cpu_percent()}
 
 
-def memory_info(self):
+def memory_info():
     info = psutil.virtual_memory()
     return {"total": info.total, "used": info.used}
 

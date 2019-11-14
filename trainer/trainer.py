@@ -21,13 +21,49 @@ from .helpers import control
 # TODO: Change the whole "returns" and "expects" paradigm to "requires" and "provides".
 # TODO: The trainer should return the controls and properties in a more wholesome way.
 #       Currently it's very hacky and will be error prone in the future.
+
+# TODO: Diagnostics:
+#       1. Find optimal batch size.
+#       2. Report if and where there's shape mismatch between model and data
+#       3. Report any crashes with the ability to start again with updated
+#          parameters
+
+
+# TODO: A REALLY BIG ONE
+#       According to the parameters given, there can be different checks which
+#       can be applied. That is very very hard to generalize and will simply
+#       need a lot of heuristics to solve, which is what we do while we program.
+
+# CHECK from this link
+# https://stackoverflow.com/questions/2829329/catch-a-threads-exception-in-the-caller-thread-in-python
+# class PropagatingThread(Thread):
+#     def run(self):
+#         self.exc = None
+#         try:
+#             if hasattr(self, '_Thread__target'):
+#                 # Thread uses name mangling prior to Python 3.
+#                 self.ret = self._Thread__target(*self._Thread__args, **self._Thread__kwargs)
+#             else:
+#                 self.ret = self._target(*self._args, **self._kwargs)
+#         except BaseException as e:
+#             self.exc = e
+
+#     def join(self):
+#         super(PropagatingThread, self).join()
+#         if self.exc:
+#             raise self.exc
+#         return self.ret
+
+
 class Trainer:
     """The :class: `Trainer` class is envisioned as
     an interface to any training procedure.
     """
     def __init__(self, model_params, criteria, optimizer, model_defs, update_functions,
                  extra_metrics, trainer_params, data, dataloader_params):
-        """Initializes the :class: `Wrapper` object.
+        """Initializes the :class: `Trainer` object. This is supposed to be a catch all
+        trainer which is robust and easy to train and can generate graphs automatically etc.
+
         :param model: model which is a :class: `torch.nn.Module`
         :param model_params: model params where (k, v) are (:class: `str` model_name, `list` of model params) :class: `dict`
         :param criteria: `dict` where (k, v) are (`str`, :class: `torch.nn.Module`)
@@ -71,6 +107,21 @@ class Trainer:
         self._init_state_vars()
         self._controls_global = control
 
+    # TODO: Check certain variables after everything is initialized, like
+    #       `update_funcs`.
+    # TODO: Or in fact any thing that is run fater everything is initilialzed,
+    #       it's probably not checked right now.
+    #       1. controls, properties
+    #       2. update_funcs, datasets, dataloaders
+    #          - Let's not be too pedantic. Datasets can have basic checks like
+    #            if a tensor is returned or not
+    #          - update_funcs should run with a given batch
+    #          - I should be able to sample a couple of batches from a dataloader
+    #       3. optimizers, extra_metrics
+    #          - optimizers and extra_metrics should exist and should be callables
+    #          - optimizers
+    #       4. dataloader_params conflicts
+    #       5. check_func
     def _init_all(self):
         self._logger.info("Initializing trainer")
         self._init_models()
@@ -99,14 +150,23 @@ class Trainer:
 
     # TODO: Standardize the device nomenclature especially for dataparallel later
     def _check_trainer_params(self):
+        """Checks trainer params
+
+        :returns: None
+        :rtype: None
+
+        """
+        # optimizer: function now has to be of type Optimizer. Also criterion
+        # has to have attribute forward.
         assert all(isinstance(x, dict)
                    for x in [self._trainer_params, self._criteria_params,
                              self._optimizer_params])
         assert all(len(x) > 0 for x in [self._trainer_params, self._criteria_params,
                                         self._optimizer_params])
         assert all(isinstance(x, dict) and callable(x["function"])
+                   and hasattr(x["function"], "forward")
                    for x in self._criteria_params.values())
-        assert all(isinstance(x, dict) and callable(x["function"])
+        assert all(isinstance(x, dict) and issubclass(x["function"], torch.optim.Optimizer)
                    for x in self._optimizer_params.values())
         # TODO: This is no longer relevant
         if "anneal" in self._trainer_params:
@@ -125,15 +185,22 @@ class Trainer:
 
     # TODO: What if there are other keys besides train/val/test
     def _check_data_params(self):
+        """If self._data is None, then data is extracted from the dataloader later.
+
+        :returns: None
+        :rtype: None
+
+        """
         assert all([x in self._dataloader_params for x in ["train", "val", "test"]])
         assert self._dataloader_params["train"] is not None
         if self._data is None:
             for x in ["train", "val", "test"]:
                 if self._dataloader_params[x] is not None:
-                    assert "function" in self._dataloader_params[x]
+                    assert "function" in self._dataloader_params[x],\
+                        "dataloader_params for data subset cannot be None if data is None"
         else:
             assert all([x in self._data for x in ["train", "val", "test"]])
-            assert self._data["train"] is not None
+            assert self._data["train"] is not None, "Training data cannot be None"
 
     def _set_device(self):
         self._gpus = list(map(int, self._trainer_params["gpus"].split(",")))
@@ -180,6 +247,13 @@ class Trainer:
         self._init_nvml()
 
     def _init_nvml(self):
+        """Initializes the Nvidia monitoring library. It's called by _init_state_vars so
+        needn't be called again.
+
+        :returns: None
+        :rtype: None
+
+        """
         self._logger.info("Initializing nvml")
         # CHECK: I don't remember how the order is printed.
         # Assumes torch.cuda devices are of the same order as PCI BUS for
@@ -197,6 +271,7 @@ class Trainer:
             else:
                 self.models[model_name] = model(**model_params).to(self._device)
 
+    # TODO: Check by sampling a few instances from the dataset.
     def _init_dataloaders(self):
         self._logger.info("Initializing Dataloaders")
         for loader, params in self._dataloader_params.items():
@@ -233,7 +308,8 @@ class Trainer:
         for k, v in self._optimizer_params.items():
             model_name = [x for x, y in self._model_defs.items()
                           if y["optimizer"] == k][0]
-            self.optimizers[k] = v["function"](self.models[model_name].parameters(), **v["params"])
+            self.optimizers[k] = v["function"](self.models[model_name].parameters(),
+                                               **v["params"])
 
     # TODO: Should I use namedtuple instead?
     def _init_metrics(self):
@@ -258,6 +334,8 @@ class Trainer:
                                         if l[0] == "metric")
                 # CHECK: Why's samples in train metrics?
                 self._metrics[x]["samples"] = {}
+                if self._extra_metrics is None:
+                    self._extra_metrics = {}
                 if x in self._extra_metrics:
                     for k in self._extra_metrics[x].keys():
                         self._metrics[x][k] = {}
@@ -412,6 +490,8 @@ class Trainer:
         self.model.load_state_dict(torch.load(weights).state_dict())
 
     # CHECK if this thing works correctly. There might be a few things I may have missed
+    # TODO: For any worker loop which returns an error, the next
+    #       one should pause or halt or something.
     @control
     def reset(self):
         self._logger.info("Resetting")
@@ -466,9 +546,11 @@ class Trainer:
             time.sleep(1)
         # TODO: What if epoch already exists? Overwrite?
         self._save()
-        if not paused:
+        # TODO: Keep track of self._abort
+        if not paused and not self._abort:
             self.resume()
 
+    # CHECK: How do I just run eval right at the beginning?
     @control
     def abort_current_loop(self):
         self._logger.info("Aborting")
@@ -602,6 +684,10 @@ class Trainer:
         return dict((k, v) for k, v in self._metrics["train"].items()
                     if k[0] == "loss")
 
+    @property
+    def metrics(self):
+        return self.metrics
+
     # TODO: Define what is a sample correctly
     # TODO: Get random training samples also
     @property
@@ -722,6 +808,9 @@ class Trainer:
                 self._abort = False
             # Don't run post_epoch_hooks after abort
             else:
+                # TODO: CRITICAL post_epoch_hooks have to be run correctly as I'm using
+                #       the same epoch_runner, if it's reset without gathering data from
+                #       run_train, then all the data will be lost
                 self._run_post_epoch_hooks()
                 self.epoch += 1
         self._logger.info('finished training')
@@ -794,6 +883,7 @@ class Trainer:
         self._save(self.checkpoint_path)
         self.check_and_save(self._check_func)
 
+    # log_train has to run first of all 
     def _run_post_epoch_hooks(self):
         self._logger.debug("Running post epoch hooks")
         all_hooks = self.all_post_epoch_hooks

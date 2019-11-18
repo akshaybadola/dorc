@@ -2,6 +2,8 @@ import re
 import os
 import torch
 from torch.utils.data import DataLoader
+from torch import Tensor
+from typing import Union, List
 
 
 def rename_or_set_default(names, namespace, name, default):
@@ -312,3 +314,17 @@ class Trainer:
             for param_group in self.optimizer.param_groups:
                 param_group['lr'] *= .9
             self.logger.info("Annealing...")
+
+    # TODO: Sample should not return Tensor but instead visualizable values
+    #       It's hard to quantify what a "visualizable" value is.
+    def sample(self, inputs: Union[List[Union[int, float]],
+                                   Tensor[Union[int, float]]]) -> Tensor[Union[int, float]]:
+        """Skeleton sample function, see PEP 484, and mypy for how the typing hint
+        syntax works. Docstring is automatically generated.
+
+        :param inputs: 
+        :returns: 
+        :rtype:
+
+        """
+        raise NotImplementedError

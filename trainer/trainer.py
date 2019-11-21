@@ -29,10 +29,26 @@ from .helpers import control, prop
 #          parameters
 
 
-# TODO: A REALLY BIG ONE
+# TODO: Meh
 #       According to the parameters given, there can be different checks which
 #       can be applied. That is very very hard to generalize and will simply
 #       need a lot of heuristics to solve, which is what we do while we program.
+
+# TODO: THE REAL BIG ONE
+#       Perhaps, not sure, but I would like to have remote code execution, perhaps
+#       from right there in the browser, or via a hook from any text editor, like
+#       emacs. I can simply hook my editor or open a simple text editor in the browser,
+#       paste the code and send for integration. Issues:
+#       1. Where is the patch done and how to convey?
+#          - diff can work, but that's not arbitrary exec.
+#          - simply add and delete object attributes by name
+#            But then any watchers will have to update themselves.
+#       2. Effective saves, checks etc. after the code is sent to remote.
+#       3. Effective data and reports retrieval after the updates.
+#       BUT OF COURSE:
+#       It should not allow `pip install`, though even that can be done via exec,
+#       but the module reload might not be that easy after pip install. Though, in
+#       python, there probably is a way.
 
 # CHECK from this link
 # https://stackoverflow.com/questions/2829329/catch-a-threads-exception-in-the-caller-thread-in-python
@@ -105,6 +121,9 @@ class Trainer:
         # check all params here
         self._sanity_check()
         self._init_state_vars()
+        if trainer_params["resume"]:
+            self._init_models()
+            self._check_resume()
 
     # TODO: Check certain variables after everything is initialized, like
     #       `update_funcs`.
@@ -179,7 +198,6 @@ class Trainer:
         assert "check_func" in self._trainer_params
         self._max_epochs = self._trainer_params["max_epochs"]
         self._check_func = self._trainer_params["check_func"]
-        self._check_resume()
     # assert anneal_lr_on in some metric
     # check metric decease or increase?
 
@@ -196,9 +214,9 @@ class Trainer:
                     self._logger.warn("Given resume weights do not exist")
                     self._resume_path = None  # set appropriate path
             else:
-                if os.path.exists(self.checkpoint_path):
+                if os.path.exists(self._checkpoint_path):
                     self._logger.info("Checkpoint exists. Will resume from there")
-                    self._resume_path = self.checkpoint_path
+                    self._resume_path = self._checkpoint_path
                 else:
                     self._logger.info("No checkpoint found. Will train from beginninng")
                     self._resume_path = None
@@ -339,7 +357,7 @@ class Trainer:
             self.optimizers[k] = v["function"](self.models[model_name].parameters(),
                                                **v["params"])
 
-    # TODO: Should I use namedtuple instead?
+    # CHECK: Should I use namedtuple instead?
     def _init_metrics(self):
         """Intializes and checks the metrics.
 
@@ -398,7 +416,9 @@ class Trainer:
 
     # TODO: The case of saving when there's only iterations and no epochs isn't there.
     # TODO: How to resolve arbitrary callables being saved? Can they resume?
-    def _save(self, best=False):
+    #       In fact like I mentioned earlier, arbitrary callables shouldn't be allowed
+    #       in saved states.
+    def _save(self, save_path=None, best=False):
         # if isinstance(save_name_or_dict, dict):
         #     save_name = '__'.join(['_'.join([a, str(b)])
         #                            for a, b in save_name_or_dict.items()]) + '.pth'
@@ -409,16 +429,16 @@ class Trainer:
         #
         # Save name is internal now
         # wrapper should have a unique id
-        model_names = "_".join(self.models.keys())
-        save_name = os.path.join(self._savedir, "_".join([str(self._unique_id),
-                                                          model_names,
-                                                          "{:03}".format(self.epoch)]))
-        self._logger.debug("model_names is %s" % model_names)
+        if not save_path:
+            save_path = self._save_name
         if best:
-            save_name += "_best.pth"
-        else:
-            save_name += ".pth"
-        self._logger.debug("Save Name is %s" % save_name)
+            if not save_path.endswith(".pth"):
+                save_path += "_best.pth"
+            else:
+                save_path = save_path.replace(".pth", "") + "_best.pth"
+        elif not save_path.endswith(".pth"):
+            save_path += ".pth"
+        self._logger.debug("Trying to save to_names is %s" % save_path)
         save_state = {}
         save_state["epoch"] = self.epoch
         save_state["models"] = dict((k, v.state_dict()) for k, v in self.models.items())
@@ -428,10 +448,11 @@ class Trainer:
         save_state["dataloader_params"] = self._dataloader_params
         save_state["trainer_params"] = self._trainer_params
         save_state["metrics"] = self._metrics
-        self._logger.info("Saving to %s" % save_name)
-        torch.save(save_state, save_name)
+        self._logger.info("Saving to %s" % save_path)
+        torch.save(save_state, save_path)
 
-    # CHECK: resume and update will change the attrs of the wrapper
+    # CHECK: resume and update will change the attrs of the trainer
+    #        Perhaps some tests here.
     # TODO: Unique Id check
     # TODO: Check if {models, metrics, dataloaders, update_funcs} are resumed correctly as
     #       there may be callables in the saved_state. trainer shouldn't allow callables
@@ -473,7 +494,7 @@ class Trainer:
             "self._check_func requirements not fulfilled"
         if self._check_func(self._metrics[when]):
             self._logger.info("Save check returned True.")
-            self._save(True)
+            self._save(None, True)
         else:
             self._logger.info("Save check returned False. Not saving")
 
@@ -506,12 +527,12 @@ class Trainer:
             self._resume_path = self.best_save
 
     def resume_checkpoint(self):
-        self._logger.debug("Trying to resume from checkpoint path %s" % self.checkpoint_path)
-        if os.path.exists(self.checkpoint_path):
-            self._resume(self.checkpoint_path)
+        self._logger.debug("Trying to resume from checkpoint path %s" % self._checkpoint_path)
+        if os.path.exists(self._checkpoint_path):
+            self._resume(self._checkpoint_path)
         else:
             self._logger.debug("No checkpoint found. Will train from beginning %s" %
-                               self.checkpoint_path)
+                               self._checkpoint_path)
 
     def resume_weights(self, weights):
         if os.path.exists(weights):
@@ -576,13 +597,14 @@ class Trainer:
         # ensure paused
         while not self._epoch_runner.waiting:
             time.sleep(1)
-        # TODO: What if epoch already exists? Overwrite?
-        self._save()
+        self.logger.warn("Trying force save")
+        self._save(self._save_name + "_force")
         # TODO: Keep track of self._abort
         if not paused and not self._abort:
             self.resume()
 
     # CHECK: How do I just run eval right at the beginning?
+    # TODO: There should be a control to set current_loop to ["train", "val", "test"]
     @control
     def abort_current_loop(self):
         self._logger.info("Aborting")
@@ -603,10 +625,13 @@ class Trainer:
     def device(self):
         return self._device
 
+    # exclude properties beginning with _
     @property
     def props(self):
-        return [x for x, y in self.__class__.__dict__.items() if isinstance(y, property)
-                if x != "props"]
+        return [x for x, y in self.__class__.__dict__.items()
+                if isinstance(y, property) and
+                x != "props" and
+                not(x.startswith("_"))]
 
     @property
     def epoch(self):
@@ -676,9 +701,20 @@ class Trainer:
             else:
                 return None
 
+    # Internal property. Will not be exposed outside
     @property
-    def checkpoint_path(self):
-        return os.path.join(self._savedir, "checkpoint.pth")
+    def _save_name(self):
+        model_names = "_".join(self.models.keys())
+        save_name = os.path.join(self._savedir, "_".join([str(self._unique_id),
+                                                          model_names,
+                                                          "{:03}".format(self.epoch)]))
+        return save_name
+
+    @property
+    def _checkpoint_path(self):
+        model_names = "_".join(self.models.keys())
+        save_name = "_".join([str(self._unique_id), model_names, "checkpoint"])
+        return os.path.join(self._savedir, save_name + ".pth")
 
     # TODO: Allow extra_metrics, update_funcs and any other params to be updated
     @property
@@ -692,6 +728,9 @@ class Trainer:
     # as of now, returns all the dict. encoding is upto the backend
     # TODO: Tag each property or dict with "param", so it can be automatically viewed
     #       i.e., for_each x in self.__dict__, if self.__dict__[x]._tag == "param", then is_param
+    #       This can be accomplished with the `prop` function above. prop simply tags
+    #       whatever property that exists and that can be exported via @property
+    #       as an observable property
     @property
     def all_params(self):
         save_state = {}
@@ -711,6 +750,7 @@ class Trainer:
         return _dump(self.__dict__)
 
     # TODO: What about other losses
+    #       `prop` can help
     @property
     def train_losses(self):
         return dict((k, v) for k, v in self._metrics["train"].items()
@@ -878,7 +918,7 @@ class Trainer:
         else:
             self._logger.debug("Aborted Testing")
             return
-            # TODO: Handle this
+            # TODO: Handle abort here
         self._logger.info("Finished Testing")
 
     # Basically generates a summary and saves to file for all the detailed batch logs
@@ -896,7 +936,8 @@ class Trainer:
             for m in metric_names:
                 # FIXME
                 if m != "samples" and m != "perplexity":
-                    all_vals = [x[3] for x in self._epoch_runner.batch_vars if x[0] == step and x[2] == m]
+                    all_vals = [x[3] for x in self._epoch_runner.batch_vars
+                                if x[0] == step and x[2] == m]
                     if len(all_vals):
                         self._metrics[step][m][self.epoch] = np.mean(all_vals)
 
@@ -914,13 +955,13 @@ class Trainer:
         self._logger.debug("Running post epoch test hook")
         if (self.epoch+1) % self.test_frequency == 0:
             if self.test_loader is not None:
-                self.test(self.epoch)
+                self.test()
             else:
                 self._logger.info("No test loader. Skipping")
 
     def _save_post_epoch_hook(self):
         self._logger.debug("Running post epoch save hook")
-        self._save(self.checkpoint_path)
+        self._save(self._checkpoint_path)
         self.check_and_save()
 
     # log_train has to run first of all

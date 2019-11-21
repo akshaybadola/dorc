@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from .device import init_nvml, gpu_util, cpu_info, memory_info
 from .util import _dump, get_backup_num, gen_file_and_stream_logger
 from .epoch import Epoch
-from .helpers import control
+from .helpers import control, prop
 
 
 # Protocol:
@@ -105,7 +105,6 @@ class Trainer:
         # check all params here
         self._sanity_check()
         self._init_state_vars()
-        self._controls_global = control
 
     # TODO: Check certain variables after everything is initialized, like
     #       `update_funcs`.
@@ -260,6 +259,8 @@ class Trainer:
         # getting correct info with pynvml
         if self._gpus[0] != -1:
             self._device_handles = init_nvml(self._gpus)
+        else:
+            self._device_handles = None
 
     def _init_models(self):
         self._logger.info("Initializing Models")
@@ -597,7 +598,7 @@ class Trainer:
 
         """
         # return dict((x, self.__getattribute__(x)) for x in self._controls)
-        return dict((x.__name__, x) for x in self._controls_global._funcs)
+        return dict((x.__name__, x) for x in control.members)
 
     # CHECK
     # Why abort the running loop? The wrapper itself is paused?
@@ -651,6 +652,7 @@ class Trainer:
         else:
             return None
 
+    # TODO: Allow extra_metrics, update_funcs and any other params to be updated
     @property
     def updatable_params(self):
         params = {}
@@ -660,6 +662,8 @@ class Trainer:
         return params
 
     # as of now, returns all the dict. encoding is upto the backend
+    # TODO: Tag each property or dict with "param", so it can be automatically viewed
+    #       i.e., for_each x in self.__dict__, if self.__dict__[x]._tag == "param", then is_param
     @property
     def all_params(self):
         save_state = {}
@@ -732,13 +736,10 @@ class Trainer:
     #       objects must already be available to the wrapper. The search
     #       protocol can be developed later.
     # TODO: Implies reset
-    def update(self, params):
-        """Update the trainer w.r.t to any of the possible variables.
-        `params` must be a dict where the keys can be any of the
-        following values:
-
-        model_params, model_defs, criteria, optimizer, update_funcs,
-        dataloader_params, trainer_params extra_metrics
+    def try_update(self, params):
+        """Update the trainer w.r.t to any of the possible variables.  `params` must be
+        a dict where the keys must be the same as the keys returned by
+        updatable_params.
 
         As of now non-serializable updates are not supported, so the both
         key/value pairs must be json-encodeable.
@@ -749,6 +750,17 @@ class Trainer:
 
         """
         self._logger.info("Trying to update")
+        if not all(k in self.updatable_params for k in params):
+            return False
+        valid_updates = []
+        invalid_updates = []
+        for param in params:
+            for k in param:
+                if k in self.updatable_params[param]:
+                    if type(self.updatable_params[param][k]) in [str, int, float]:
+                        pass
+                else:
+                    pass
         assert all(k in ["model_params", "model_defs", "criteria", "optimizer",
                          "update_funcs", "dataloader_params", "trainer_params",
                          "extra_metrics"] for k in params)

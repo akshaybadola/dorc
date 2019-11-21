@@ -115,7 +115,8 @@ class Trainer:
             os.mkdir(self._savedir)
         if not os.path.exists(self._logdir):
             os.mkdir(self._logdir)
-        self._logger = gen_file_and_stream_logger(self._logdir, "trainer")
+        self._logfile, self._logger = gen_file_and_stream_logger(self._logdir,
+                                                                 "_".join(["trainer", self._unique_id]))
         self._logger.info("Initialized logger in %s", os.path.abspath(self._logdir))
         self._logger.info("Savedir is %s", os.path.abspath(self._savedir))
         # check all params here
@@ -612,6 +613,10 @@ class Trainer:
         self._abort = True
 
     @property
+    def logfile(self):
+        return open(self._logfile).read()
+
+    @property
     def gpus(self):
         return self._gpus
 
@@ -885,6 +890,7 @@ class Trainer:
             # epoch_loss, epoch_accuracy, total
             # TODO: If abort, pause and await instructions?
             if self._abort:
+                self._logger.debug("Aborted training")
                 self._abort = False
             # Don't run post_epoch_hooks after abort
             else:
@@ -901,12 +907,11 @@ class Trainer:
         t.start()
         t.join()
         if self._abort:
-            self._abort = False
-        else:
             self._logger.debug("Aborted validation")
-            return
+            self._abort = False
             # TODO: Handle this
-        self._logger.info("Finished Validation")
+        else:
+            self._logger.info("Finished Validation")
 
     def test(self):
         self._logger.debug("Testing")
@@ -914,12 +919,11 @@ class Trainer:
         t.start()
         t.join()
         if self._abort:
-            self._abort = False
-        else:
             self._logger.debug("Aborted Testing")
-            return
+            self._abort = False
             # TODO: Handle abort here
-        self._logger.info("Finished Testing")
+        else:
+            self._logger.info("Finished Testing")
 
     # Basically generates a summary and saves to file for all the detailed batch logs
     def _log_post_epoch_hook(self):

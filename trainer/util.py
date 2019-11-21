@@ -25,7 +25,7 @@ def gen_file_logger(logdir, log_file_name):
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     logger.setLevel(logging.DEBUG)
-    return logger
+    return log_file, logger
 
 
 def get_backup_num(filedir, filename):
@@ -60,4 +60,4 @@ def gen_file_and_stream_logger(logdir, log_file_name):
     logger.addHandler(file_handler)
     logger.addHandler(stream_handler)
     logger.setLevel(logging.DEBUG)
-    return logger
+    return log_file, logger

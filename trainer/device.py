@@ -13,8 +13,9 @@ def memory_info():
 
 def gpu_util(handles):
     def _get_util(h):
-        info = pynvml.nvmlDeviceGetUtilizationRates(h)
-        return {"gpu": info.gpu, "memory": info.memory}
+        util = pynvml.nvmlDeviceGetUtilizationRates(h)
+        mem = pynvml.nvmlDeviceGetMemoryInfo(h)
+        return {"gpu": util.gpu, "memory": 100 * (mem.used / mem.total)}
     return {gpu_id: _get_util(h) for gpu_id, h in handles.items()}
 
 

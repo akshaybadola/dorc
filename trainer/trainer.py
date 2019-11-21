@@ -179,8 +179,35 @@ class Trainer:
         assert "check_func" in self._trainer_params
         self._max_epochs = self._trainer_params["max_epochs"]
         self._check_func = self._trainer_params["check_func"]
+        self._check_resume()
     # assert anneal_lr_on in some metric
     # check metric decease or increase?
+
+    def _check_resume(self):
+        if self._trainer_params["resume"]:  # implies resume from somewhere
+            if self._trainer_params["resume_best"]:
+                # try to find and resume best weights
+                self._logger.error("Resume from best is not yet implemented")
+                self._resume_path = None
+            elif self._trainer_params["resume_weights"]:
+                if os.path.exists(self._trainer_params["resume_weights"]):
+                    self._resume_path = self._trainer_params["resume_weights"]
+                else:
+                    self._logger.warn("Given resume weights do not exist")
+                    self._resume_path = None  # set appropriate path
+            else:
+                if os.path.exists(self.checkpoint_path):
+                    self._logger.info("Checkpoint exists. Will resume from there")
+                    self._resume_path = self.checkpoint_path
+                else:
+                    self._logger.info("No checkpoint found. Will train from beginninng")
+                    self._resume_path = None
+        else:
+            # Don't resume
+            self._resume_path = None
+        if self._trainer_params["resume"] and self._resume_path:
+            self._logger.info("Resuming from %s" % self._resume_path)
+            self._resume_from_path(self._resume_path)
 
     # TODO: What if there are other keys besides train/val/test
     def _check_data_params(self):
@@ -408,7 +435,7 @@ class Trainer:
     # TODO: Unique Id check
     # TODO: Check if {models, metrics, dataloaders, update_funcs} are resumed correctly as
     #       there may be callables in the saved_state. trainer shouldn't allow callables
-    def _resume(self, resume_path):
+    def _resume_from_path(self, resume_path):
         saved_state = torch.load(resume_path)
         self.epoch = saved_state["epoch"]
         self._model_params = saved_state["model_params"]
@@ -439,7 +466,8 @@ class Trainer:
 
     def check_and_save(self):
         assert ("when" in self._check_func.requires and
-                self._check_func.requires["when"] in ["train", "val", "test"]), "Not sure when to save"
+                self._check_func.requires["when"]
+                in ["train", "val", "test"]), "Not sure when to save"
         when = self._check_func.requires["when"]
         assert all(x in self._metrics[when] for x in self._check_func.requires["metrics"]),\
             "self._check_func requirements not fulfilled"
@@ -475,12 +503,15 @@ class Trainer:
         """
         self._logger.debug("Trying to resume last best checkpoint %s" % self.best_save)
         if self.best_save:
-            self._resume(self.best_save)
+            self._resume_path = self.best_save
 
     def resume_checkpoint(self):
         self._logger.debug("Trying to resume from checkpoint path %s" % self.checkpoint_path)
-        if self.checkpoint_path:
+        if os.path.exists(self.checkpoint_path):
             self._resume(self.checkpoint_path)
+        else:
+            self._logger.debug("No checkpoint found. Will train from beginning %s" %
+                               self.checkpoint_path)
 
     def resume_weights(self, weights):
         if os.path.exists(weights):
@@ -647,10 +678,7 @@ class Trainer:
 
     @property
     def checkpoint_path(self):
-        if os.path.exists(os.path.join(self._savedir, "checkpoint.pth")):
-            return os.path.join(self._savedir, "checkpoint.pth")
-        else:
-            return None
+        return os.path.join(self._savedir, "checkpoint.pth")
 
     # TODO: Allow extra_metrics, update_funcs and any other params to be updated
     @property
@@ -690,7 +718,7 @@ class Trainer:
 
     @property
     def metrics(self):
-        return self.metrics
+        return self._metrics
 
     # TODO: Define what is a sample correctly
     # TODO: Get random training samples also
@@ -893,9 +921,9 @@ class Trainer:
     def _save_post_epoch_hook(self):
         self._logger.debug("Running post epoch save hook")
         self._save(self.checkpoint_path)
-        self.check_and_save(self._check_func)
+        self.check_and_save()
 
-    # log_train has to run first of all 
+    # log_train has to run first of all
     def _run_post_epoch_hooks(self):
         self._logger.debug("Running post epoch hooks")
         all_hooks = self.all_post_epoch_hooks

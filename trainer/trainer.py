@@ -1,5 +1,6 @@
 import re
 import os
+import copy
 import time
 import torch
 from threading import Thread
@@ -142,6 +143,8 @@ class Trainer:
     #       4. dataloader_params conflicts
     #       5. check_func
     def _init_all(self):
+        if self._warn_on_init_all:
+            self._logger.warn("\"_init_all\" being called after resume!")
         self._logger.info("Initializing trainer")
         self._init_models()
         self._init_dataloaders()
@@ -290,6 +293,7 @@ class Trainer:
             self.extra_report = {}
         self._epoch = 0
         self._init_nvml()
+        self._warn_on_init_all = False
 
     def _init_nvml(self):
         """Initializes the Nvidia monitoring library. It's called by _init_state_vars so
@@ -465,16 +469,24 @@ class Trainer:
         self._dataloader_params = saved_state["dataloader_params"]
         self._trainer_params = saved_state["trainer_params"]
         self._sanity_check()
-        self._init_state_vars()
+        # CHECK: Only if model or model parameters have changed
         self._init_models()
         self._init_dataloaders()
+        # Only if criteria and/or optimizer have changed.  In fact, there might
+        # be a mismatch if criteria change suddenly as the model has changed,
+        # but resume_weights should not really be concerned about that, at
+        # least.
         self._init_criteria_optimizers()
+        # Only if new metrics are added and even then only update metrics
         self._init_metrics()
-        self._init_update_funcs()
+        # Only if update_funcs are changed.
+        # In fact, this is not in saved state
+        # self._init_update_funcs()
         self._init_epoch_runner()
+
         # update optimizers
         # dict((k, v.state_dict()) for k, v in self.optimizers) = saved_state["optimizers"]
-        self._metrics = saved_state["metrics"]
+        # Check for mismatch
         assert all(k in self.models.keys() for k in saved_state['models'])
         assert all(k in self.optimizers.keys() for k in saved_state['optimizers'])
         for k in self.models:
@@ -482,9 +494,14 @@ class Trainer:
         for k in self.optimizers:
             self.optimizers[k].load_state_dict(saved_state["optimizers"][k])
         # TODO: check if loaded correctly
-        self._metrics = saved_state["metrics"]
+        for k in self._metrics.keys():
+            assert k in saved_state['metrics']
+            for _k in self._metrics[k]:
+                assert _k in saved_state['metrics'][_k]
+        self._metrics = copy.deepcopy(saved_state["metrics"])
         self.epoch = saved_state['epoch']
         self._logger.info("Resumed successfully")
+        self._warn_on_init_all = True
 
     def check_and_save(self):
         assert ("when" in self._check_func.requires and
@@ -571,7 +588,6 @@ class Trainer:
     @control
     def start(self):
         self._logger.info("Starting")
-        # self._init_all()
         self._paused = False
         Thread(target=self.train).start()
 

@@ -29,11 +29,14 @@ from .helpers import control, prop
 #       3. Report any crashes with the ability to start again with updated
 #          parameters
 
-
 # TODO: Meh
 #       According to the parameters given, there can be different checks which
 #       can be applied. That is very very hard to generalize and will simply
 #       need a lot of heuristics to solve, which is what we do while we program.
+
+# TODO: Code inspection
+#       This is a bit easier than code execution. I have to simply fetch the relevant code
+#       and show it in a dialog. I can also fetch the module code if required.
 
 # TODO: THE REAL BIG ONE
 #       Perhaps, not sure, but I would like to have remote code execution, perhaps
@@ -50,6 +53,12 @@ from .helpers import control, prop
 #       It should not allow `pip install`, though even that can be done via exec,
 #       but the module reload might not be that easy after pip install. Though, in
 #       python, there probably is a way.
+#       ONE WAY, of doing that could be, allowing the `trainer` object to stay in memory
+#       in a python shell and that it never goes out of scope. After that objects can
+#       be attached and detached from the `trainer` asynchronously, though deletion should
+#       be avoided.
+#       IDEALLY, one should only do patching on model and user provided functions and not
+#       really core trainer objects. I think that is doable.
 
 # CHECK from this link
 # https://stackoverflow.com/questions/2829329/catch-a-threads-exception-in-the-caller-thread-in-python

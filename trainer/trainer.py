@@ -132,9 +132,9 @@ class Trainer:
         # check all params here
         self._sanity_check()
         self._init_state_vars()
-        if trainer_params["resume"]:
+        if trainer_params["resume"] or trainer_params["init_weights"]:
             self._init_models()
-            self._check_resume()
+            self._check_resume_or_init_weights()
 
     # TODO: Check certain variables after everything is initialized, like
     #       `update_funcs`.
@@ -161,6 +161,7 @@ class Trainer:
         self._init_metrics()
         self._init_update_funcs()
         self._init_epoch_runner()
+        self._init_extra_controls()
 
     def _sanity_check(self):
         self._logger.info("Performing Sanity Check")
@@ -214,8 +215,15 @@ class Trainer:
     # assert anneal_lr_on in some metric
     # check metric decease or increase?
 
-    def _check_resume(self):
-        if self._trainer_params["resume"]:  # implies resume from somewhere
+    def _check_resume_or_init_weights(self):
+        if "init_weights" in self._trainer_params and self._trainer_params["resume"]:
+            self._logger.error("Cannot initialize from weights and resume from save data")
+            raise ValueError
+        if self._trainer_params["init_weights"]:
+            self._logger.warn("Warning! Loading directly to model")
+            self.model.load_state_dict(torch.load(
+                self._trainer_params["init_weights"]).state_dict())
+        elif self._trainer_params["resume"]:  # implies resume from somewhere
             if self._trainer_params["resume_best"]:
                 # try to find and resume best weights
                 self._logger.error("Resume from best is not yet implemented")
@@ -282,7 +290,9 @@ class Trainer:
             self._gpus = [-1]
         torch.cuda.manual_seed(self._trainer_params["seed"])
         for t, v in self._trainer_params.items():
-            if t != "gpus":
+            if t in self.__class__.__dict__:
+                self._logger.warn(f"Tried overwriting attribute {t}! Denied.")
+            elif t != "gpus":
                 self.__dict__[t] = v
 
     def to_(self, x):
@@ -392,8 +402,7 @@ class Trainer:
             if self._dataloader_params[x] is not None:
                 self._metrics[x] = dict((l[1], {}) for l in self._update_functions[x].returns
                                         if l[0] == "metric")
-                # CHECK: Why's samples in train metrics?
-                self._metrics[x]["samples"] = {}
+                self._metrics[x]["num_datapoints"] = {}
                 if self._extra_metrics is None:
                     self._extra_metrics = {}
                 if x in self._extra_metrics:
@@ -428,7 +437,35 @@ class Trainer:
         self._logger.info("Initializing Epoch Runner")
         self._epoch_runner = Epoch(self, self.extra_report)
 
-    # TODO: The case of saving when there's only iterations and no epochs isn't there.
+    def call_adhoc(self, data):
+        if not any(x in data for x in ["train", "val", "test"]):
+            return False, "Unknown dataset"
+        else:
+            for x in data:
+                self.try_call_adhoch_func_with_data(x, data[x])
+
+    def try_call_adhoch_func_with_data(self, step, params):
+        # {"metrics": [list_of_metrics], "epoch": num_or_"current", fraction_of_dataset: 0 < x < 1}
+        if not all(x in params.values() for x in ["metrics", "epoch", "fraction"]):
+            return False, "Incorrent parameters"
+        elif params["metrics"] != "all" or (not all(x in self._metrics[x] for x in params["metrics"])):
+            return False, "Unknown metric given"
+        elif not params["epoch"] in self.checkpoints:
+            return False, "Checkpoint for epoch doesn't exist"
+        elif params["fraction"] > 1 or params["fraction"] <= 0:
+            return False, "Incorrect fraction"
+        else:
+            # 1. If training, then pause trainer,
+            # 2. run the requested adhoc function in a thread
+            # 3. Result is stored in _adhoc_func_result
+            # 4. _adhoc_func_result is checked for uniqueness
+            # 5. Multiple funcs (upto 3) can be run, and they should be trackable
+            # 6. Auto resource allocation for funcs
+            # 7. If required, save state to disk before doing so
+            # t = Thread(target=)
+            pass
+            
+
     # TODO: How to resolve arbitrary callables being saved? Can they resume?
     #       In fact like I mentioned earlier, arbitrary callables shouldn't be allowed
     #       in saved states.
@@ -537,37 +574,33 @@ class Trainer:
     def _define_controls(self):
         pass
 
-    # FIXME: resume_best can only be done if an index is kept which keeps
-    #        track of what's best.
-    # TODO: So basically save all the metrics outside in a separate file
-    # TODO: It may be some arbitrary predicate
-    def resume_best(self):
-        """Resumes from the last best saved checkpoint. By default checks for lowest
-        `val_acc`
+    # # FIXME: resume_best can only be done if an index is kept which keeps
+    # #        track of what's best.
+    # # TODO: So basically save all the metrics outside in a separate file
+    # # TODO: It may be some arbitrary predicate
+    # def resume_best(self):
+    #     """Resumes from the last best saved checkpoint. By default checks for lowest
+    #     `val_acc`
 
-        :returns: None
-        :rtype: None
+    #     :returns: None
+    #     :rtype: None
 
-        """
-        self._logger.debug("Trying to resume last best checkpoint %s" % self.best_save)
-        if self.best_save:
-            self._resume_path = self.best_save
+    #     """
+    #     self._logger.debug("Trying to resume last best checkpoint %s" % self.best_save)
+    #     if self.best_save:
+    #         self._resume_path = self.best_save
 
-    def resume_checkpoint(self):
-        self._logger.debug("Trying to resume from checkpoint path %s" % self._checkpoint_path)
-        if os.path.exists(self._checkpoint_path):
-            self._resume(self._checkpoint_path)
-        else:
-            self._logger.debug("No checkpoint found. Will train from beginning %s" %
-                               self._checkpoint_path)
+    # def resume_checkpoint(self):
+    #     self._logger.debug("Trying to resume from checkpoint path %s" % self._checkpoint_path)
+    #     if os.path.exists(self._checkpoint_path):
+    #         self._resume(self._checkpoint_path)
+    #     else:
+    #         self._logger.debug("No checkpoint found. Will train from beginning %s" %
+    #                            self._checkpoint_path)
 
-    def resume_weights(self, weights):
-        if os.path.exists(weights):
-            self._load_init_weights(weights)
-
-    def _load_init_weights(self, weights):
-        self._logger.warn("Warning! Loading directly to model")
-        self.model.load_state_dict(torch.load(weights).state_dict())
+    # def resume_weights(self, weights):
+    #     if os.path.exists(weights):
+    #         self._load_init_weights(weights)
 
     # CHECK if this thing works correctly. There might be a few things I may have missed
     # TODO: For any worker loop which returns an error, the next
@@ -961,14 +994,14 @@ class Trainer:
         self._logger.info("Running post epoch log hook")
         for step in self._metrics:
             metric_names = self._metrics[step]
-            self._metrics[step]["samples"][self.epoch] = self._epoch_runner.total_samples[step]
+            self._metrics[step]["num_datapoints"][self.epoch] =\
+                self._epoch_runner.total_samples[step]
             for m in metric_names:
-                # FIXME
-                if m != "samples" and m != "perplexity":
-                    all_vals = [x[3] for x in self._epoch_runner.batch_vars
-                                if x[0] == step and x[2] == m]
-                    if len(all_vals):
-                        self._metrics[step][m][self.epoch] = np.mean(all_vals)
+                # if m != "num_datapoints":
+                all_vals = [x[3] for x in self._epoch_runner.batch_vars
+                            if x[0] == step and x[2] == m]
+                if len(all_vals):
+                    self._metrics[step][m][self.epoch] = np.mean(all_vals)
 
     def _val_post_epoch_hook(self):
         self._validate_post_epoch_hook(self)

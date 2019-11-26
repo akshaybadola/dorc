@@ -132,6 +132,12 @@ class FlaskInterface:
         def __props():
             return json.dumps(self.trainer.props)
 
+        @self.app.route('/_extras')
+        def __call_func():
+            data = request.json()
+            # What does this return?
+            self.trainer.call_adhoc(data)
+
         @self.app.route("/update", methods=["POST"])
         def __update():
             data = json.loads(request.data.decode("utf-8"))

@@ -160,7 +160,8 @@ class Epoch:
         for m in metric_names:
             if m in kwargs:
                 self.batch_vars.append((step, self.batch_num[step], m, kwargs[m]))
-            elif m in self.wrp._extra_metrics[step] and self.wrp._extra_metrics[step][m]["when"] == "batch":
+            elif m in self.wrp._extra_metrics[step] and\
+                    self.wrp._extra_metrics[step][m]["when"] == "batch":
                 em_func = self.wrp._extra_metrics[step][m]["function"]
                 em_inputs = self.wrp._extra_metrics[step][m]["inputs"]
                 f_inputs = dict((x, kwargs[x]) for x in em_inputs)

@@ -10,7 +10,7 @@ from torch.utils.data import Dataset, DataLoader
 from .device import init_nvml, gpu_util, cpu_info, memory_info
 from .util import _dump, get_backup_num, gen_file_and_stream_logger
 from .epoch import Epoch
-from .helpers import control, prop, ProxyDataset
+from .helpers import control, prop, ProxyDataset, get_dummy_runner
 
 
 # Protocol:
@@ -446,12 +446,15 @@ class Trainer:
 
     def try_call_adhoch_func_with_data(self, step, params):
         # {"metrics": [list_of_metrics], "epoch": num_or_"current", fraction_of_dataset: 0 < x < 1}
+        self._logger.warn("Ignoring \"epoch\" for now")
         if not all(x in params.values() for x in ["metrics", "epoch", "fraction"]):
             return False, "Incorrent parameters"
-        elif params["metrics"] != "all" or (not all(x in self._metrics[x] for x in params["metrics"])):
+        elif params["metrics"] != "all" or (not all(x in self._metrics[x]
+                                                    for x in params["metrics"])):
             return False, "Unknown metric given"
-        elif not params["epoch"] in self.checkpoints:
-            return False, "Checkpoint for epoch doesn't exist"
+        # FIXME: WTF is self.checkpoints anyway? It has to be a dict now
+        # elif not params["epoch"] in self.checkpoints:
+        #     return False, "Checkpoint for epoch doesn't exist"
         elif params["fraction"] > 1 or params["fraction"] <= 0:
             return False, "Incorrect fraction"
         else:
@@ -482,14 +485,13 @@ class Trainer:
                                    int(len(step_loader.dataset) * params["fraction"]))
         _proxy_dataset = ProxyDataset(step_loader.dataset, indices)
         temp_loader = DataLoader(_proxy_dataset, **self._dataloader_params[step][params])
-
+        temp_models = self.models
         # Model needs to be reloaded if something in model changed. Not allowed
         # right now
-        temp_models = self.models
-
-        # make a temp epoch runner or just try to integrate it into existing epoch
-        temp_runner = None
-        temp_runner.temp_run()  # and store results in adhoc_results
+        # TODO: Maybe let model also be altered, checkpoint of course should be
+        # loaded, but it's ignored right now
+        runner = get_dummy_runner(self)
+        getattr(runner, "run_" + step)()
 
     # TODO: How to resolve arbitrary callables being saved? Can they resume?
     #       In fact like I mentioned earlier, arbitrary callables shouldn't be allowed

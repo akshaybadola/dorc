@@ -4,7 +4,7 @@ import time
 from .device import DevicePoll
 
 
-# TODO: Why's epoch not reporting even standard losses?
+# DONE: Why's epoch not reporting even standard losses?
 # Perhaps decouple the Epoch entirely from the wrapper
 # with a tcp socket like thingy
 class Epoch:

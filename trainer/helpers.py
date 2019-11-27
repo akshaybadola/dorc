@@ -1,4 +1,5 @@
 import torch
+from .epoch import Epoch
 
 
 class Tag:
@@ -39,3 +40,21 @@ class ProxyDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self._indices)
+
+
+class Dummy:
+    pass
+
+
+def get_dummy_runner(trainer):
+    dummy = Dummy()
+    dummy._device_handles = trainer._device_handles
+    dummy._train_step = trainer._train_step
+    dummy._val_step = trainer._val_step
+    dummy._test_step = trainer._test_step
+    dummy.aborted = False
+    dummy.paused = False
+    dummy._metrics = None
+    dummy._extra_metrics = None
+    temp_runner = Epoch(dummy, {})
+    return temp_runner    

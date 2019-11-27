@@ -5,12 +5,12 @@ import time
 import torch
 from threading import Thread
 import numpy as np
-from torch.utils.data import DataLoader
+from torch.utils.data import Dataset, DataLoader
 
 from .device import init_nvml, gpu_util, cpu_info, memory_info
 from .util import _dump, get_backup_num, gen_file_and_stream_logger
 from .epoch import Epoch
-from .helpers import control, prop
+from .helpers import control, prop, ProxyDataset
 
 
 # Protocol:
@@ -127,12 +127,12 @@ class Trainer:
             os.mkdir(self._logdir)
         self._logfile, self._logger = gen_file_and_stream_logger(self._logdir,
                                                                  "_".join(["trainer", self._unique_id]))
-        self._logger.info("Initialized logger in %s", os.path.abspath(self._logdir))
+        self._logger.info("Initialized _logger in %s", os.path.abspath(self._logdir))
         self._logger.info("Savedir is %s", os.path.abspath(self._savedir))
         # check all params here
         self._sanity_check()
         self._init_state_vars()
-        if trainer_params["resume"] or trainer_params["init_weights"]:
+        if trainer_params["resume"] or "init_weights" in trainer_params:
             self._init_models()
             self._check_resume_or_init_weights()
 
@@ -455,6 +455,14 @@ class Trainer:
         elif params["fraction"] > 1 or params["fraction"] <= 0:
             return False, "Incorrect fraction"
         else:
+            self.pause()
+            while not self.paused:
+                time.sleep(10)
+            params["step"] = step
+            t = Thread(target=self.call_adhoc_func, args=[params])
+            if not self._flag_adhoc_func_running:
+                self._flag_adhoc_func_running = True
+                t.start()
             # 1. If training, then pause trainer,
             # 2. run the requested adhoc function in a thread
             # 3. Result is stored in _adhoc_func_result
@@ -464,7 +472,24 @@ class Trainer:
             # 7. If required, save state to disk before doing so
             # t = Thread(target=)
             pass
-            
+
+    def call_adhoc_func(self, params):
+        # have to call epoch runner with specific metrics (in case some are too expensive)
+        # For now call all metrics but it's fraction of the data anyway.
+        step = params.popitem("step")
+        step_loader = getattr(self, step + "_loader")
+        indices = np.random.choice(len(step_loader.dataset),
+                                   int(len(step_loader.dataset) * params["fraction"]))
+        _proxy_dataset = ProxyDataset(step_loader.dataset, indices)
+        temp_loader = DataLoader(_proxy_dataset, **self._dataloader_params[step][params])
+
+        # Model needs to be reloaded if something in model changed. Not allowed
+        # right now
+        temp_models = self.models
+
+        # make a temp epoch runner or just try to integrate it into existing epoch
+        temp_runner = None
+        temp_runner.temp_run()  # and store results in adhoc_results
 
     # TODO: How to resolve arbitrary callables being saved? Can they resume?
     #       In fact like I mentioned earlier, arbitrary callables shouldn't be allowed
@@ -496,7 +521,11 @@ class Trainer:
         save_state["optimizers"] = dict((k, v.state_dict()) for k, v in self.optimizers.items())
         save_state["model_params"] = self._model_params
         save_state["criteria_params"] = self._criteria_params
-        save_state["dataloader_params"] = self._dataloader_params
+        save_state["dataloader_params"] = {x: {a: b.__qualname__ if a == "collate_fn" else b
+                                               for a, b in y.items()}
+                                           for x, y in self._dataloader_params.items()}
+        if any(["collate_fn" in y for x, y in save_state["dataloader_params"].items()]):
+            self._logger.warn("collate_fn will not be saved")
         save_state["trainer_params"] = self._trainer_params
         save_state["metrics"] = self._metrics
         self._logger.info("Saving to %s" % save_path)
@@ -512,7 +541,11 @@ class Trainer:
         self.epoch = saved_state["epoch"]
         self._model_params = saved_state["model_params"]
         self._criteria_params = saved_state["criteria_params"]
-        self._dataloader_params = saved_state["dataloader_params"]
+        if any(["collate_fn" in y for x, y in saved_state["dataloader_params"].items()]):
+            self._logger.warn("collate_fn will not be restored")
+        for x in self._dataloader_params:
+            self._dataloader_params[x].update({a: b for a, b in self._dataloader_params[x].items()
+                                               if a != "collate_fn"})
         self._trainer_params = saved_state["trainer_params"]
         self._sanity_check()
         # CHECK: Only if model or model parameters have changed
@@ -656,7 +689,7 @@ class Trainer:
         # ensure paused
         while not self._epoch_runner.waiting:
             time.sleep(1)
-        self.logger.warn("Trying force save")
+        self._logger.warn("Trying force save")
         self._save(self._save_name + "_force")
         # TODO: Keep track of self._abort
         if not paused and not self._abort:

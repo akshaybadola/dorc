@@ -1,3 +1,6 @@
+import torch
+
+
 class Tag:
     def __init__(self, x):
         self.tag = x
@@ -24,3 +27,15 @@ class Tag:
 
 control = Tag("control")
 prop = Tag("prop")
+
+
+class ProxyDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset, indices):
+        self._indices = indices
+        self._dataset = dataset
+
+    def __getitem__(self, indx):
+        return self._dataset[self._indices[indx]]
+
+    def __len__(self):
+        return len(self._indices)

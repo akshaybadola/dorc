@@ -10,6 +10,7 @@ from torch.utils.data import Dataset, DataLoader
 from .device import init_nvml, gpu_util, cpu_info, memory_info
 from .util import _dump, get_backup_num, gen_file_and_stream_logger
 from .epoch import Epoch
+from .components import Models
 from .helpers import control, prop, ProxyDataset, get_dummy_runner
 
 
@@ -157,7 +158,7 @@ class Trainer:
         self._logger.info("Initializing trainer")
         self._init_models()
         self._init_dataloaders()
-        self._init_criteria_optimizers()
+        # self._init_criteria_optimizers()
         self._init_metrics()
         self._init_update_funcs()
         self._init_epoch_runner()
@@ -332,14 +333,28 @@ class Trainer:
             self._device_handles = None
 
     def _init_models(self):
-        self._logger.info("Initializing Models")
-        self.models = {}
+        self._logger.info("Initializing Models, Optimizers and Criteria ")
+        self.criteria = {}
+        for k, v in self._criteria_params.items():
+            self.criteria[k] = v["function"](**v["params"])
+        models = {}
+        optimizers = {}
+        devices = {}
+        if not hasattr(self, "devices") or not hasattr(self, "_devices") and (self, "_device"):
+            devices = {m: self._device for m in self._model_params}
         for model_name, model_params in self._model_params.items():
-            model = self._model_defs[model_name]["model"]
-            if self._device == "parallel":
-                self.models[model_name] = model(**model_params).cuda()
-            else:
-                self.models[model_name] = model(**model_params).to(self._device)
+            models[model_name] = self._model_defs[model_name]["model"](**model_params)
+            optim_name = self._model_defs[model_name]["optimizer"]
+            optimizers[model_name] = {"name": optim_name,
+                                      "optimizer": self._optimizer_params[optim_name]["function"](
+                                          **self._optimizer_params[optim_name]["params"])}
+        self.models = Models(models, optimizers, devices, self._logger)
+        # NOTE: Old optimizer initialization code
+        # for k, v in self._optimizer_params.items():
+        #     model_name = [x for x, y in self._model_defs.items()
+        #                   if y["optimizer"] == k][0]
+        #     self.optimizers[k] = v["function"](self.models[model_name].parameters(),
+        #                                        **v["params"])
 
     # TODO: Check by sampling a few instances from the dataset.
     def _init_dataloaders(self):
@@ -369,17 +384,17 @@ class Trainer:
                     self._logger.info("No Test loader. Will not do testing")
                     self.test_loader = None
 
-    def _init_criteria_optimizers(self):
-        self._logger.info("Initializing Optimizers and Criteria")
-        self.criteria = {}
-        self.optimizers = {}
-        for k, v in self._criteria_params.items():
-            self.criteria[k] = v["function"](**v["params"])
-        for k, v in self._optimizer_params.items():
-            model_name = [x for x, y in self._model_defs.items()
-                          if y["optimizer"] == k][0]
-            self.optimizers[k] = v["function"](self.models[model_name].parameters(),
-                                               **v["params"])
+    # def _init_criteria_optimizers(self):
+    #     self._logger.info("Initializing Optimizers and Criteria")
+    #     self.criteria = {}
+    #     self.optimizers = {}
+    #     for k, v in self._criteria_params.items():
+    #         self.criteria[k] = v["function"](**v["params"])
+    #     for k, v in self._optimizer_params.items():
+    #         model_name = [x for x, y in self._model_defs.items()
+    #                       if y["optimizer"] == k][0]
+    #         self.optimizers[k] = v["function"](self.models[model_name].parameters(),
+    #                                            **v["params"])
 
     # CHECK: Should I use namedtuple instead?
     def _init_metrics(self):

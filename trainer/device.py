@@ -28,7 +28,7 @@ def in_thread(f):
     return f
 
 
-class DevicePoll:
+class DeviceMonitor:
     def __init__(self, gpu_handles):
         self._handles = gpu_handles
         self._interval = 0.2

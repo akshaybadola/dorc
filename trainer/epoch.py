@@ -1,7 +1,7 @@
 # import ipdb
 import time
 
-from .device import DevicePoll
+from .device import DeviceMonitor
 
 
 # DONE: Why's epoch not reporting even standard losses?
@@ -10,7 +10,7 @@ from .device import DevicePoll
 class Epoch:
     def __init__(self, wrp, extra_reportables):
         self.wrp = wrp
-        self.device_poll = DevicePoll(self.wrp._device_handles)
+        self.device_poll = DeviceMonitor(self.wrp._device_handles)
         self.keep_time = {}
         self.extra_reportables = {}
         for step in ["train", "val", "test"]:

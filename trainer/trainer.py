@@ -3,15 +3,16 @@ import os
 import copy
 import time
 import torch
+from functools import partial
 from threading import Thread
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 
-from .device import init_nvml, gpu_util, cpu_info, memory_info
+from .device import init_nvml, gpu_util, cpu_info, memory_info, DeviceMonitor
 from .util import _dump, get_backup_num, gen_file_and_stream_logger
 from .epoch import Epoch
 from .components import Models
-from .helpers import control, prop, ProxyDataset, get_dummy_runner
+from .helpers import control, prop, ProxyDataset, PropertyProxy
 
 
 # Protocol:
@@ -296,11 +297,11 @@ class Trainer:
             elif t != "gpus":
                 self.__dict__[t] = v
 
-    def to_(self, x):
-        if self.device == "parallel":
-            return x.cuda()
-        else:
-            return x.to(self.device)
+    # def to_(self, x):
+    #     if self.device == "parallel":
+    #         return x.cuda()
+    #     else:
+    #         return x.to(self.device)
 
     def _init_state_vars(self):
         self._logger.info("Initializing State Variables")
@@ -314,6 +315,7 @@ class Trainer:
         self._epoch = 0
         self._init_nvml()
         self._warn_on_init_all = False
+        self._flag_adhoc_func_running = False
 
     def _init_nvml(self):
         """Initializes the Nvidia monitoring library. It's called by _init_state_vars so
@@ -340,13 +342,19 @@ class Trainer:
         models = {}
         optimizers = {}
         devices = {}
-        if not hasattr(self, "devices") or not hasattr(self, "_devices") and (self, "_device"):
+        if (not hasattr(self, "devices") or not hasattr(self, "_devices"))\
+           and hasattr(self, "_device"):
+            devices = {m: self._device for m in self._model_params}
+        else:
+            # TODO: Model parallel and sharding
+            self._set_device()
             devices = {m: self._device for m in self._model_params}
         for model_name, model_params in self._model_params.items():
             models[model_name] = self._model_defs[model_name]["model"](**model_params)
             optim_name = self._model_defs[model_name]["optimizer"]
             optimizers[model_name] = {"name": optim_name,
                                       "optimizer": self._optimizer_params[optim_name]["function"](
+                                          models[model_name].parameters(),
                                           **self._optimizer_params[optim_name]["params"])}
         self.models = Models(models, optimizers, devices, self._logger)
         # NOTE: Old optimizer initialization code
@@ -428,13 +436,20 @@ class Trainer:
                             assert all(_ in retvals for _ in self._extra_metrics[x][k]["inputs"]),\
                                 "failed on batch %s, %s" % (x, k)
                         elif self._extra_metrics[x][k]["when"] == "epoch":
+                            # NOTE: validation with inputs
                             vals = [*self.__dict__.keys(),
                                     *[_[1] for _ in self._update_functions[x].returns], "epoch"]
                             assert all(s in vals for s in self._extra_metrics[x][k]["inputs"]
                                        if isinstance(s, str)), "failed on epoch %s, %s" % (x, k)
-                            assert all(all(_d in self.__dict__[d[0]].keys() for _d in d[1])
-                                       for d in self._extra_metrics[x][k]["inputs"]
-                                       if isinstance(d, tuple)), "failed on tuple %s, %s" % (x, k)
+                            # FIXME: Only "models" as tuple allowed
+                            for _x in self._extra_metrics[x][k]["inputs"]:
+                                if isinstance(_x, tuple):
+                                    assert _x[0] == "models" and\
+                                        all(_ in self.models.names for _ in _x[1]),\
+                                        "Required model not in self.models"
+                            # assert all(all(_d in self.__dict__[d[0]].keys() for _d in d[1])
+                            #            for d in self._extra_metrics[x][k]["inputs"]
+                            #            if isinstance(d, tuple)), "failed on tuple %s, %s" % (x, k)
                 else:
                     self._extra_metrics[x] = {}
 
@@ -449,24 +464,32 @@ class Trainer:
                 self._test_step = self._update_functions["test"]
 
     def _init_epoch_runner(self):
+        class Signals(object, metaclass=PropertyProxy):
+            trainer = self
+        device_monitor = DeviceMonitor(self._device_handles)
         self._logger.info("Initializing Epoch Runner")
-        self._epoch_runner = Epoch(self, self.extra_report)
+        self._epoch_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
+                                   Signals, device_monitor, self.extra_report)
 
     def call_adhoc(self, data):
         if not any(x in data for x in ["train", "val", "test"]):
             return False, "Unknown dataset"
         else:
             for x in data:
-                self.try_call_adhoch_func_with_data(x, data[x])
+                return self.try_call_adhoch_func_with_data(x, data[x])
 
     def try_call_adhoch_func_with_data(self, step, params):
-        # {"metrics": [list_of_metrics], "epoch": num_or_"current", fraction_of_dataset: 0 < x < 1}
+        # {"metrics": [list_of_metrics], "epoch": num_or_"current", fraction_of_dataset: 0 < x < 1,
+        # "device", one_of_gpus}
+        # Or maybe device can be automatically determined
         self._logger.warn("Ignoring \"epoch\" for now")
-        if not all(x in params.values() for x in ["metrics", "epoch", "fraction"]):
+        if not all(x in params for x in ["metrics", "epoch", "fraction"]):
             return False, "Incorrent parameters"
-        elif params["metrics"] != "all" or (not all(x in self._metrics[x]
-                                                    for x in params["metrics"])):
+        elif not (params["metrics"] != "all") or (not all(x in self._metrics[step]
+                                                          for x in params["metrics"])):
+            self.logger.debug("metics given", params["metrics"])
             return False, "Unknown metric given"
+
         # FIXME: WTF is self.checkpoints anyway? It has to be a dict now
         # elif not params["epoch"] in self.checkpoints:
         #     return False, "Checkpoint for epoch doesn't exist"
@@ -481,32 +504,67 @@ class Trainer:
             if not self._flag_adhoc_func_running:
                 self._flag_adhoc_func_running = True
                 t.start()
+                return True, "Running the given adhoc function"
+            else:
+                return False, "Another adhoc function is still running"
             # 1. If training, then pause trainer,
             # 2. run the requested adhoc function in a thread
             # 3. Result is stored in _adhoc_func_result
             # 4. _adhoc_func_result is checked for uniqueness
-            # 5. Multiple funcs (upto 3) can be run, and they should be trackable
+            # 5. Multiple funcs (upto 3) should be able to run, and they should be trackable
             # 6. Auto resource allocation for funcs
             # 7. If required, save state to disk before doing so
-            # t = Thread(target=)
-            pass
 
     def call_adhoc_func(self, params):
         # have to call epoch runner with specific metrics (in case some are too expensive)
         # For now call all metrics but it's fraction of the data anyway.
-        step = params.popitem("step")
+        step = params.pop("step")
         step_loader = getattr(self, step + "_loader")
+        if "seed" in params:
+            np.random.seed(params["seed"])
         indices = np.random.choice(len(step_loader.dataset),
                                    int(len(step_loader.dataset) * params["fraction"]))
         _proxy_dataset = ProxyDataset(step_loader.dataset, indices)
-        temp_loader = DataLoader(_proxy_dataset, **self._dataloader_params[step][params])
-        temp_models = self.models
-        # Model needs to be reloaded if something in model changed. Not allowed
-        # right now
+        temp_loader = DataLoader(_proxy_dataset, **self._dataloader_params[step])
+        models = {}
+        optimizers = {}
+        devices = {}
+        for model_name, model_params in self._model_params.items():
+            models[model_name] = self._model_defs[model_name]["model"](**model_params)
+            optim_name = self._model_defs[model_name]["optimizer"]
+            optimizers[model_name] = {"name": optim_name,
+                                      "optimizer": self._optimizer_params[optim_name]["function"](
+                                          models[model_name].parameters(),
+                                          **self._optimizer_params[optim_name]["params"])}
+            devices[model_name] = self._device
+        temp_models = Models(models, optimizers, devices, self._logger)
+        step_func = partial(self._update_functions[step], temp_models, self.criteria)
+
+        # TODO: Load from checkpoint like this
+        # _models.load(self._get_checkpoint(epoch)["models"])
         # TODO: Maybe let model also be altered, checkpoint of course should be
-        # loaded, but it's ignored right now
-        runner = get_dummy_runner(self)
-        getattr(runner, "run_" + step)()
+        temp_models.load(self.models.dump())  # replicate
+        # TODO: Put extra metrics here
+
+        class Signals:
+            paused = False
+            aborted = False
+        device_monitor = DeviceMonitor(self._device_handles)
+        self.logger.debug("params", step, params)
+        temp_runner = Epoch({"metrics": {step: params["metrics"]}, "extra_metrics": {}},
+                            Signals, device_monitor, self.extra_report)
+        temp_runner.reset()
+        getattr(temp_runner, "run_" + step)(step_func, temp_loader)
+        self._temp_runner = temp_runner
+        Thread(target=self._check_adhoc_run).start()
+
+    def _check_adhoc_run(self):
+        while self._temp_runner.running:
+            time.sleep(1)
+        self._flag_adhoc_func_running = False
+
+    def _report_adhoc_run(self):
+        return self._temp_runner.batch_vars
 
     # TODO: How to resolve arbitrary callables being saved? Can they resume?
     #       In fact like I mentioned earlier, arbitrary callables shouldn't be allowed
@@ -534,8 +592,9 @@ class Trainer:
         self._logger.debug("Trying to save to_names is %s" % save_path)
         save_state = {}
         save_state["epoch"] = self.epoch
-        save_state["models"] = dict((k, v.state_dict()) for k, v in self.models.items())
-        save_state["optimizers"] = dict((k, v.state_dict()) for k, v in self.optimizers.items())
+        # save_state["models"] = dict((k, v.state_dict()) for k, v in self.models.items())
+        save_state["models"] = self.models.dump()
+        # save_state["optimizers"] = dict((k, v.state_dict()) for k, v in self.optimizers.items())
         save_state["model_params"] = self._model_params
         save_state["criteria_params"] = self._criteria_params
         save_state["dataloader_params"] = {x: {a: b.__qualname__ if a == "collate_fn" else b
@@ -572,7 +631,7 @@ class Trainer:
         # be a mismatch if criteria change suddenly as the model has changed,
         # but resume_weights should not really be concerned about that, at
         # least.
-        self._init_criteria_optimizers()
+        # self._init_criteria_optimizers()
         # Only if new metrics are added and even then only update metrics
         self._init_metrics()
         # Only if update_funcs are changed.
@@ -580,20 +639,19 @@ class Trainer:
         # self._init_update_funcs()
         self._init_epoch_runner()
 
-        # update optimizers
-        # dict((k, v.state_dict()) for k, v in self.optimizers) = saved_state["optimizers"]
-        # Check for mismatch
-        assert all(k in self.models.keys() for k in saved_state['models'])
-        assert all(k in self.optimizers.keys() for k in saved_state['optimizers'])
-        for k in self.models:
-            self.models[k].load_state_dict(saved_state["models"][k])
-        for k in self.optimizers:
-            self.optimizers[k].load_state_dict(saved_state["optimizers"][k])
+        # NOTE: This is checked in Models now
+        # assert all(k in self.models.keys() for k in saved_state['models'])
+        # assert all(k in self.optimizers.keys() for k in saved_state['optimizers'])
+        # for k in self.models:
+        #     self.models[k].load_state_dict(saved_state["models"][k])
+        # for k in self.optimizers:
+        #     self.optimizers[k].load_state_dict(saved_state["optimizers"][k])
+        self.models.load(saved_state["models"])
         # TODO: check if loaded correctly
         for k in self._metrics.keys():
             assert k in saved_state['metrics']
             for _k in self._metrics[k]:
-                assert _k in saved_state['metrics'][_k]
+                assert _k in saved_state['metrics'][k]
         self._metrics = copy.deepcopy(saved_state["metrics"])
         self.epoch = saved_state['epoch']
         self._logger.info("Resumed successfully")
@@ -738,6 +796,18 @@ class Trainer:
     def device(self):
         return self._device
 
+    @property
+    def train_step(self):
+        return partial(self._train_step, self.models, self.criteria)
+
+    @property
+    def val_step(self):
+        return partial(self._val_step, self.models, self.criteria)
+
+    @property
+    def test_step(self):
+        return partial(self._val_step, self.models, self.criteria)
+
     # exclude properties beginning with _
     @property
     def props(self):
@@ -817,7 +887,7 @@ class Trainer:
     # Internal property. Will not be exposed outside
     @property
     def _save_name(self):
-        model_names = "_".join(self.models.keys())
+        model_names = "_".join(self.models.names)
         save_name = os.path.join(self._savedir, "_".join([str(self._unique_id),
                                                           model_names,
                                                           "{:03}".format(self.epoch)]))
@@ -825,7 +895,7 @@ class Trainer:
 
     @property
     def _checkpoint_path(self):
-        model_names = "_".join(self.models.keys())
+        model_names = "_".join(self.models.names)
         save_name = "_".join([str(self._unique_id), model_names, "checkpoint"])
         return os.path.join(self._savedir, save_name + ".pth")
 
@@ -848,7 +918,7 @@ class Trainer:
     def all_params(self):
         save_state = {}
         save_state["epoch"] = self.epoch
-        save_state["models"] = dict((k, v.state_dict()) for k, v in self.models.items())
+        # save_state["models"] = dict((k, v.state_dict()) for k, v in self.models.items())
         save_state["optimizers"] = dict((k, v.state_dict()) for k, v in self.optimizers.items())
         save_state["model_params"] = self._model_params
         save_state["criteria_params"] = self._criteria_params
@@ -992,7 +1062,8 @@ class Trainer:
             #       Ensure that run returns
             # TODO: What if the thread dies in the middle?
             self._epoch_runner.reset()
-            t = Thread(target=self._epoch_runner.run_train)
+            t = Thread(target=self._epoch_runner.run_train,
+                       args=[self._train_step, self.train_loader])
             t.start()
             t.join()
             # epoch_loss, epoch_accuracy, total
@@ -1011,7 +1082,8 @@ class Trainer:
 
     def validate(self):
         self._logger.debug("Validating")
-        t = Thread(target=self._epoch_runner.run_val)
+        t = Thread(target=self._epoch_runner.run_val,
+                   args=[self._val_step, self.val_loader])
         t.start()
         t.join()
         if self._abort:
@@ -1023,7 +1095,8 @@ class Trainer:
 
     def test(self):
         self._logger.debug("Testing")
-        t = Thread(target=self._epoch_runner.run_test)
+        t = Thread(target=self._epoch_runner.run_test,
+                   args=[self._test_step, self.test_loader])
         t.start()
         t.join()
         if self._abort:

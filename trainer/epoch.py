@@ -1,16 +1,16 @@
 # import ipdb
 import time
 
-from .device import DeviceMonitor
-
 
 # DONE: Why's epoch not reporting even standard losses?
 # Perhaps decouple the Epoch entirely from the wrapper
 # with a tcp socket like thingy
 class Epoch:
-    def __init__(self, wrp, extra_reportables):
-        self.wrp = wrp
-        self.device_poll = DeviceMonitor(self.wrp._device_handles)
+    def __init__(self, metrics, signals, device_poll, extra_reportables):
+        self.metrics = metrics["metrics"]
+        self.extra_metrics = metrics["extra_metrics"]
+        self.signals = signals
+        self.device_poll = device_poll
         self.keep_time = {}
         self.extra_reportables = {}
         for step in ["train", "val", "test"]:
@@ -74,13 +74,13 @@ class Epoch:
     # TODO: Format it better in a yield manner so it isn't in a loop.
     # TODO: For all the timing hooks, ensure that paused time is not
     #       counted towards running
-    def run_train(self):
+    def run_train(self, train_step, train_loader):
         self._running = True
         self._current_loop = "train"
-        for i, batch in enumerate(self.wrp.train_loader):
+        for i, batch in enumerate(train_loader):
             start = time.time()
             self.device_poll.start()
-            received = self.wrp._train_step(self.wrp, batch)
+            received = train_step(batch)
             self.device_poll.end()
             end = time.time()
             if self.keep_time["train"]:
@@ -93,42 +93,48 @@ class Epoch:
             received["cpu_min_mem"] = self.device_poll.cpu_min_mem
             self.batch_num["train"] += 1
             self._run_post_batch_hooks(**{"step": "train", **received})
-            if self.wrp.aborted:  # has to be here else, break won't work
+            if self.signals.aborted:  # has to be here else, break won't work
                 self._running = False
                 self._current_loop = "idle"
                 break
+        self._running = False
+        self._current_loop = "idle"
 
-    def run_val(self):
+    def run_val(self, val_step, val_loader):
         self._running = True
         self._current_loop = "val"
-        for i, batch in enumerate(self.wrp.val_loader):
+        for i, batch in enumerate(val_loader):
             start = time.time()
-            received = self.wrp._val_step(self.wrp, batch)
+            received = val_step(batch)
             end = time.time()
             if self.keep_time["val"]:
                 received["time"] = end - start
             self.batch_num["val"] += 1
             self._run_post_batch_hooks(**{"step": "val", **received})
-            if self.wrp.aborted:
+            if self.signals.aborted:
                 self._running = False
                 self._current_loop = "idle"
                 break
+        self._running = False
+        self._current_loop = "idle"
 
-    def run_test(self):
+    def run_test(self, test_step, test_loader):
         self._running = True
         self._current_loop = "test"
-        for i, batch in enumerate(self.wrp.test_loader):
+        for i, batch in enumerate(test_loader):
             start = time.time()
-            received = self.wrp._test_step(self.wrp, batch)
+            received = test_step(batch)
             end = time.time()
             if self.keep_time["test"]:
                 received["time"] = end - start
             self.batch_num["test"] += 1
             self._run_post_batch_hooks(**{"step": "test", **received})
-            if self.wrp.aborted:
+            if self.signals.aborted:
                 self._running = False
                 self._current_loop = "idle"
                 break
+        self._running = False
+        self._current_loop = "idle"
 
     def _run_post_batch_hooks(self, **kwargs):
         all_hooks = self.all_post_batch_hooks
@@ -140,12 +146,12 @@ class Epoch:
     # TODO: Ideally it should be async, but that's a bit complicated
     def _paused_post_batch_hook(self, **kwargs):
         self._waiting = True
-        while self.wrp.paused:
+        while self.signals.paused:
             time.sleep(5)
         self._waiting = False
 
     # def _abort_post_batch_hook(self, **kwargs):
-    #     if self.wrp.aborted:
+    #     if self.signals.aborted:
     #         pass
 
     # TODO: log GPU, CPU, Memory per batch
@@ -156,14 +162,14 @@ class Epoch:
     #        have to be checks that "x" value is not reportable.
     def _log_post_batch_hook(self, **kwargs):
         step = kwargs["step"]
-        metric_names = self.wrp._metrics[step]
+        metric_names = self.metrics[step]
         for m in metric_names:
             if m in kwargs:
                 self.batch_vars.append((step, self.batch_num[step], m, kwargs[m]))
-            elif m in self.wrp._extra_metrics[step] and\
-                    self.wrp._extra_metrics[step][m]["when"] == "batch":
-                em_func = self.wrp._extra_metrics[step][m]["function"]
-                em_inputs = self.wrp._extra_metrics[step][m]["inputs"]
+            elif m in self.extra_metrics[step] and\
+                    self.extra_metrics[step][m]["when"] == "batch":
+                em_func = self.extra_metrics[step][m]["function"]
+                em_inputs = self.extra_metrics[step][m]["inputs"]
                 f_inputs = dict((x, kwargs[x]) for x in em_inputs)
                 self.batch_vars.append((step, self.batch_num[step], m, em_func(**f_inputs)))
         if self.keep_time[step]:

@@ -2,6 +2,16 @@ import torch
 from .epoch import Epoch
 
 
+class PropertyProxy(type):
+    @property
+    def paused(cls):
+        return cls.trainer.paused
+
+    @property
+    def aborted(cls):
+        return cls.trainer.aborted
+
+
 class Tag:
     def __init__(self, x):
         self.tag = x

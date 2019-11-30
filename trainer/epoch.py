@@ -74,17 +74,30 @@ class Epoch:
     # TODO: Format it better in a yield manner so it isn't in a loop.
     # TODO: For all the timing hooks, ensure that paused time is not
     #       counted towards running
-    def run_train(self, train_step, train_loader):
+    def run_train(self, train_step, train_loader, get_raw=False):
+        """Run the training loop until completion. `train_step` is purposely really simple
+
+        :param train_step: :class: `function` which takes a batch, processes it and returns output
+        :param train_loader: :class: `torch.nn.utils.data.DataLoader`
+        :returns: None
+        :rtype: None
+
+        """
+        
         self._running = True
         self._current_loop = "train"
         for i, batch in enumerate(train_loader):
             start = time.time()
             self.device_poll.start()
+            if get_raw:
+                raw, batch = batch[0], batch[1]
             received = train_step(batch)
             self.device_poll.end()
             end = time.time()
             if self.keep_time["train"]:
                 received["time"] = end - start
+            if get_raw:
+                received["raw"] = raw
             received["gpu_util"] = self.device_poll.gpu_util
             received["gpu_max_mem"] = self.device_poll.gpu_max_mem
             received["gpu_min_mem"] = self.device_poll.gpu_min_mem
@@ -100,15 +113,19 @@ class Epoch:
         self._running = False
         self._current_loop = "idle"
 
-    def run_val(self, val_step, val_loader):
+    def run_val(self, val_step, val_loader, get_raw=False):
         self._running = True
         self._current_loop = "val"
         for i, batch in enumerate(val_loader):
             start = time.time()
+            if get_raw:
+                raw, batch = batch[0], batch[1]
             received = val_step(batch)
             end = time.time()
             if self.keep_time["val"]:
                 received["time"] = end - start
+            if get_raw:
+                received["raw"] = raw
             self.batch_num["val"] += 1
             self._run_post_batch_hooks(**{"step": "val", **received})
             if self.signals.aborted:
@@ -118,15 +135,19 @@ class Epoch:
         self._running = False
         self._current_loop = "idle"
 
-    def run_test(self, test_step, test_loader):
+    def run_test(self, test_step, test_loader, get_raw=False):
         self._running = True
         self._current_loop = "test"
         for i, batch in enumerate(test_loader):
             start = time.time()
+            if get_raw:
+                raw, batch = batch[0], batch[1]
             received = test_step(batch)
             end = time.time()
             if self.keep_time["test"]:
                 received["time"] = end - start
+            if get_raw:
+                received["raw"] = raw
             self.batch_num["test"] += 1
             self._run_post_batch_hooks(**{"step": "test", **received})
             if self.signals.aborted:

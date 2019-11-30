@@ -1,9 +1,10 @@
 class Models:
-    def __init__(self, models, optimizers, devices, logger):
+    def __init__(self, models, optimizers, devices, gpus, logger):
         assert all(isinstance(x, dict) for x in [models, optimizers, devices])
         assert set(models.keys()) == set(optimizers.keys())
         assert set(models.keys()) == set(devices.keys())
         self._models = {}
+        self._gpus = gpus
         self._logger = logger
         # model attributes are added to torch.nn.Module directly
         for k, model in models.items():
@@ -21,6 +22,7 @@ class Models:
         if str(device) == "parallel":
             self._models[model_name] = self._models[model_name].cuda()
             self._models[model_name].to_ = lambda x: x.cuda()
+            self._models[model_name].gpus = self._gpus
         else:
             self._models[model_name] = self._models[model_name].to(device)
             self._models[model_name].to_ = lambda x: x.to(device)

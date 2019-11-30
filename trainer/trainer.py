@@ -482,12 +482,13 @@ class Trainer:
         # {"metrics": [list_of_metrics], "epoch": num_or_"current", fraction_of_dataset: 0 < x < 1,
         # "device", one_of_gpus}
         # Or maybe device can be automatically determined
+        # NOTE: Samples should be captured by default
         self._logger.warn("Ignoring \"epoch\" for now")
         if not all(x in params for x in ["metrics", "epoch", "fraction"]):
             return False, "Incorrent parameters"
         elif not (params["metrics"] != "all") or (not all(x in self._metrics[step]
                                                           for x in params["metrics"])):
-            self.logger.debug("metics given", params["metrics"])
+            self._logger.debug("metics given", params["metrics"])
             return False, "Unknown metric given"
 
         # FIXME: WTF is self.checkpoints anyway? It has to be a dict now
@@ -550,7 +551,7 @@ class Trainer:
             paused = False
             aborted = False
         device_monitor = DeviceMonitor(self._device_handles)
-        self.logger.debug("params", step, params)
+        self._logger.debug("params", step, params)
         temp_runner = Epoch({"metrics": {step: params["metrics"]}, "extra_metrics": {}},
                             Signals, device_monitor, self.extra_report)
         temp_runner.reset()

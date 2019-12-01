@@ -13,7 +13,7 @@ from .util import _dump, get_backup_num, gen_file_and_stream_logger
 from .epoch import Epoch
 from .components import Models
 from .overrides import MyDataLoader
-from .helpers import control, prop, ProxyDataset, PropertyProxy
+from .helpers import control, prop, extras, ProxyDataset, PropertyProxy
 
 
 # Protocol:
@@ -164,7 +164,7 @@ class Trainer:
         self._init_metrics()
         self._init_update_funcs()
         self._init_epoch_runner()
-        self._init_extra_controls()
+        # self._init_extra_controls()
 
     def _sanity_check(self):
         self.logger.info("Performing Sanity Check")
@@ -215,6 +215,8 @@ class Trainer:
         assert "check_func" in self._trainer_params
         self._max_epochs = self._trainer_params["max_epochs"]
         self._check_func = self._trainer_params["check_func"]
+        assert "init_weights" in self._trainer_params
+        
     # assert anneal_lr_on in some metric
     # check metric decease or increase?
 
@@ -223,9 +225,10 @@ class Trainer:
             self.logger.error("Cannot initialize from weights and resume from save data")
             raise ValueError
         if self._trainer_params["init_weights"]:
-            self.logger.warn("Warning! Loading directly to model")
-            self.model.load_state_dict(torch.load(
-                self._trainer_params["init_weights"]).state_dict())
+            self.logger.warn("Warning! Loading weights directly to model")
+            load_state = torch.load(self._trainer_params["init_weights"])
+            for name in self.models.names:
+                self.models.load_model(name, load_state["models"][name])
         elif self._trainer_params["resume"]:  # implies resume from somewhere
             if self._trainer_params["resume_best"]:
                 # try to find and resume best weights
@@ -481,6 +484,7 @@ class Trainer:
         self._epoch_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
                                    Signals, device_monitor, self.extra_report)
 
+    @extras
     def call_adhoc(self, data):
         if not any(x in data for x in ["train", "val", "test"]):
             return False, "Unknown dataset"
@@ -491,6 +495,7 @@ class Trainer:
     def try_call_adhoch_func_with_data(self, step, params):
         # {"metrics": [list_of_metrics], "epoch": num_or_"current", fraction_of_dataset: 0 < x < 1,
         # "device", one_of_gpus}
+        # maybe: {"report_function": <<function>>}
         # Or maybe device can be automatically determined
         # NOTE: Samples should be captured by default
         self.logger.warn("Ignoring \"epoch\" for now")
@@ -576,12 +581,14 @@ class Trainer:
         temp_runner.reset()
         temp_runner.metrics[step].append("raw")
         temp_runner.metrics[step].append("predictions")
+        temp_runner.metrics[step].append("labels")
         self._temp_runner = temp_runner
         self.logger.debug(f"starting {self._temp_runner}")
         if hasattr(step_loader.dataset, "_get_raw"):
             getattr(temp_runner, "run_" + step)(step_func, temp_loader, True)
         else:
             getattr(temp_runner, "run_" + step)(step_func, temp_loader)
+        # report function only takes in targets and predictions
         Thread(target=self._check_adhoc_run).start()
 
     def _check_adhoc_run(self):
@@ -589,8 +596,37 @@ class Trainer:
             time.sleep(1)
         self._flag_adhoc_func_running = False
 
-    def _report_adhoc_run(self):
-        return self._temp_runner.batch_vars
+    @extras
+    def report_adhoc_run(self):
+        if self._temp_runner.running:
+            return "Adhoc function is still running"
+        else:
+            def _same(a, b):
+                if b and a[1] == b[1]:
+                    return True
+                else:
+                    return False
+            output = []
+            temp_targets = None
+            temp_predictions = None
+            for x in self._temp_runner.batch_vars:
+                if x[2] == "predictions":
+                    temp_predictions = x
+                    if _same(temp_predictions, temp_targets):
+                        output.append((x[0], x[1], "predictions_targets",
+                                       self.report_function(temp_predictions, temp_targets)))
+                    temp_predictions = None
+                    temp_targets = None
+                elif x[2] in {"labels", "targets"}:
+                    temp_targets = x
+                    if _same(temp_targets, temp_predictions):
+                        output.append((x[0], x[1], "predictions_targets",
+                                       self.report_function(temp_predictions, temp_targets)))
+                    temp_predictions = None
+                    temp_targets = None
+                else:
+                    output.append(x)
+            return output
 
     # TODO: How to resolve arbitrary callables being saved? Can they resume?
     #       In fact like I mentioned earlier, arbitrary callables shouldn't be allowed
@@ -844,7 +880,7 @@ class Trainer:
         return [x for x, y in self.__class__.__dict__.items()
                 if isinstance(y, property) and
                 x != "props" and
-                not(x.startswith("_"))]
+                (x == "_extras" or not x.startswith("_"))]
 
     @property
     def epoch(self):
@@ -868,6 +904,10 @@ class Trainer:
         """
         # return dict((x, self.__getattribute__(x)) for x in self._controls)
         return dict((x.__name__, x) for x in control.members)
+
+    @property
+    def _extras(self):
+        return dict((x.__name__, x) for x in extras.members)
 
     # CHECK
     # Why abort the running loop? The wrapper itself is paused?

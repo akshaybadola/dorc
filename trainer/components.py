@@ -38,6 +38,9 @@ class Models:
     def devices(self):
         return {k: v._device for k, v in self._models.items()}
 
+    def load_model(self, model_name, state_dict):
+        self._models[model_name].load_state_dict(state_dict)
+
     def dump(self):
         temp = {}
         for name, model in self._models.items():

@@ -38,6 +38,7 @@ class Tag:
 
 control = Tag("control")
 prop = Tag("prop")
+extras = Tag("extras")
 
 
 class ProxyDataset(torch.utils.data.Dataset):

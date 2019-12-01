@@ -130,13 +130,18 @@ class FlaskInterface:
 
         @self.app.route('/props')
         def __props():
-            return json.dumps(self.trainer.props)
+            return _dump(self.trainer.props)
 
-        @self.app.route('/_extras')
-        def __call_func():
+        @self.app.route('/_extras/call_adhoc_run', methods=["POST"])
+        def __call_adhoc_run():
             data = request.json()
+            ipdb.set_trace()
             # What does this return?
-            self.trainer.call_adhoc(data)
+            response = self.trainer.call_adhoc(data)
+
+        @self.app.route('/_extras/get_adhoc_run_output')
+        def __get_adhoc_run_output():
+            response = self.trainer.report_adhoc_run()
 
         @self.app.route("/update", methods=["POST"])
         def __update():

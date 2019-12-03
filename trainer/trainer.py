@@ -1,3 +1,4 @@
+import ipdb
 import re
 import os
 import copy
@@ -134,6 +135,7 @@ class Trainer:
         self.logger.info("Initialized logger in %s", os.path.abspath(self._logdir))
         self.logger.info("Savedir is %s", os.path.abspath(self._savedir))
         # check all params here
+        self._have_resumed = False
         self._sanity_check()
         self._init_state_vars()
         if trainer_params["resume"] or "init_weights" in trainer_params:
@@ -156,7 +158,7 @@ class Trainer:
     #       4. dataloader_params conflicts
     #       5. check_func
     def _init_all(self):
-        if self._warn_on_init_all:
+        if self._have_resumed:
             self.logger.warn("\"_init_all\" being called after resume!")
         self.logger.info("Initializing trainer")
         self._init_models()
@@ -216,15 +218,19 @@ class Trainer:
         assert "check_func" in self._trainer_params
         self._max_epochs = self._trainer_params["max_epochs"]
         self._check_func = self._trainer_params["check_func"]
-        assert "init_weights" in self._trainer_params
+        if not self._have_resumed:
+            self.logger.debug("Ignoring resume_params in while resuming")
+            assert "init_weights" in self._trainer_params
+            assert "resume_weights" in self._trainer_params
         
     # assert anneal_lr_on in some metric
     # check metric decease or increase?
 
     def _check_resume_or_init_weights(self):
-        if "init_weights" in self._trainer_params and self._trainer_params["resume"]:
-            self.logger.error("Cannot initialize from weights and resume from save data")
-            raise ValueError
+        if ("init_weights" in self._trainer_params and self._trainer_params["init_weights"]):
+            assert (not self._trainer_params["resume_best"] and
+                    not self._trainer_params["resume_weights"]),\
+                    "Cannot initialize from weights and resume from save data"
         if self._trainer_params["init_weights"]:
             self.logger.warn("Warning! Loading weights directly to model")
             load_state = torch.load(self._trainer_params["init_weights"])
@@ -319,7 +325,6 @@ class Trainer:
             self.extra_report = {}
         self._epoch = 0
         self._init_nvml()
-        self._warn_on_init_all = False
         self._temp_runner = SimpleNamespace()
         self._flag_adhoc_func_running = False
 
@@ -695,6 +700,7 @@ class Trainer:
     # TODO: Check if {models, metrics, dataloaders, update_funcs} are resumed correctly as
     #       there may be callables in the saved_state. trainer shouldn't allow callables
     def _resume_from_path(self, resume_path):
+        self._have_resumed = True
         saved_state = torch.load(resume_path)
         self.epoch = saved_state["epoch"]
         self._model_params = saved_state["model_params"]
@@ -737,7 +743,6 @@ class Trainer:
         self._metrics = copy.deepcopy(saved_state["metrics"])
         self.epoch = saved_state['epoch']
         self.logger.info("Resumed successfully")
-        self._warn_on_init_all = True
 
     def check_and_save(self):
         assert ("when" in self._check_func.requires and

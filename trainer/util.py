@@ -5,7 +5,8 @@ import logging
 
 
 def _dump(x):
-    return json.dumps(x, default=lambda o: f"<<non-serializable: {type(o).__qualname__}>>")
+    return json.dumps(x, default=lambda o: f"<<{type(o).__qualname__}>>")
+    # return json.dumps(x, default=lambda o: f"<<non-serializable: {type(o).__qualname__}>>")
 
 
 def gen_file_logger(logdir, log_file_name):

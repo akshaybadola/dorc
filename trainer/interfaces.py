@@ -1,4 +1,3 @@
-import ipdb
 import sys
 import ssl
 import json
@@ -10,10 +9,7 @@ from flask import Flask, render_template, request, Response
 from flask_cors import CORS
 from werkzeug import serving
 
-
-def _dump(x):
-    return json.dumps(x, default=lambda o: f"<<{type(o).__qualname__}>>")
-    # return json.dumps(x, default=lambda o: f"<<non-serializable: {type(o).__qualname__}>>")
+from .util import _dump
 
 
 class AWSInterface:
@@ -132,16 +128,31 @@ class FlaskInterface:
         def __props():
             return _dump(self.trainer.props)
 
+        # TODO: This should be a loop over add_rule like controls
         @self.app.route('/_extras/call_adhoc_run', methods=["POST"])
         def __call_adhoc_run():
-            data = request.json()
-            ipdb.set_trace()
-            # What does this return?
-            response = self.trainer.call_adhoc(data)
+            error_dict = {"required_any": ["train", "val", "test"],
+                          "required_{any:params}": {"metrics": ["list_of_metrics"],
+                                                    "epoch": "num_or_current",
+                                                    "fraction": "fraction_of_dataset"}}
+            if hasattr(request, "json"):
+                data = request.json
+                status, response = self.trainer.call_adhoc(data)
+                if not status:
+                    # TODO: Perhaps this should be sent by the trainer
+                    response = json.dumps({"error": response, **error_dict})
+                    return Response(response, status=400, mimetype='application/json')
+                else:
+                    return Response(json.dumps({"success": response}),
+                                    status=200, mimetype='application/json')
+            else:
+                response = json.dumps({"error": "No parameters given", **error_dict})
+                return Response(response, status=400, mimetype='application/json')
 
-        @self.app.route('/_extras/get_adhoc_run_output')
+        @self.app.route('/_extras/report_adhoc_run')
         def __get_adhoc_run_output():
             response = self.trainer.report_adhoc_run()
+            return response
 
         @self.app.route("/update", methods=["POST"])
         def __update():

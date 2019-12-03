@@ -9,7 +9,7 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 
 from .device import init_nvml, gpu_util, cpu_info, memory_info, DeviceMonitor
-from .util import _dump, get_backup_num, gen_file_and_stream_logger
+from .util import get_backup_num, gen_file_and_stream_logger
 from .epoch import Epoch
 from .components import Models
 from .overrides import MyDataLoader
@@ -484,8 +484,13 @@ class Trainer:
         self._epoch_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
                                    Signals, device_monitor, self.extra_report)
 
+    # TODO: Functions like this should return a json like form to update to the server
+    #       For each such endpoint, there should be a "endpoint_params" endpoint which
+    #       sends the required json_data format which is to be sent with the request
+    #       Which should then be presented as a table to the user.
+    #       There should be NO NESTING.
     @extras
-    def call_adhoc(self, data):
+    def call_adhoc_run(self, data):
         if not any(x in data for x in ["train", "val", "test"]):
             return False, "Unknown dataset"
         else:
@@ -499,12 +504,16 @@ class Trainer:
         # Or maybe device can be automatically determined
         # NOTE: Samples should be captured by default
         self.logger.warn("Ignoring \"epoch\" for now")
+        try:
+            iter(params)
+        except TypeError:
+            return False, "Incorrent format"
         if not all(x in params for x in ["metrics", "epoch", "fraction"]):
             return False, "Incorrent parameters"
         elif not (params["metrics"] != "all") or (not all(x in self._metrics[step]
                                                           for x in params["metrics"])):
-            self.logger.debug("metics given", params["metrics"])
-            return False, "Unknown metric given"
+            self.logger.debug("metrics given", params["metrics"])
+            return False, "Unknown metrics or incorrect format given"
 
         # FIXME: WTF is self.checkpoints anyway? It has to be a dict now
         # elif not params["epoch"] in self.checkpoints:
@@ -1000,7 +1009,7 @@ class Trainer:
 
     @property
     def all_attrs(self):
-        return _dump(self.__dict__)
+        return self.__dict__
 
     # TODO: What about other losses
     #       `prop` can help

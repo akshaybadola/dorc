@@ -129,15 +129,17 @@ class FlaskInterface:
             return _dump(self.trainer.props)
 
         # TODO: This should be a loop over add_rule like controls
+        # TODO: Type check, with types allowed in {"bool", "int", "float", "string", "list[type]"}
+        #       one level depth check
         @self.app.route('/_extras/call_adhoc_run', methods=["POST"])
         def __call_adhoc_run():
-            error_dict = {"required_any": ["train", "val", "test"],
-                          "required_{any:params}": {"metrics": ["list_of_metrics"],
-                                                    "epoch": "num_or_current",
-                                                    "fraction": "fraction_of_dataset"}}
+            error_dict = {"required_atleast_[split]": ["train", "val", "test"],
+                          "required_for_[split]": {"metrics": "[list[string]]_which_metrics",
+                                                   "epoch": "[int|string]_which_epoch",
+                                                   "fraction": "[float]_fraction_of_dataset"}}
             if hasattr(request, "json"):
                 data = request.json
-                status, response = self.trainer.call_adhoc(data)
+                status, response = self.trainer.call_adhoc_run(data)
                 if not status:
                     # TODO: Perhaps this should be sent by the trainer
                     response = json.dumps({"error": response, **error_dict})
@@ -150,15 +152,15 @@ class FlaskInterface:
                 return Response(response, status=400, mimetype='application/json')
 
         @self.app.route('/_extras/report_adhoc_run')
-        def __get_adhoc_run_output():
+        def __report_adhoc_run():
             response = self.trainer.report_adhoc_run()
-            return response
+            return Response(_dump(response), status=400, mimetype="application/json")
 
         @self.app.route("/update", methods=["POST"])
         def __update():
             data = json.loads(request.data.decode("utf-8"))
             if not all(x in data for x in ["model_params", "trainer_params", "dataloader_params"]):
-                return Response(json.dumps("Invalid data format in update request"), status=412,
+                return Response(_dump("Invalid data format in update request"), status=412,
                                 mimetype="application/json")
             status = self.trainer.try_update(data)
             if status:

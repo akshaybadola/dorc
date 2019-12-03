@@ -41,7 +41,8 @@ def get_backup_num(filedir, filename):
     return cur_backup_num
 
 
-def gen_file_and_stream_logger(logdir, log_file_name):
+def gen_file_and_stream_logger(logdir, log_file_name, file_loglevel=None,
+                               stream_loglevel=None):
     logger = logging.getLogger('default_logger')
     formatter = logging.Formatter(datefmt='%Y/%m/%d %I:%M:%S %p', fmt='%(asctime)s %(message)s')
     if not os.path.exists(logdir):
@@ -54,9 +55,15 @@ def gen_file_and_stream_logger(logdir, log_file_name):
         os.rename(log_file, log_file + '.' + str(backup_num))
     file_handler = logging.FileHandler(log_file)
     stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setLevel(logging.INFO)
+    if stream_loglevel.lower() == "info":
+        stream_handler.setLevel(logging.INFO)
+    elif stream_loglevel.lower() == "debug":
+        stream_handler.setLevel(logging.DEBUG)
     stream_handler.setFormatter(formatter)
-    file_handler.setLevel(logging.DEBUG)
+    if file_loglevel.lower() == "info":
+        file_handler.setLevel(logging.INFO)
+    elif file_loglevel.lower() == "debug":
+        file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     logger.addHandler(stream_handler)

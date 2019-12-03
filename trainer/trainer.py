@@ -6,6 +6,7 @@ import torch
 from functools import partial
 from threading import Thread
 import numpy as np
+from types import SimpleNamespace
 from torch.utils.data import Dataset, DataLoader
 
 from .device import init_nvml, gpu_util, cpu_info, memory_info, DeviceMonitor
@@ -129,7 +130,7 @@ class Trainer:
         if not os.path.exists(self._logdir):
             os.mkdir(self._logdir)
         self._logfile, self._logger = gen_file_and_stream_logger(
-            self._logdir, "_".join(["trainer", self._unique_id]))
+            self._logdir, "_".join(["trainer", self._unique_id]), "debug", "debug")
         self.logger.info("Initialized logger in %s", os.path.abspath(self._logdir))
         self.logger.info("Savedir is %s", os.path.abspath(self._savedir))
         # check all params here
@@ -319,6 +320,7 @@ class Trainer:
         self._epoch = 0
         self._init_nvml()
         self._warn_on_init_all = False
+        self._temp_runner = SimpleNamespace()
         self._flag_adhoc_func_running = False
 
     def _init_nvml(self):
@@ -512,7 +514,8 @@ class Trainer:
             return False, "Incorrent parameters"
         elif not (params["metrics"] != "all") or (not all(x in self._metrics[step]
                                                           for x in params["metrics"])):
-            self.logger.debug("metrics given", params["metrics"])
+            import ipdb; ipdb.set_trace()
+            self.logger.debug(f'metrics given {params["metrics"]}')
             return False, "Unknown metrics or incorrect format given"
 
         # FIXME: WTF is self.checkpoints anyway? It has to be a dict now
@@ -593,6 +596,7 @@ class Trainer:
         temp_runner.metrics[step].append("labels")
         self._temp_runner = temp_runner
         self.logger.debug(f"starting {self._temp_runner}")
+        self._temp_runner.logger = self.logger
         if hasattr(step_loader.dataset, "_get_raw"):
             getattr(temp_runner, "run_" + step)(step_func, temp_loader, True)
         else:
@@ -600,6 +604,7 @@ class Trainer:
         # report function only takes in targets and predictions
         Thread(target=self._check_adhoc_run).start()
 
+    # TODO: Fix for new adhoc run
     def _check_adhoc_run(self):
         while self._temp_runner.running:
             time.sleep(1)
@@ -607,11 +612,15 @@ class Trainer:
 
     @extras
     def report_adhoc_run(self):
-        if self._temp_runner.running:
+        if not hasattr(self._temp_runner, "running"):
+            return "Adhoc function was never initialized"
+        elif self._temp_runner.running:
             return "Adhoc function is still running"
         else:
             def _same(a, b):
-                if b and a[1] == b[1]:
+                self.logger.debug(f"_same, {b is None}")
+                if b is not None and a[1] == b[1]:
+                    self.logger.debug(f"_same, {b[1], a[1]}")
                     return True
                 else:
                     return False
@@ -622,17 +631,19 @@ class Trainer:
                 if x[2] == "predictions":
                     temp_predictions = x
                     if _same(temp_predictions, temp_targets):
+                        # self.logger.debug(self.report_function(temp_predictions[-1], temp_targets[-1]))
                         output.append((x[0], x[1], "predictions_targets",
-                                       self.report_function(temp_predictions, temp_targets)))
-                    temp_predictions = None
-                    temp_targets = None
+                                       self.report_function(temp_predictions[-1], temp_targets[-1])))
+                        temp_predictions = None
+                        temp_targets = None
                 elif x[2] in {"labels", "targets"}:
                     temp_targets = x
                     if _same(temp_targets, temp_predictions):
+                        # self.logger.debug(self.report_function(temp_predictions[-1], temp_targets[-1]))
                         output.append((x[0], x[1], "predictions_targets",
-                                       self.report_function(temp_predictions, temp_targets)))
-                    temp_predictions = None
-                    temp_targets = None
+                                       self.report_function(temp_predictions[-1], temp_targets[-1])))
+                        temp_predictions = None
+                        temp_targets = None
                 else:
                     output.append(x)
             return output
@@ -652,7 +663,7 @@ class Trainer:
         # Save name is internal now
         # wrapper should have a unique id
         if not save_path:
-            save_path = self._save_name
+            save_path = self._save_path
         if best:
             if not save_path.endswith(".pth"):
                 save_path += "_best.pth"
@@ -836,7 +847,7 @@ class Trainer:
         while not self._epoch_runner.waiting:
             time.sleep(1)
         self.logger.warn("Trying force save")
-        self._save(self._save_name + "_force")
+        self._save(self._save_path + "_force")
         # TODO: Keep track of self._abort
         if not paused and not self._abort:
             self.resume()
@@ -965,7 +976,7 @@ class Trainer:
 
     # Internal property. Will not be exposed outside
     @property
-    def _save_name(self):
+    def _save_path(self):
         model_names = "_".join(self.models.names)
         save_name = os.path.join(self._savedir, "_".join([str(self._unique_id),
                                                           model_names,
@@ -974,9 +985,9 @@ class Trainer:
 
     @property
     def _checkpoint_path(self):
-        model_names = "_".join(self.models.names)
-        save_name = "_".join([str(self._unique_id), model_names, "checkpoint"])
-        return os.path.join(self._savedir, save_name + ".pth")
+        # model_names = "_".join(self.models.names)
+        # save_name = "_".join([str(self._unique_id), model_names, "checkpoint"])
+        return os.path.join(self._save_path + "_checkpoint" + ".pth")
 
     # TODO: Allow extra_metrics, update_funcs and any other params to be updated
     @property

@@ -83,7 +83,7 @@ class Epoch:
         :rtype: None
 
         """
-        
+
         self._running = True
         self._current_loop = "train"
         for i, batch in enumerate(train_loader):
@@ -184,10 +184,12 @@ class Epoch:
     def _log_post_batch_hook(self, **kwargs):
         step = kwargs["step"]
         metric_names = self.metrics[step]
+        # if hasattr(self, "logger"):
+        #     self.logger.debug(f"runner extra metrics {self.extra_metrics}")
         for m in metric_names:
             if m in kwargs:
                 self.batch_vars.append((step, self.batch_num[step], m, kwargs[m]))
-            elif m in self.extra_metrics[step] and\
+            elif step in self.extra_metrics and m in self.extra_metrics[step] and\
                     self.extra_metrics[step][m]["when"] == "batch":
                 em_func = self.extra_metrics[step][m]["function"]
                 em_inputs = self.extra_metrics[step][m]["inputs"]

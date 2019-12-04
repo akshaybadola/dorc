@@ -676,7 +676,7 @@ class Trainer:
                 save_path = save_path.replace(".pth", "") + "_best.pth"
         elif not save_path.endswith(".pth"):
             save_path += ".pth"
-        self.logger.debug("Trying to save to_names is %s" % save_path)
+        self.logger.debug("Trying to save to %s" % save_path)
         save_state = {}
         save_state["epoch"] = self.epoch
         # save_state["models"] = dict((k, v.state_dict()) for k, v in self.models.items())
@@ -735,11 +735,18 @@ class Trainer:
         # for k in self.optimizers:
         #     self.optimizers[k].load_state_dict(saved_state["optimizers"][k])
         self.models.load(saved_state["models"])
-        # TODO: check if loaded correctly
+
+        # for k in self._metrics.keys():
+        #     assert k in saved_state['metrics']
+        #     for _k in self._metrics[k]:
+        #         assert _k in saved_state['metrics'][k]
+        diff = set(self._metrics.keys()).difference(saved_state["metrics"].keys())
+        if diff:
+            self.logger.warn(f"Some metric _steps_ aren't there in saved state {diff}")
         for k in self._metrics.keys():
-            assert k in saved_state['metrics']
-            for _k in self._metrics[k]:
-                assert _k in saved_state['metrics'][k]
+            diff = set(self._metrics[k].keys()).difference(saved_state["metrics"][k].keys())
+            if diff:
+                self.logger.warn(f"Some metrics {diff} in {k} aren't there in saved state")
         self._metrics = copy.deepcopy(saved_state["metrics"])
         self.epoch = saved_state['epoch']
         self.logger.info("Resumed successfully")

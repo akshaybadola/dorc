@@ -142,19 +142,22 @@ class FlaskInterface:
                 status, response = self.trainer.call_adhoc_run(data)
                 if not status:
                     # TODO: Perhaps this should be sent by the trainer
-                    response = json.dumps({"error": response, **error_dict})
+                    response = _dump({"error": "required input and " + response, **error_dict})
                     return Response(response, status=400, mimetype='application/json')
                 else:
-                    return Response(json.dumps({"success": response}),
+                    return Response(_dump({"success": response}),
                                     status=200, mimetype='application/json')
             else:
-                response = json.dumps({"error": "No parameters given", **error_dict})
+                response = _dump({"error": "Input parameters", **error_dict})
                 return Response(response, status=400, mimetype='application/json')
 
         @self.app.route('/_extras/report_adhoc_run')
         def __report_adhoc_run():
-            response = self.trainer.report_adhoc_run()
-            return Response(_dump(response), status=400, mimetype="application/json")
+            status, response = self.trainer.report_adhoc_run()
+            if status:
+                return Response(_dump(response), status=200, mimetype="application/json")
+            else:
+                return Response(_dump(response), status=400, mimetype="application/json")
 
         @self.app.route("/update", methods=["POST"])
         def __update():

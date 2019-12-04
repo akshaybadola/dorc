@@ -618,9 +618,9 @@ class Trainer:
     @extras
     def report_adhoc_run(self):
         if not hasattr(self._temp_runner, "running"):
-            return "Adhoc function was never initialized"
+            return False, "Adhoc function was never initialized"
         elif self._temp_runner.running:
-            return "Adhoc function is still running"
+            return True, "Adhoc function is still running"
         else:
             def _same(a, b):
                 self.logger.debug(f"_same, {b is None}")
@@ -651,7 +651,7 @@ class Trainer:
                         temp_targets = None
                 else:
                     output.append(x)
-            return output
+            return True, output
 
     # TODO: How to resolve arbitrary callables being saved? Can they resume?
     #       In fact like I mentioned earlier, arbitrary callables shouldn't be allowed

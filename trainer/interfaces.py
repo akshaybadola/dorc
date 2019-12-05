@@ -113,6 +113,28 @@ class FlaskInterface:
     def wrapper_props(self, prop_name):
         return _dump(self.trainer.__class__.__dict__[prop_name].fget(self.trainer))
 
+    def wrapper_get(self, func_name):
+        status, response = getattr(self.trainer, func_name)()
+        if status:
+            return _dump({"success": response})
+        else:
+            return _dump({"error": response})
+
+    def wrapper_post(self, func_name):
+        if hasattr(request, "json"):
+            data = request.json
+            status, response = getattr(self.trainer, func_name)(data)
+            response = _dump(response)
+            print(response)
+            if not status:
+                return Response(response, status=400, mimetype='application/json')
+            else:
+                return Response(response, status=200, mimetype='application/json')
+        else:
+            response = _dump({"error": "No data given"})
+            print(response)
+            return Response(response, status=400, mimetype='application/json')
+
     def start(self):
         if not self.bare:
             @self.app.route('/')
@@ -131,7 +153,7 @@ class FlaskInterface:
         # TODO: This should be a loop over add_rule like controls
         # TODO: Type check, with types allowed in {"bool", "int", "float", "string", "list[type]"}
         #       one level depth check
-        @self.app.route('/_extras/call_adhoc_run', methods=["POST"])
+        # @self.app.route('/_extras/call_adhoc_run', methods=["POST"])
         def __call_adhoc_run():
             error_dict = {"required_atleast_[split]": ["train", "val", "test"],
                           "required_for_[split]": {"metrics": "[list[string]]_which_metrics",
@@ -151,7 +173,7 @@ class FlaskInterface:
                 response = _dump({"error": "Input parameters", **error_dict})
                 return Response(response, status=400, mimetype='application/json')
 
-        @self.app.route('/_extras/report_adhoc_run')
+        # @self.app.route('/_extras/report_adhoc_run')
         def __report_adhoc_run():
             status, response = self.trainer.report_adhoc_run()
             if status:
@@ -159,7 +181,23 @@ class FlaskInterface:
             else:
                 return Response(_dump(response), status=400, mimetype="application/json")
 
-        @self.app.route("/update", methods=["POST"])
+        # @self.app.route('/_extras/load_save', methods=["POST"])
+        def __load_save():
+            if hasattr(request, "json"):
+                data = request.json
+                status, response = self.trainer.load_save(data)
+                if not status:
+                    # TODO: Perhaps this should be sent by the trainer
+                    response = _dump({"error": response})
+                    return Response(response, status=400, mimetype='application/json')
+                else:
+                    return Response(_dump({"success": response}),
+                                    status=200, mimetype='application/json')
+            else:
+                response = _dump({"error": "Required save name"})
+                return Response(response, status=400, mimetype='application/json')
+
+        # @self.app.route("/update", methods=["POST"])
         def __update():
             data = json.loads(request.data.decode("utf-8"))
             if not all(x in data for x in ["model_params", "trainer_params", "dataloader_params"]):
@@ -175,4 +213,11 @@ class FlaskInterface:
             self.app.add_url_rule("/" + x, x, partial(self.wrapper_control, x))
         for x in self.trainer.props:
             self.app.add_url_rule("/" + "props/" + x, x, partial(self.wrapper_props, x))
+        for x, y in self.trainer._extras.items():
+            if "report" in x:
+                self.app.add_url_rule("/_extras/" + x, x, partial(self.wrapper_get, x),
+                                      methods=["GET"])
+            else:
+                self.app.add_url_rule("/_extras/" + x, x, partial(self.wrapper_post, x),
+                                      methods=["POST"])
         serving.run_simple(self.api_host, self.api_port, self.app, ssl_context=self.context)

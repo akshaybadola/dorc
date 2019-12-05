@@ -1,4 +1,3 @@
-import ipdb
 import re
 import os
 import copy
@@ -137,6 +136,7 @@ class Trainer:
         # check all params here
         self._have_resumed = False
         self._sanity_check()
+        self._init_static_vars()
         self._init_state_vars()
         if trainer_params["resume"] or "init_weights" in trainer_params:
             self._init_models()
@@ -225,7 +225,6 @@ class Trainer:
         
     # assert anneal_lr_on in some metric
     # check metric decease or increase?
-
     def _check_resume_or_init_weights(self):
         if ("init_weights" in self._trainer_params and self._trainer_params["init_weights"]):
             assert (not self._trainer_params["resume_best"] and
@@ -235,7 +234,7 @@ class Trainer:
             self.logger.warn("Warning! Loading weights directly to model")
             load_state = torch.load(self._trainer_params["init_weights"])
             for name in self.models.names:
-                self.models.load_model(name, load_state["models"][name])
+                self.models.load_weights(name, load_state["models"][name])
         elif self._trainer_params["resume"]:  # implies resume from somewhere
             if self._trainer_params["resume_best"]:
                 # try to find and resume best weights
@@ -313,6 +312,11 @@ class Trainer:
     #         return x.cuda()
     #     else:
     #         return x.to(self.device)
+    def _init_static_vars(self):
+        self.adhoc_error_dict = {"required_atleast_[split]": ["train", "val", "test"],
+                                 "required_for_[split]": {"metrics": "[list[string]]_which_metrics",
+                                                          "epoch": "[int|string]_which_epoch",
+                                                          "fraction": "[float]_fraction_of_dataset"}}
 
     def _init_state_vars(self):
         self.logger.info("Initializing State Variables")
@@ -491,6 +495,35 @@ class Trainer:
         self._epoch_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
                                    Signals, device_monitor, self.extra_report)
 
+    @extras
+    def load_save(self, data):
+        if "weights" not in data:
+            return False, "No such file"
+        else:
+            weights = data["weights"]
+        if "method" not in data or data["method"] not in {"resume", "load"}:
+            return False, "Invalid or no method"
+        else:
+            method = data["method"]
+        self.logger.debug(f"Data given was {data}")
+        if weights not in os.listdir(self._savedir):
+            return False, "No such file"
+        else:
+            if method == "load":
+                load_state = torch.load(os.path.join(self._savedir, weights))
+                try:
+                    for name in self.models.names:
+                        self.models.load_weights(name, load_state["models"][name])
+                except Exception as e:
+                    return False, f"Could not load weights {weights}. Error occured {e}"
+                return True, f"Successfuly loaded weights {weights}"
+            else:
+                try:
+                    self._resume_from_path(os.path.join(self._savedir, weights))
+                except Exception as e:
+                    return False, f"Could not resume from {weights}. Error occured {e}"
+                return True, f"Trying to {method} file"
+
     # TODO: Functions like this should return a json like form to update to the server
     #       For each such endpoint, there should be a "endpoint_params" endpoint which
     #       sends the required json_data format which is to be sent with the request
@@ -499,7 +532,8 @@ class Trainer:
     @extras
     def call_adhoc_run(self, data):
         if not any(x in data for x in ["train", "val", "test"]):
-            return False, "Unknown dataset"
+            return False, {"error": "Required Input. Given unknown dataset",
+                           **self.adhoc_error_dict}
         else:
             for x in data:
                 return self.try_call_adhoch_func_with_data(x, data[x])
@@ -514,14 +548,14 @@ class Trainer:
         try:
             iter(params)
         except TypeError:
-            return False, "Incorrent format"
+            return False, {"error": "Required Input. Incorrent format", **self.adhoc_error_dict}
         if not all(x in params for x in ["metrics", "epoch", "fraction"]):
-            return False, "Incorrent parameters"
+            return False, {"error": "Required Input. Incorrent parameters", **self.adhoc_error_dict}
         elif not (params["metrics"] != "all") or (not all(x in self._metrics[step]
                                                           for x in params["metrics"])):
-            import ipdb; ipdb.set_trace()
             self.logger.debug(f'metrics given {params["metrics"]}')
-            return False, "Unknown metrics or incorrect format given"
+            return False, {"error": "Required Input. Given unknown metrics or incorrect format",
+                           **self.adhoc_error_dict}
 
         # FIXME: WTF is self.checkpoints anyway? It has to be a dict now
         # elif not params["epoch"] in self.checkpoints:
@@ -537,9 +571,9 @@ class Trainer:
             if not self._flag_adhoc_func_running:
                 self._flag_adhoc_func_running = True
                 t.start()
-                return True, "Running the given adhoc function"
+                return True, {"success": "Running the given adhoc function"}
             else:
-                return False, "Another adhoc function is still running"
+                return False, {"error": "Another adhoc function is still running"}
             # 1. If training, then pause trainer,
             # 2. run the requested adhoc function in a thread
             # 3. Result is stored in _adhoc_func_result
@@ -879,6 +913,10 @@ class Trainer:
     @property
     def logfile(self):
         return open(self._logfile).read()
+
+    @property
+    def saves(self):
+        return os.listdir(self._savedir)
 
     @property
     def gpus(self):

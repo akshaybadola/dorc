@@ -495,19 +495,28 @@ class Trainer:
         self._epoch_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
                                    Signals, device_monitor, self.extra_report)
 
+    def _logi(self, x):
+        self.logger.info(x)
+        return x
+
+    def _logd(self, x):
+        self.logger.debug(x)
+        return x
+
     @extras
-    def load_save(self, data):
+    def load_saves(self, data):
+        self.logger.info("Calling load saves")
         if "weights" not in data:
-            return False, "No such file"
+            return False, self._logi("No such file")
         else:
             weights = data["weights"]
         if "method" not in data or data["method"] not in {"resume", "load"}:
-            return False, "Invalid or no method"
+            return False, self._logi("Invalid or no method")
         else:
             method = data["method"]
         self.logger.debug(f"Data given was {data}")
         if weights not in os.listdir(self._savedir):
-            return False, "No such file"
+            return False, self._logi("No such file")
         else:
             if method == "load":
                 load_state = torch.load(os.path.join(self._savedir, weights))
@@ -515,14 +524,15 @@ class Trainer:
                     for name in self.models.names:
                         self.models.load_weights(name, load_state["models"][name])
                 except Exception as e:
-                    return False, f"Could not load weights {weights}. Error occured {e}"
-                return True, f"Successfuly loaded weights {weights}"
+                    return False,\
+                        self._logi(f"Could not load weights {weights}. Error occured {e}")
+                return True, self._logi(f"Successfuly loaded weights {weights}")
             else:
                 try:
                     self._resume_from_path(os.path.join(self._savedir, weights))
                 except Exception as e:
-                    return False, f"Could not resume from {weights}. Error occured {e}"
-                return True, f"Trying to {method} file"
+                    return False, self._logi(f"Could not resume from {weights}. Error occured {e}")
+                return True, self._logi(f"Trying to {method} file")
 
     # TODO: Functions like this should return a json like form to update to the server
     #       For each such endpoint, there should be a "endpoint_params" endpoint which
@@ -531,8 +541,9 @@ class Trainer:
     #       There should be NO NESTING.
     @extras
     def call_adhoc_run(self, data):
+        self.logger.info(f"Calling adhoc run with data: {data}")
         if not any(x in data for x in ["train", "val", "test"]):
-            return False, {"error": "Required Input. Given unknown dataset",
+            return False, {"error": self._logi("Required Input. Given unknown dataset"),
                            **self.adhoc_error_dict}
         else:
             for x in data:
@@ -548,20 +559,22 @@ class Trainer:
         try:
             iter(params)
         except TypeError:
-            return False, {"error": "Required Input. Incorrent format", **self.adhoc_error_dict}
+            return False, {"error": self._logi("Required Input. Incorrent format"),
+                           **self.adhoc_error_dict}
         if not all(x in params for x in ["metrics", "epoch", "fraction"]):
-            return False, {"error": "Required Input. Incorrent parameters", **self.adhoc_error_dict}
+            return False, {"error": self._logi("Required Input. Incorrent parameters"),
+                           **self.adhoc_error_dict}
         elif not (params["metrics"] != "all") or (not all(x in self._metrics[step]
                                                           for x in params["metrics"])):
             self.logger.debug(f'metrics given {params["metrics"]}')
-            return False, {"error": "Required Input. Given unknown metrics or incorrect format",
+            return False, {"error": self._logi("Required Input. Given unknown metrics or incorrect format"),
                            **self.adhoc_error_dict}
 
         # FIXME: WTF is self.checkpoints anyway? It has to be a dict now
         # elif not params["epoch"] in self.checkpoints:
         #     return False, "Checkpoint for epoch doesn't exist"
         elif params["fraction"] > 1 or params["fraction"] <= 0:
-            return False, "Incorrect fraction"
+            return False, self._logi("Incorrect fraction")
         else:
             self.pause()
             while not self.paused:
@@ -571,9 +584,9 @@ class Trainer:
             if not self._flag_adhoc_func_running:
                 self._flag_adhoc_func_running = True
                 t.start()
-                return True, {"success": "Running the given adhoc function"}
+                return True, {"success": self._logi("Running the given adhoc function")}
             else:
-                return False, {"error": "Another adhoc function is still running"}
+                return False, {"error": self._logi("Another adhoc function is still running")}
             # 1. If training, then pause trainer,
             # 2. run the requested adhoc function in a thread
             # 3. Result is stored in _adhoc_func_result
@@ -657,9 +670,9 @@ class Trainer:
             return True, "Adhoc function is still running"
         else:
             def _same(a, b):
-                self.logger.debug(f"_same, {b is None}")
+                # self.logger.debug(f"_same, {b is None}")
                 if b is not None and a[1] == b[1]:
-                    self.logger.debug(f"_same, {b[1], a[1]}")
+                    # self.logger.debug(f"_same, {b[1], a[1]}")
                     return True
                 else:
                     return False
@@ -670,7 +683,8 @@ class Trainer:
                 if x[2] == "predictions":
                     temp_predictions = x
                     if _same(temp_predictions, temp_targets):
-                        # self.logger.debug(self.report_function(temp_predictions[-1], temp_targets[-1]))
+                        # self.logger.debug(self.report_function(temp_predictions[-1],
+                        # temp_targets[-1]))
                         output.append((x[0], x[1], "predictions_targets",
                                        self.report_function(temp_predictions[-1], temp_targets[-1])))
                         temp_predictions = None
@@ -678,7 +692,8 @@ class Trainer:
                 elif x[2] in {"labels", "targets"}:
                     temp_targets = x
                     if _same(temp_targets, temp_predictions):
-                        # self.logger.debug(self.report_function(temp_predictions[-1], temp_targets[-1]))
+                        # self.logger.debug(self.report_function(temp_predictions[-1],
+                        # temp_targets[-1]))
                         output.append((x[0], x[1], "predictions_targets",
                                        self.report_function(temp_predictions[-1], temp_targets[-1])))
                         temp_predictions = None

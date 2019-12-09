@@ -31,15 +31,8 @@ class Models:
             # TODO: It should be model[devices][0]
             self._models[model_name].to_ = lambda x: x.cuda(self._gpus[0])
             self._models[model_name].gpus = self._gpus
-            self._models[model_name] = torch.nn.DataParallel(self._models[model_name], self._gpus)
-            self._models[model_name].to_ = lambda x: x.cuda(self._gpus[0])
             self._models[model_name] = self._models[model_name].to_(self._models[model_name])
-            # AGAIN!
             self._models[model_name]._device = "parallel"
-            self._models[model_name]._name = model_name
-            self._models[model_name].gpus = self._gpus
-            self._models[model_name]._optimizer = self._optimizers[model_name]["optimizer"]
-            self._models[model_name]._optimizer_name = self._optimizers[model_name]["name"]
         else:
             self._models[model_name] = self._models[model_name].to(device)
             self._models[model_name].to_ = lambda x: x.to(device)

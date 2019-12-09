@@ -15,6 +15,7 @@ from .epoch import Epoch
 from .components import Models
 from .overrides import MyDataLoader
 from .helpers import control, prop, extras, ProxyDataset, PropertyProxy
+from .version import __version__
 
 
 # Protocol:
@@ -89,6 +90,8 @@ class Trainer:
     """The :class: `Trainer` class is envisioned as
     an interface to any training procedure.
     """
+    __version__ = __version__
+
     def __init__(self, model_params, criteria, optimizer, model_defs, update_functions,
                  extra_metrics, trainer_params, data, dataloader_params):
         """Initializes the :class: `Trainer` object. This is supposed to be a catch all
@@ -920,6 +923,10 @@ class Trainer:
         self.logger.info("Aborting")
         self._paused = False
         self._abort = True
+
+    @property
+    def version(self):
+        return self.__version__
 
     @property
     def logger(self):

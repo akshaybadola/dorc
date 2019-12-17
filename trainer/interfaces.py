@@ -124,8 +124,12 @@ class FlaskInterface:
         if hasattr(request, "json"):
             data = request.json
             status, response = getattr(self.trainer, func_name)(data)
+            # if not func_name == "fetch_image":
+            #     response = _dump(response)
+            #     print(response)
+            # else:
+            #     response = json.dumps(response)
             response = _dump(response)
-            print(response)
             if not status:
                 return Response(response, status=400, mimetype='application/json')
             else:
@@ -209,6 +213,9 @@ class FlaskInterface:
             else:
                 return json.dumps(False)
 
+        # TODO: Right now, only functions with "report" are GET, rest are POST
+        #       There should be a unified and sensible mechanism to define how
+        #       these things are accessed.
         for x, y in self.trainer.controls.items():
             self.app.add_url_rule("/" + x, x, partial(self.wrapper_control, x))
         for x in self.trainer.props:

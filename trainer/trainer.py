@@ -1,10 +1,12 @@
 import re
 import os
+import base64
 import copy
 import time
 import torch
 from functools import partial
 from threading import Thread
+from PIL import Image
 import numpy as np
 from types import SimpleNamespace
 from torch.utils.data import Dataset, DataLoader
@@ -141,6 +143,7 @@ class Trainer:
         self._sanity_check()
         self._init_static_vars()
         self._init_state_vars()
+        self._init_external_vars()
         if trainer_params["resume"] or "init_weights" in trainer_params:
             self._init_models()
             self._check_resume_or_init_weights()
@@ -334,6 +337,17 @@ class Trainer:
         self._init_nvml()
         self._temp_runner = SimpleNamespace()
         self._flag_adhoc_func_running = False
+
+    def _init_external_vars(self):
+        """Initialize some variables which will be attached to it later. Right now a
+        hack but it could be more principled later.
+
+        :returns: None
+        :rtype: None
+
+        """
+        if not hasattr(self, "report_function"):
+            self.report_function = None
 
     def _init_nvml(self):
         """Initializes the Nvidia monitoring library. It's called by _init_state_vars so
@@ -649,6 +663,7 @@ class Trainer:
         temp_runner.metrics[step].append("raw")
         temp_runner.metrics[step].append("predictions")
         temp_runner.metrics[step].append("labels")
+        temp_runner.metrics[step].append("lengths")
         self._temp_runner = temp_runner
         self.logger.debug(f"starting {self._temp_runner}")
         self._temp_runner.logger = self.logger
@@ -665,6 +680,8 @@ class Trainer:
             time.sleep(1)
         self._flag_adhoc_func_running = False
 
+    # FIXME: Currently this report function is added externally, which may not
+    #        be the best way to build it.
     @extras
     def report_adhoc_run(self):
         if not hasattr(self._temp_runner, "running"):
@@ -704,6 +721,85 @@ class Trainer:
                 else:
                     output.append(x)
             return True, output
+
+    @extras
+    def fetch_preds(self, img_path):
+        """Fetch the prediction for a given image. Returns predictions
+
+        :param img_path: Image Path
+        :returns: preds: {\"beam_preds\": beam_preds, \"greedy_preds\": greedy_preds}
+        :rtype: :class: `dict`
+
+        """
+        if True:              # img_path in self._temp_runner._processed_images:
+            if not hasattr(self._temp_runner, "running") or self._temp_runner.running:
+                return False, f"The function is still running"
+            else:
+                temp_list = [(x[1], [_x[0] for _x in x[-1]]) for x in self._temp_runner.batch_vars
+                             if x[2] == "raw"]
+                img_path = temp_list[12][1][8]
+                indx = None
+                batch_preds = None
+                batch_targets = None
+                batch_lengths = None
+                img_indx = None
+                for x in temp_list:
+                    if img_path in x[1]:
+                        indx = x[0]
+                        break
+                if indx is not None:
+                    for x in self._temp_runner.batch_vars:
+                        if x[1] == indx and x[2] == "predictions":
+                            batch_preds = x[-1]
+                        if x[1] == indx and x[2] in {"targets", "labels"}:
+                            batch_targets = x[-1]
+                        if x[1] == indx and x[2] == "lengths":
+                            batch_lengths = x[-1].tolist()
+                        if x[1] == indx and x[2] == "raw":
+                            img_indx = [_x[0] for _x in x[-1]].index(img_path)
+                else:
+                    return False, f"Img seems to not have been processed. Check."
+                if all(x is not None for x in [batch_preds, batch_lengths,
+                                               img_indx, batch_targets]):
+                    preds_targets = [(int(torch.argmax(x).cpu().numpy()), int(y))
+                                     for x, y in zip(batch_preds, batch_targets)]
+                    batch_lengths = [x - 1 for x in batch_lengths]
+                    batch_lengths.insert(0, 0)
+                    words = []
+                    vocab = self.report_function.__getattribute__("keywords")["vocab"]
+                    cumsum = np.cumsum(batch_lengths)
+                    # How to segregate batch_preds now?
+                    # get the correct set of predictions from batch_preds
+                    # They're not argmax(), so they can be beamed over if required.
+                    for i in range(batch_lengths[img_indx]):
+                        t = preds_targets[cumsum[i]:cumsum[i+1]][img_indx]
+                        words.append((vocab.idx2word[t[0]], vocab.idx2word[t[1]]))
+                    import ipdb; ipdb.set_trace()
+                    pass
+                else:
+                    return False, f"Img seems to not have been processed. Check."
+        elif not os.path.exists(img_path):
+            return False, f"Image {img_path} doesn't exist"
+        else:
+            return False, f"Evaluation of single image is not implemented yet"
+            # try:
+            #     Image.open(img_path)
+            # except Exception as e:
+            #     return False, f"Error occurred while reading file {e}"
+            # Assuming predictions exist already somewhere in the report
+
+    @extras
+    def fetch_image(self, img_path):
+        """Fetch the data points. Interpret as certain variables"""
+        if not os.path.exists(img_path):
+            return False, f"Image {img_path} doesn't exist"
+        else:
+            try:
+                Image.open(img_path)
+            except Exception as e:
+                return False, f"Error occurred while reading file {e}"
+            with open(img_path, "rb") as img_file:
+                return True, base64.b64encode(img_file.read()).decode("utf-8")
 
     # TODO: How to resolve arbitrary callables being saved? Can they resume?
     #       In fact like I mentioned earlier, arbitrary callables shouldn't be allowed

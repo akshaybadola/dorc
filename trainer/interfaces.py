@@ -139,6 +139,14 @@ class FlaskInterface:
             print(response)
             return Response(response, status=400, mimetype='application/json')
 
+    def wrapper_route(self, func_name):
+        if request.method == "POST":
+            return self.wrapper_post(func_name)
+        elif request.method == "GET":
+            return self.wrapper_get(func_name)
+        else:
+            return Response(status=405)
+
     def start(self):
         if not self.bare:
             @self.app.route('/')
@@ -220,6 +228,7 @@ class FlaskInterface:
             self.app.add_url_rule("/" + x, x, partial(self.wrapper_control, x))
         for x in self.trainer.props:
             self.app.add_url_rule("/" + "props/" + x, x, partial(self.wrapper_props, x))
+        # Adding extras
         for x, y in self.trainer._extras.items():
             if "report" in x:
                 self.app.add_url_rule("/_extras/" + x, x, partial(self.wrapper_get, x),
@@ -227,4 +236,12 @@ class FlaskInterface:
             else:
                 self.app.add_url_rule("/_extras/" + x, x, partial(self.wrapper_post, x),
                                       methods=["POST"])
+        for x, y in self.trainer._helpers.items():
+            methods = []
+            if "POST" in y.__doc__:
+                methods.append("POST")
+            if "GET" in y.__doc__:
+                methods.append("GET")
+            self.app.add_url_rule("/_helpers/" + x, x, partial(self.wrapper_route, x),
+                                  methods=methods)
         serving.run_simple(self.api_host, self.api_port, self.app, ssl_context=self.context)

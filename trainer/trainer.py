@@ -16,7 +16,7 @@ from .util import get_backup_num, gen_file_and_stream_logger
 from .epoch import Epoch
 from .components import Models
 from .overrides import MyDataLoader
-from .helpers import control, prop, extras, ProxyDataset, PropertyProxy
+from .helpers import control, prop, extras, helpers, ProxyDataset, PropertyProxy
 from .version import __version__
 
 
@@ -622,14 +622,20 @@ class Trainer:
         indices = np.random.choice(len(step_loader.dataset),
                                    int(len(step_loader.dataset) * params["fraction"]))
         _proxy_dataset = ProxyDataset(step_loader.dataset, indices)
+        temp_params = self._dataloader_params[step].copy()
+        temp_params.update({"batch_size": 1})  # stick to 1 right now
+        # MyDataLoader is to solve the problem of collation in data. So that
+        # there's a uniform interface to data. However there seem to be some
+        # problems.
         if hasattr(step_loader.dataset, "_get_raw"):
-            _proxy_dataset._get_raw = step_loader.dataset._get_raw
+            _proxy_dataset._get_raw = lambda x: step_loader.dataset._get_raw(
+                _proxy_dataset._indices[x])
             temp_loader = MyDataLoader(_proxy_dataset, return_raw=True,
-                                       **self._dataloader_params[step])
+                                       **temp_params)
             self.logger.info(f"{step} dataset has \"_get_raw\"\
             Drawing samples from test data is available!")
         else:
-            temp_loader = MyDataLoader(_proxy_dataset, **self._dataloader_params[step])
+            temp_loader = MyDataLoader(_proxy_dataset, **temp_params)
             self.logger.warn(f"{step} dataset doesn't define \"_get_raw\".\
             Drawing samples from test data will not be available.")
         models = {}
@@ -702,6 +708,10 @@ class Trainer:
             for x in self._temp_runner.batch_vars:
                 if x[2] == "predictions":
                     temp_predictions = x
+                    probs, preds = torch.topk(torch.nn.functional.softmax(
+                        temp_predictions[-1], dim=1), 5)
+                    output.append((x[0], x[1], "preds_topk", preds))
+                    output.append((x[0], x[1], "probs_topk", probs))
                     if _same(temp_predictions, temp_targets):
                         # self.logger.debug(self.report_function(temp_predictions[-1],
                         # temp_targets[-1]))
@@ -722,9 +732,10 @@ class Trainer:
                     output.append(x)
             return True, output
 
-    @extras
+    @helpers
     def fetch_preds(self, img_path):
         """Fetch the prediction for a given image. Returns predictions
+        Uses method POST.
 
         :param img_path: Image Path
         :returns: preds: {\"beam_preds\": beam_preds, \"greedy_preds\": greedy_preds}
@@ -737,7 +748,6 @@ class Trainer:
             else:
                 temp_list = [(x[1], [_x[0] for _x in x[-1]]) for x in self._temp_runner.batch_vars
                              if x[2] == "raw"]
-                img_path = temp_list[12][1][8]
                 indx = None
                 batch_preds = None
                 batch_targets = None
@@ -758,24 +768,32 @@ class Trainer:
                         if x[1] == indx and x[2] == "raw":
                             img_indx = [_x[0] for _x in x[-1]].index(img_path)
                 else:
+                    import ipdb; ipdb.set_trace()
                     return False, f"Img seems to not have been processed. Check."
                 if all(x is not None for x in [batch_preds, batch_lengths,
                                                img_indx, batch_targets]):
-                    preds_targets = [(int(torch.argmax(x).cpu().numpy()), int(y))
-                                     for x, y in zip(batch_preds, batch_targets)]
-                    batch_lengths = [x - 1 for x in batch_lengths]
-                    batch_lengths.insert(0, 0)
-                    words = []
+                    probs, indices = torch.topk(torch.nn.functional.softmax(batch_preds, 1), 5)
+                    probs = probs.cpu().numpy()
+                    indices = indices.cpu().numpy()
                     vocab = self.report_function.__getattribute__("keywords")["vocab"]
-                    cumsum = np.cumsum(batch_lengths)
-                    # How to segregate batch_preds now?
-                    # get the correct set of predictions from batch_preds
-                    # They're not argmax(), so they can be beamed over if required.
-                    for i in range(batch_lengths[img_indx]):
-                        t = preds_targets[cumsum[i]:cumsum[i+1]][img_indx]
-                        words.append((vocab.idx2word[t[0]], vocab.idx2word[t[1]]))
-                    import ipdb; ipdb.set_trace()
-                    pass
+                    preds = [vocab.idx2word[int(x[0])] for x in indices]
+                    topk = [[vocab.idx2word[int(x)] for x in y] for y in indices]
+                    targets = [vocab.idx2word[int(x)] for x in batch_targets]
+                    # _raw = [x for x in self._temp_runner.batch_vars if x[2] == "raw"]
+                    return True, {"preds_targets": [preds, targets],
+                                  "topk_words": topk, "probs": probs}
+                    # for i, x in enumerate(_raw):
+                    #     if img_path in [_x[0] for _x in x[-1]]:
+                    #         _img_indx = i
+                    #         break
+                    # cumsum = np.cumsum(batch_lengths)
+                    # # How to segregate batch_preds now?
+                    # # get the correct set of predictions from batch_preds
+                    # # They're not argmax(), so they can be beamed over if required.
+                    # for i in range(batch_lengths[img_indx]):
+                    #     t = preds_targets[cumsum[i]:cumsum[i+1]][img_indx]
+                    #     words.append((vocab.idx2word[t[0]], vocab.idx2word[t[1]]))
+                    # import ipdb; ipdb.set_trace()
                 else:
                     return False, f"Img seems to not have been processed. Check."
         elif not os.path.exists(img_path):
@@ -788,9 +806,11 @@ class Trainer:
             #     return False, f"Error occurred while reading file {e}"
             # Assuming predictions exist already somewhere in the report
 
-    @extras
+    @helpers
     def fetch_image(self, img_path):
-        """Fetch the data points. Interpret as certain variables"""
+        """Fetch the data points. Interpret as certain variables
+        Uses method POST.
+        """
         if not os.path.exists(img_path):
             return False, f"Image {img_path} doesn't exist"
         else:
@@ -1068,7 +1088,7 @@ class Trainer:
         return [x for x, y in self.__class__.__dict__.items()
                 if isinstance(y, property) and
                 x != "props" and
-                (x == "_extras" or not x.startswith("_"))]
+                (x in {"_extras", "_helpers"} or not x.startswith("_"))]
 
     @property
     def epoch(self):
@@ -1092,6 +1112,10 @@ class Trainer:
         """
         # return dict((x, self.__getattribute__(x)) for x in self._controls)
         return dict((x.__name__, x) for x in control.members)
+
+    @property
+    def _helpers(self):
+        return dict((x.__name__, x) for x in helpers.members)
 
     @property
     def _extras(self):

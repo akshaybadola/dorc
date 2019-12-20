@@ -12,7 +12,7 @@ def _serialize_tensors_arrays(x):
     elif isinstance(x, torch.Tensor):
         return json.dumps(x.cpu().numpy().tolist())
     else:
-        f"<<{type(x).__qualname__}>>"
+        return json.dumps(f"<<{type(x).__qualname__}>>")
 
 
 def _dump(x):

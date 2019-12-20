@@ -16,7 +16,8 @@ from .util import get_backup_num, gen_file_and_stream_logger
 from .epoch import Epoch
 from .components import Models
 from .overrides import MyDataLoader
-from .helpers import control, prop, extras, helpers, ProxyDataset, PropertyProxy
+from .helpers import (control, prop, extras, helpers, ProxyDataset, get_proxy_dataloader
+                      PropertyProxy, HookDict, HookList)
 from .version import __version__
 
 
@@ -87,6 +88,13 @@ from .version import __version__
 #             raise self.exc
 #         return self.ret
 
+# TODO: autoprop decorator, expand name to different properties
+#       based on their name, remove leading "_"
+#       e.g., autoprop(self._training_step) becomes
+#       @property
+#       def training_step(self):
+#           return self._training_step
+
 
 class Trainer:
     """The :class: `Trainer` class is envisioned as
@@ -104,7 +112,7 @@ class Trainer:
         :param criteria: `dict` where (k, v) are (`str`, :class: `torch.nn.Module`)
         :param optimizer: `dict` where (k, v) are (`str`, :class: `torch.optim.Optimizer`)
         :param model_init: `dict` where (k, v) are (`str` model_name, :function: returns the initialized model)
-        :param train_step: :function: which is called for running each batch forward iteration
+        :param train_step_func: :function: which is called for running each batch forward iteration
         :param trainer_params: TODO
         :param train_loader: a train data loader usually :class: `torch.utils.data.Dataloader`
         :param val_loader: a validation data loader usually :class: `torch.utils.data.Dataloader`
@@ -228,7 +236,16 @@ class Trainer:
             self.logger.debug("Ignoring resume_params in while resuming")
             assert "init_weights" in self._trainer_params
             assert "resume_weights" in self._trainer_params
-        
+        assert "training_steps" in self._trainer_params
+        assert all(x in ["train", "val", "test", "iterations"]
+                   for x in self._trainer_params["training_steps"])
+        if "iterations" in self._trainer_params["training_steps"]:
+            assert len(self._trainer_params["training_steps"]) == 1,\
+                "train, val, test or other steps cannot be included with iterations"
+            raise NotImplementedError
+        assert all(x in self._update_functions for x in self._trainer_params["training_steps"]),\
+            "Steps in update_functions and training_steps should match"
+
     # assert anneal_lr_on in some metric
     # check metric decease or increase?
     def _check_resume_or_init_weights(self):
@@ -325,10 +342,32 @@ class Trainer:
                                                           "fraction": "[float]_fraction_of_dataset"}}
 
     def _init_state_vars(self):
+        """Initialize default state variables.
+
+        Hooks in theory needn't be ordered, as they don't really change the
+        state of the trainer (except update_metrics_post_epoch_hook, therefore it's not a hook)
+
+        :returns: None
+        :rtype: None
+
+        """
         self.logger.info("Initializing State Variables")
         self._paused = True
         self._abort = False
-        self._post_epoch_hooks_to_run = ["validate", "test", "save", "log"]
+        # Initialize hooks
+        # Validate test and save now can never be removed, LOL
+        #
+        # TODO: There should be a better way as I should be able to disable
+        #       validate and test That can only be if I specify order in certain
+        #       hooks.
+        self._post_epoch_hooks_to_run = HookList(["validate", "test", "update_metrics"])
+        # FIXME: validate, test, update_metrics is mandatory for now,
+        #        unless val_loader and test_loader are none of course
+        self._post_epoch_hooks_to_run.append("save_history")
+        self._post_epoch_hooks_to_run.append("save_best")
+        self._post_epoch_hooks_to_run.append("save_checkpoint")
+        self._post_epoch_hooks_to_run.append("log")
+        self._items_to_log_dict = {"metrics": self._log_metrics}
         self._set_device()
         if "extra_report" not in self._trainer_params:
             self.logger.debug("No Extra Reportables")
@@ -462,7 +501,7 @@ class Trainer:
         """
         self.logger.info("Initializing Metrics")
         self._metrics = {}
-        for x in ["train", "val", "test"]:
+        for x in self._trainer_params["training_steps"]:  # ["train", "val", "test"]
             if self._dataloader_params[x] is not None:
                 self._metrics[x] = dict((l[1], {}) for l in self._update_functions[x].returns
                                         if l[0] == "metric")
@@ -494,15 +533,19 @@ class Trainer:
                 else:
                     self._extra_metrics[x] = {}
 
+    # TODO: Even though the name of "training_steps" is iterations, there still
+    #       have to be separate {train,val,test}_step_funcs, on separate datasets
     def _init_update_funcs(self):
         self.logger.info("Initializing Update Functions")
         for k, v in self._update_functions.items():
             if k == "train":
-                self._train_step = self._update_functions["train"]
+                self._train_step_func = self._update_functions["train"]
             elif k == "val":
-                self._val_step = self._update_functions["val"]
+                self._val_step_func = self._update_functions["val"]
             elif k == "test":
-                self._test_step = self._update_functions["test"]
+                self._test_step_func = self._update_functions["test"]
+            elif k == "iterations":
+                raise NotImplementedError
 
     def _init_epoch_runner(self):
         class Signals(object, metaclass=PropertyProxy):
@@ -556,6 +599,9 @@ class Trainer:
     #       sends the required json_data format which is to be sent with the request
     #       Which should then be presented as a table to the user.
     #       There should be NO NESTING.
+
+    # TODO: A curious case occurs because train, val, test are not only
+    #       step_names but also dataset subsets. That may create confusion
     @extras
     def call_adhoc_run(self, data):
         self.logger.info(f"Calling adhoc run with data: {data}")
@@ -836,7 +882,7 @@ class Trainer:
         # Save name is internal now
         # wrapper should have a unique id
         if not save_path:
-            save_path = self._save_path
+            save_path = self._save_path_with_epoch
         if best:
             if not save_path.endswith(".pth"):
                 save_path += "_best.pth"
@@ -867,6 +913,8 @@ class Trainer:
     # TODO: Unique Id check
     # TODO: Check if {models, metrics, dataloaders, update_funcs} are resumed correctly as
     #       there may be callables in the saved_state. trainer shouldn't allow callables
+    # TODO: Right now, the list of saves and resume_path etc are given as full paths while
+    #       they should be relative paths to .savedir/unique_id/"_".join(model_names)
     def _resume_from_path(self, resume_path):
         self._have_resumed = True
         saved_state = torch.load(resume_path)
@@ -1027,7 +1075,7 @@ class Trainer:
         while not self._epoch_runner.waiting:
             time.sleep(1)
         self.logger.warn("Trying force save")
-        self._save(self._save_path + "_force")
+        self._save(self._save_path_with_epoch + "_force")
         # TODO: Keep track of self._abort
         if not paused and not self._abort:
             self.resume()
@@ -1071,16 +1119,16 @@ class Trainer:
         return self._device
 
     @property
-    def train_step(self):
-        return partial(self._train_step, self.models, self.criteria)
+    def train_step_func(self):
+        return partial(self._train_step_func, self.models, self.criteria)
 
     @property
-    def val_step(self):
-        return partial(self._val_step, self.models, self.criteria)
+    def val_step_func(self):
+        return partial(self._val_step_func, self.models, self.criteria)
 
     @property
-    def test_step(self):
-        return partial(self._val_step, self.models, self.criteria)
+    def test_step_func(self):
+        return partial(self._val_step_func, self.models, self.criteria)
 
     # exclude properties beginning with _
     @property
@@ -1168,7 +1216,7 @@ class Trainer:
 
     # Internal property. Will not be exposed outside
     @property
-    def _save_path(self):
+    def _save_path_with_epoch(self):
         model_names = "_".join(self.models.names)
         save_name = os.path.join(self._savedir, "_".join([str(self._unique_id),
                                                           model_names,
@@ -1176,10 +1224,17 @@ class Trainer:
         return save_name
 
     @property
+    def _save_path_without_epoch(self):
+        model_names = "_".join(self.models.names)
+        save_name = os.path.join(self._savedir, "_".join([str(self._unique_id),
+                                                          model_names]))
+        return save_name
+
+    @property
     def _checkpoint_path(self):
         # model_names = "_".join(self.models.names)
         # save_name = "_".join([str(self._unique_id), model_names, "checkpoint"])
-        return os.path.join(self._save_path + "_checkpoint" + ".pth")
+        return os.path.join(self._save_path_without_epoch + "_checkpoint" + ".pth")
 
     # TODO: Allow extra_metrics, update_funcs and any other params to be updated
     @property
@@ -1241,13 +1296,17 @@ class Trainer:
     def post_epoch_hooks_to_run(self):
         return self._post_epoch_hooks_to_run
 
+    @property
+    def items_to_log_dict(self):
+        return self._items_to_log_dict
+
     # where are the hooks run?
-    @post_epoch_hooks_to_run.setter
-    def post_epoch_hooks_to_run(self, x):
-        assert any(_x in x for _x in ["train", "val", "test"])
-        assert all(all(__x in self.all_post_batch_hooks for __x in _x) for _x in x.values())
-        for _x in x:
-            self._post_batch_hooks_to_run[_x] = x[_x]
+    # @post_epoch_hooks_to_run.setter
+    # def post_epoch_hooks_to_run(self, x):
+    #     assert any(_x in x for _x in ["train", "val", "test"])
+    #     assert all(all(__x in self.all_post_batch_hooks for __x in _x) for _x in x.values())
+    #     for _x in x:
+    #         self._post_batch_hooks_to_run[_x] = x[_x]
 
     # TODO: A lot of these controls and methods which depend on params will
     #       have to be rewritten.
@@ -1345,7 +1404,7 @@ class Trainer:
             # TODO: What if the thread dies in the middle?
             self._epoch_runner.reset()
             t = Thread(target=self._epoch_runner.run_train,
-                       args=[self.train_step, self.train_loader])
+                       args=[self.train_step_func, self.train_loader])
             t.start()
             t.join()
             # epoch_loss, epoch_accuracy, total
@@ -1365,7 +1424,7 @@ class Trainer:
     def validate(self):
         self.logger.debug("Validating")
         t = Thread(target=self._epoch_runner.run_val,
-                   args=[self.val_step, self.val_loader])
+                   args=[self.val_step_func, self.val_loader])
         t.start()
         t.join()
         if self._abort:
@@ -1378,7 +1437,7 @@ class Trainer:
     def test(self):
         self.logger.debug("Testing")
         t = Thread(target=self._epoch_runner.run_test,
-                   args=[self.test_step, self.test_loader])
+                   args=[self.test_step_func, self.test_loader])
         t.start()
         t.join()
         if self._abort:
@@ -1388,37 +1447,81 @@ class Trainer:
         else:
             self.logger.info("Finished Testing")
 
-    # Basically generates a summary and saves to file for all the detailed batch logs
-    def _log_post_epoch_hook(self):
+    # TODO: There should be a separate definition of "steps" there where it
+    # could be {train, val, test} or simply iterations
+    def _log_metrics(self):
+        for step in self._metrics:
+            if getattr(self, step + "_loader"):
+                metric_names = self._metrics[step]
+                self.logger.debug(f"Total datapoints processed for {step} step {self._metrics[step]['num_datapoints'][self.epoch]}")
+                for m in metric_names:
+                    if self.epoch in self._metrics[step][m]:
+                        self.logger.debug(f"Value of metric {m} for {step} step is: {self._metrics[step][m][self.epoch]}")
+                    else:
+                        self.logger.debug(f"No value recorded for {step}_step, metric {m} and epoch {self.epoch}")
+            else:
+                self.logger.debug(f"No dataloader for {step}")
+
+    # NOTE: For this a sample function has to be defined
+    def _log_samples(self, fraction=0.01):
+        """For a few randomly selected datapoints, log the datapoint_name and
+        corresponding model output
+        """
+        if "iterations in "self._trainer_params["training_steps"]:
+            raise NotImplementedError
+        for step in self._trainer_params["training_steps"]:
+            dataset = getattr(self, step + "_loader").dataset
+            loader = get_proxy_dataloader(dataset,
+                                          self._dataloader_params[step],
+                                          10,  # seems like a good number
+                                          self.logger)
+            step_func = getattr(self, step + "_step_func")
+            # reset, launch each in a separate thread, wait for finish
+            # CHECK: Is this a good idea? Maybe separate runner from epoch
+            getattr(self._epoch_runner, "run_" + step)(step_func, loader, True)
+
+    def update_metrics_post_epoch_hook(self):
+        """Update the metrics being recorded
+        :returns: None
+        :rtype: None
+        """
+        self.logger.debug("Updating the metrics")
+        for step in self._metrics:
+            metric_names = self._metrics[step]
+            self._metrics[step]["num_datapoints"][self.epoch] =\
+                self._epoch_runner.total_samples[step]
+            for m in metric_names:
+                all_vals = [x[3] for x in self._epoch_runner.batch_vars
+                            if x[0] == step and x[2] == m]
+                if len(all_vals):
+                    self._metrics[step][m][self.epoch] = np.mean(all_vals)
+
+    # TODO: I should log some image names and output text also
+    #       That should be there in _log_samples
+    def log_post_epoch_hook(self):
         """Summarizes and log the metrics/losses etc post epoch
+        items_to_log_dict can be accessed and modified by the user
 
         :returns: None
         :rtype: None
 
         """
         self.logger.info("Running post epoch log hook")
-        for step in self._metrics:
-            metric_names = self._metrics[step]
-            self._metrics[step]["num_datapoints"][self.epoch] =\
-                self._epoch_runner.total_samples[step]
-            for m in metric_names:
-                # if m != "num_datapoints":
-                all_vals = [x[3] for x in self._epoch_runner.batch_vars
-                            if x[0] == step and x[2] == m]
-                if len(all_vals):
-                    self._metrics[step][m][self.epoch] = np.mean(all_vals)
+        # But these are certain transformation I'm doing to metrics
+        for k, v in self._items_to_log_dict.items():
+            getattr(self, "_log_" + k)()
 
-    def _val_post_epoch_hook(self):
-        self._validate_post_epoch_hook(self)
+    def val_post_epoch_hook(self):
+        self.validate_post_epoch_hook(self)
 
-    def _validate_post_epoch_hook(self):
+    def validate_post_epoch_hook(self):
         self.logger.debug("Running post epoch validate hook")
         if self.val_loader is not None:
             self.validate()
         else:
             self.logger.info("No val loader. Skipping")
 
-    def _test_post_epoch_hook(self):
+    def test_post_epoch_hook(self):
         self.logger.debug("Running post epoch test hook")
         if (self.epoch+1) % self.test_frequency == 0:
             if self.test_loader is not None:
@@ -1426,7 +1529,15 @@ class Trainer:
             else:
                 self.logger.info("No test loader. Skipping")
 
-    def _save_post_epoch_hook(self):
+    def save_history_post_epoch_hook(self):
+        self.logger.debug("Running save history state post epoch hook")
+        self._save(self._save_path_with_epoch)
+
+    def save_best_post_epoch_hook(self):
+        self.logger.debug("Running save best post epoch hook")
+        self.check_and_save()
+
+    def save_checkpoint_post_epoch_hook(self):
         self.logger.debug("Running post epoch save hook")
         self._save(self._checkpoint_path)
         self.check_and_save()
@@ -1437,4 +1548,4 @@ class Trainer:
         all_hooks = self.all_post_epoch_hooks
         hook_prefixes = self.post_epoch_hooks_to_run
         for hook in hook_prefixes:
-            all_hooks["_".join(["", hook, "post_epoch_hook"])](self)
+            all_hooks["_".join([hook, "post_epoch_hook"])](self)

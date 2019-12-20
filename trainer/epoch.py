@@ -72,6 +72,14 @@ class Epoch:
             self._post_batch_hooks_to_run[_x] = x[_x]
 
     # TODO: Format it better in a yield manner so it isn't in a loop.
+
+    # CHECK: Why are there three functions here? Backprop happens in funcs
+    #        anyway. Since I've decoupled the epoch, this should be better.
+    #        One issue may be the batch_vars for each, as if the epoch is
+    #        reset I may lose the information. It would be better to separate
+    #        epoch from runner maybe, so that vars are collected in the epoch
+    #        while the runner simply runs.
+
     # TODO: For all the timing hooks, ensure that paused time is not
     #       counted towards running
     def run_train(self, train_step, train_loader, get_raw=False):

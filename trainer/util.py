@@ -6,17 +6,19 @@ import numpy
 import torch
 
 
-def _serialize_tensors_arrays(x):
+def _serialize_defaults(x):
     if isinstance(x, numpy.ndarray):
         return json.dumps(x.tolist())
     elif isinstance(x, torch.Tensor):
         return json.dumps(x.cpu().numpy().tolist())
+    elif x is None:
+        return json.dumps(False)
     else:
         return json.dumps(f"<<{type(x).__qualname__}>>")
 
 
 def _dump(x):
-    return json.dumps(x, default=_serialize_tensors_arrays)
+    return json.dumps(x, default=_serialize_defaults)
     # return json.dumps(x, default=lambda o: f"<<non-serializable: {type(o).__qualname__}>>")
 
 

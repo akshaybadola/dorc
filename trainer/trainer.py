@@ -1139,8 +1139,8 @@ class Trainer:
                 (x in {"_extras", "_helpers"} or not x.startswith("_"))]
 
     @property
-    def current_epoch_progress(self):
-        return self._epoch_runner.info["batch_num"]
+    def epoch_progress(self):
+        return self._epoch_runner.info["batch_nums"]
 
     @property
     def epoch(self):

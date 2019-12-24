@@ -79,7 +79,7 @@ class CheckGreaterName(CheckGreater):
         if vals:
             vals.sort(key=lambda x: x[0])
             vals = [v[1] for v in vals]
-            if vals[-1] > vals[:-1]:
+            if all(vals[-1] > x for x in vals[:-1]):
                 return True
             else:
                 return False

@@ -16,7 +16,7 @@ from .util import get_backup_num, gen_file_and_stream_logger
 from .epoch import Epoch
 from .components import Models
 from .overrides import MyDataLoader
-from .helpers import (control, prop, extras, helpers, ProxyDataset, get_proxy_dataloader
+from .helpers import (control, prop, extras, helpers, ProxyDataset, get_proxy_dataloader,
                       PropertyProxy, HookDict, HookList)
 from .version import __version__
 
@@ -928,7 +928,7 @@ class Trainer:
                                                if a != "collate_fn"})
         self._trainer_params = saved_state["trainer_params"]
         self._sanity_check()
-        # CHECK: Only if model or model parameters have changed
+        # FIXME: Init again only if model or model parameters have changed
         self._init_models()
         self._init_dataloaders()
         # Only if criteria and/or optimizer have changed.  In fact, there might
@@ -940,7 +940,7 @@ class Trainer:
         self._init_metrics()
         # Only if update_funcs are changed.
         # In fact, this is not in saved state
-        # self._init_update_funcs()
+        self._init_update_funcs()
         self._init_epoch_runner()
 
         # NOTE: This is checked in Models now
@@ -1137,6 +1137,10 @@ class Trainer:
                 if isinstance(y, property) and
                 x != "props" and
                 (x in {"_extras", "_helpers"} or not x.startswith("_"))]
+
+    @property
+    def current_epoch_progress(self):
+        return self._epoch_runner.info["batch_num"]
 
     @property
     def epoch(self):
@@ -1467,7 +1471,7 @@ class Trainer:
         """For a few randomly selected datapoints, log the datapoint_name and
         corresponding model output
         """
-        if "iterations in "self._trainer_params["training_steps"]:
+        if "iterations" in self._trainer_params["training_steps"]:
             raise NotImplementedError
         for step in self._trainer_params["training_steps"]:
             dataset = getattr(self, step + "_loader").dataset

@@ -14,10 +14,10 @@ from torch.utils.data import Dataset, DataLoader
 from .device import init_nvml, gpu_util, cpu_info, memory_info, DeviceMonitor
 from .util import get_backup_num, gen_file_and_stream_logger
 from .epoch import Epoch
-from .components import Models
 from .overrides import MyDataLoader
+from .components import Models
 from .helpers import (control, prop, extras, helpers, ProxyDataset, get_proxy_dataloader,
-                      PropertyProxy, HookDict, HookList)
+                      PropertyProxy, HookDict, HookList, GET, POST)
 from .version import __version__
 
 
@@ -198,7 +198,7 @@ class Trainer:
             "_model_defs has to be a dict"
         assert len(self._model_defs) > 0, "_model_defs can't be empty"
         assert all(callable(x["model"]) for x in self._model_defs.values()),\
-            "_model_defs values have to be callabes"
+            "_model_defs value have to be callabes"
 
     # TODO: Standardize the device nomenclature especially for dataparallel later
     def _check_trainer_params(self):
@@ -315,7 +315,12 @@ class Trainer:
             self.logger.info("Data parallel specified with gpus %s" % str(self._gpus))
             if torch.cuda.device_count() >= len(self._gpus):
                 self.logger.info("%d gpus are available" % torch.cuda.device_count())
-                self._device = "parallel"
+                if "parallel" in self._trainer_params:
+                    self.logger.info(f"Parallel call be functional {self._trainer_params['parallel']}")
+                    self._device = self._trainer_params["parallel"]
+                else:
+                    self.logger.info("Parallel call be Module dataparallel")
+                    self._device = "dataparallel"
             else:
                 self.logger.error("%d gpus are not available" % torch.cuda.device_count())
                 raise AttributeError
@@ -435,18 +440,24 @@ class Trainer:
         #     self.optimizers[k] = v["function"](self.models[model_name].parameters(),
         #                                        **v["params"])
 
-    # TODO: Check by sampling a few instances from the dataset.
     def _init_dataloaders(self):
         self.logger.info("Initializing Dataloaders")
+
+        # FIXME: Remove this and streamline data and loaders
+        def _check_raw(loader, name):
+            if loader and not hasattr(loader, "dataset"):
+                self.logger.warn(name + " loader doesn't have a dataset")
+            elif loader and hasattr(loader.dataset, "_get_raw"):
+                self.logger.warn(name + " dataset doesn't define \"_get_raw\".\
+                Drawing samples from validation data will not be available.")
+
         for loader, params in self._dataloader_params.items():
             if loader == "train":
                 if self._data is None:
                     self.train_loader = params["function"](**params["function_args"])
                 else:
                     self.train_loader = DataLoader(self._data["train"], **params)
-                if not hasattr(self.train_loader.dataset, "_get_raw"):
-                    self.logger.warn("Train dataset doesn't define \"_get_raw\".\
-                    Drawing samples from training data will not be available.")
+                _check_raw(self.train_loader, "Train")
             elif loader == "val":
                 if params:
                     if self._data is None:
@@ -456,9 +467,7 @@ class Trainer:
                 else:
                     self.logger.info("No Val loader. Will not do validation")
                     self.val_loader = None
-                if self.val_loader and not hasattr(self.val_loader.dataset, "_get_raw"):
-                    self.logger.warn("Validation dataset doesn't define \"_get_raw\".\
-                    Drawing samples from validation data will not be available.")
+                _check_raw(self.val_loader, "Val")
             elif loader == "test":
                 if params:
                     if self._data is None:
@@ -468,9 +477,7 @@ class Trainer:
                 else:
                     self.logger.info("No Test loader. Will not do testing")
                     self.test_loader = None
-                if self.test_loader and not hasattr(self.test_loader.dataset, "_get_raw"):
-                    self.logger.warn("Test dataset doesn't define \"_get_raw\".\
-                    Drawing samples from test data will not be available.")
+                _check_raw(self.test_loader, "Test")
 
     # def _init_criteria_optimizers(self):
     #     self.logger.info("Initializing Optimizers and Criteria")
@@ -627,8 +634,8 @@ class Trainer:
         if not all(x in params for x in ["metrics", "epoch", "fraction"]):
             return False, {"error": self._logi("Required Input. Incorrent parameters"),
                            **self.adhoc_error_dict}
-        elif not (params["metrics"] != "all") or (not all(x in self._metrics[step]
-                                                          for x in params["metrics"])):
+        elif not (params["metrics"] != "all") or\
+             not all(x in self._metrics[step] for x in params["metrics"]):
             self.logger.debug(f'metrics given {params["metrics"]}')
             return False, {"error": self._logi("Required Input. Given unknown metrics or incorrect format"),
                            **self.adhoc_error_dict}
@@ -661,29 +668,37 @@ class Trainer:
     def call_adhoc_func(self, params):
         # have to call epoch runner with specific metrics (in case some are too expensive)
         # For now call all metrics but it's fraction of the data anyway.
+        # Only used here
         step = params.pop("step")
         step_loader = getattr(self, step + "_loader")
         if "seed" in params:
             np.random.seed(params["seed"])
-        indices = np.random.choice(len(step_loader.dataset),
-                                   int(len(step_loader.dataset) * params["fraction"]))
-        _proxy_dataset = ProxyDataset(step_loader.dataset, indices)
-        temp_params = self._dataloader_params[step].copy()
-        temp_params.update({"batch_size": 1})  # stick to 1 right now
-        # MyDataLoader is to solve the problem of collation in data. So that
-        # there's a uniform interface to data. However there seem to be some
-        # problems.
-        if hasattr(step_loader.dataset, "_get_raw"):
-            _proxy_dataset._get_raw = lambda x: step_loader.dataset._get_raw(
-                _proxy_dataset._indices[x])
-            temp_loader = MyDataLoader(_proxy_dataset, return_raw=True,
-                                       **temp_params)
+        if "ruotianlou" in params:
+            _proxy_dataset = step_loader.sub_dataset(params["fraction"])
+            temp_loader = MyDataLoader(_proxy_dataset, batch_size=1, return_raw=True,
+                                       collate_fn=lambda x: x)
             self.logger.info(f"{step} dataset has \"_get_raw\"\
-            Drawing samples from test data is available!")
+            Drawing samples from temp data is available!")
         else:
-            temp_loader = MyDataLoader(_proxy_dataset, **temp_params)
-            self.logger.warn(f"{step} dataset doesn't define \"_get_raw\".\
-            Drawing samples from test data will not be available.")
+            indices = np.random.choice(len(step_loader.dataset),
+                                       int(len(step_loader.dataset) * params["fraction"]))
+            _proxy_dataset = ProxyDataset(step_loader.dataset, indices)
+            temp_params = self._dataloader_params[step].copy()
+            temp_params.update({"batch_size": 1})  # stick to 1 right now
+            # MyDataLoader is to solve the problem of collation in data. So that
+            # there's a uniform interface to data. However there seem to be some
+            # problems.
+            if hasattr(step_loader.dataset, "_get_raw"):
+                _proxy_dataset._get_raw = lambda x: step_loader.dataset._get_raw(
+                    _proxy_dataset._indices[x])
+                temp_loader = MyDataLoader(_proxy_dataset, return_raw=True,
+                                           **temp_params)
+                self.logger.info(f"{step} dataset has \"_get_raw\"\
+                Drawing samples from temp data is available!")
+            else:
+                temp_loader = MyDataLoader(_proxy_dataset, **temp_params)
+                self.logger.warn(f"{step} dataset doesn't define \"_get_raw\".\
+                Drawing samples from temp data will not be available.")
         models = {}
         optimizers = {}
         devices = {}
@@ -715,7 +730,10 @@ class Trainer:
         temp_runner.metrics[step].append("raw")
         temp_runner.metrics[step].append("predictions")
         temp_runner.metrics[step].append("labels")
-        temp_runner.metrics[step].append("lengths")
+        if "ruotianlou" in params:
+            temp_runner.metrics[step].append("alphas")
+        else:
+            temp_runner.metrics[step].append("lengths")
         self._temp_runner = temp_runner
         self.logger.debug(f"starting {self._temp_runner}")
         self._temp_runner.logger = self.logger
@@ -726,14 +744,19 @@ class Trainer:
         # report function only takes in targets and predictions
         Thread(target=self._check_adhoc_run).start()
 
-    # TODO: Fix for new adhoc run
     def _check_adhoc_run(self):
         while self._temp_runner.running:
             time.sleep(1)
         self._flag_adhoc_func_running = False
+        self.resume()
 
     # FIXME: Currently this report function is added externally, which may not
     #        be the best way to build it.
+    #
+    # NOTE: Actually report_function should be user defined and should be
+    #       uploaded as a python module so that along with the adhoc_func, it
+    #       can be processed and reported according to how the _get_raw is
+    #       implemented and how adhoc_function actually operates.
     @extras
     def report_adhoc_run(self):
         if not hasattr(self._temp_runner, "running"):
@@ -778,10 +801,10 @@ class Trainer:
                     output.append(x)
             return True, output
 
+    @POST
     @helpers
     def fetch_preds(self, img_path):
         """Fetch the prediction for a given image. Returns predictions
-        Uses method POST.
 
         :param img_path: Image Path
         :returns: preds: {\"beam_preds\": beam_preds, \"greedy_preds\": greedy_preds}
@@ -852,10 +875,10 @@ class Trainer:
             #     return False, f"Error occurred while reading file {e}"
             # Assuming predictions exist already somewhere in the report
 
+    @POST
     @helpers
     def fetch_image(self, img_path):
-        """Fetch the data points. Interpret as certain variables
-        Uses method POST.
+        """Fetch the image from a given path.
         """
         if not os.path.exists(img_path):
             return False, f"Image {img_path} doesn't exist"
@@ -893,20 +916,86 @@ class Trainer:
         self.logger.debug("Trying to save to %s" % save_path)
         save_state = {}
         save_state["epoch"] = self.epoch
-        # save_state["models"] = dict((k, v.state_dict()) for k, v in self.models.items())
         save_state["models"] = self.models.dump()
-        # save_state["optimizers"] = dict((k, v.state_dict()) for k, v in self.optimizers.items())
-        save_state["model_params"] = self._model_params
-        save_state["criteria_params"] = self._criteria_params
-        save_state["dataloader_params"] = {x: {a: b.__qualname__ if a == "collate_fn" else b
-                                               for a, b in y.items()}
-                                           for x, y in self._dataloader_params.items()}
-        if any(["collate_fn" in y for x, y in save_state["dataloader_params"].items()]):
-            self.logger.warn("collate_fn will not be saved")
-        save_state["trainer_params"] = self._trainer_params
+        save_state["model_params"] = copy.deepcopy(self._model_params)
+        save_state["criteria_params"] = copy.deepcopy(self._criteria_params)
+        save_state["dataloader_params"] = {}
+        for k, v in self._dataloader_params.items():
+            save_state["dataloader_params"][k] = {}
+            for a, b in v.items():
+                if a == "collate_fn":
+                    self.logger.warn(f"collate_fn in dataloader {k} params will not be saved")
+                    save_state["dataloader_params"][k][a] = "callable_" + type(b).__qualname__
+                else:
+                    value = self._dataloader_params[k][a]
+                    if isinstance(value, dict):
+                        save_state["dataloader_params"][k][a] = {}
+                        for x, y in value.items():
+                            if callable(y):
+                                self.logger.warn(f"callable {type(y).__qualname__} in dataloader" +
+                                                 f" {k} params {a, x} will not be saved")
+                                save_state["dataloader_params"][k][a][x] = "callable_" +\
+                                    type(y).__qualname__
+                            else:
+                                save_state["dataloader_params"][k][a][x] = y
+                    else:
+                        if callable(value):
+                            self.logger.warn(f"callable {value} in dataloader {k}" +
+                                             f" params {a} will not be saved")
+                            save_state["dataloader_params"][k][a] = "callable_" +\
+                                type(value).__qualname__
+                        else:
+                            save_state["dataloader_params"][k][a] = value
+        save_state["trainer_params"] = copy.deepcopy(self._trainer_params)
         save_state["metrics"] = self._metrics
         self.logger.info("Saving to %s" % save_path)
-        torch.save(save_state, save_path)
+
+        # FIXME: If some thing is not saved, it cannot be resumed also
+        # NOTE: As I've removed callable saving from dataloader params,
+        #       this should save now
+        def try_save():
+            try:
+                torch.save(save_state, save_path)
+                not_saved = False
+            except Exception:
+                not_saved = True
+            return not_saved
+        not_saved = try_save()
+        while not_saved:
+            self.fix_state(save_state, save_path)
+            not_saved = try_save()
+
+    def fix_state(self, save_state, save_path):
+        tmp_path = save_path + "_tmp"
+
+        def find_error_key(state_dict):
+            for x in state_dict.keys():
+                try:
+                    torch.save(state_dict[x], tmp_path)
+                except Exception:
+                    return x
+            return None
+        state_dict = save_state
+        keys = []
+        while True:
+            if isinstance(state_dict, dict):
+                error_key = find_error_key(state_dict)
+            else:
+                break
+            if error_key:
+                keys.append(error_key)
+                state_dict = state_dict[error_key]
+        x = save_state
+        for key in keys[:-1]:
+            x = x[key]
+        x[keys[-1]] = type(x[keys[-1]]).__qualname__
+        self.logger.warn(f"Value with keychain {keys} could not be saved." +
+                         f" Replaced with name = {x[keys[-1]]}")
+        if "not_saved" not in save_state:
+            save_state["not_saved"] = [keys]
+        else:
+            save_state["not_saved"].append(keys)
+        os.remove(tmp_path)
 
     # CHECK: resume and update will change the attrs of the trainer
     #        Perhaps some tests here.
@@ -918,14 +1007,24 @@ class Trainer:
     def _resume_from_path(self, resume_path):
         self._have_resumed = True
         saved_state = torch.load(resume_path)
+        # not_saved = saved_state["not_saved"]
         self.epoch = saved_state["epoch"]
         self._model_params = saved_state["model_params"]
         self._criteria_params = saved_state["criteria_params"]
-        if any(["collate_fn" in y for x, y in saved_state["dataloader_params"].items()]):
+        if any([("collate_fn" in y or callable(y))
+                for x, y in saved_state["dataloader_params"].items()]):
             self.logger.warn("collate_fn will not be restored")
-        for x in self._dataloader_params:
-            self._dataloader_params[x].update({a: b for a, b in self._dataloader_params[x].items()
-                                               if a != "collate_fn"})
+        for k, v in saved_state["dataloader_params"].items():
+            for a, b in v.items():
+                if a != "collate_fn":
+                    value = saved_state["dataloader_params"][k][a]
+                    if isinstance(value, dict):
+                        for x, y in value.items():
+                            if isinstance(y, str) and not y.startswith("callable_"):
+                                self._dataloader_params[k][a][x] = y
+                    else:
+                        if isinstance(value, str) and not value.startswith("callable_"):
+                            self._dataloader_params[k][a] = value
         self._trainer_params = saved_state["trainer_params"]
         self._sanity_check()
         # FIXME: Init again only if model or model parameters have changed
@@ -952,10 +1051,6 @@ class Trainer:
         #     self.optimizers[k].load_state_dict(saved_state["optimizers"][k])
         self.models.load(saved_state["models"])
 
-        # for k in self._metrics.keys():
-        #     assert k in saved_state['metrics']
-        #     for _k in self._metrics[k]:
-        #         assert _k in saved_state['metrics'][k]
         diff = set(self._metrics.keys()).difference(saved_state["metrics"].keys())
         if diff:
             self.logger.warn(f"Some metric _steps_ aren't there in saved state {diff}")
@@ -1058,11 +1153,6 @@ class Trainer:
         self.abort_current_loop()
         self.save()
         # listen for commands
-
-    @control
-    def destroy(self):
-        self.logger.info("Destroying")
-        self.logger.info("Does nothing for now")
 
     # Actually a "force_save", pause and then save
     @control

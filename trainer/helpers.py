@@ -2,7 +2,6 @@ import torch
 import numpy as np
 from collections import OrderedDict
 from .overrides import MyDataLoader
-from .epoch import Epoch
 
 
 class HookDict:
@@ -103,6 +102,22 @@ control = Tag("control")
 prop = Tag("prop")
 extras = Tag("extras")
 helpers = Tag("helpers")
+
+
+def GET(f):
+    if not hasattr(f, "__http_methods__"):
+        f.__http_methods__ = ["GET"]
+    elif "GET" not in f.__http_methods__:
+        f.__http_methods__.append("GET")
+    return f
+
+
+def POST(f):
+    if not hasattr(f, "__http_methods__"):
+        f.__http_methods__ = ["POST"]
+    elif "POST" not in f.__http_methods__:
+        f.__http_methods__.append("POST")
+    return f
 
 
 class ProxyDataset(torch.utils.data.Dataset):

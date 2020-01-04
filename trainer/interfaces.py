@@ -65,6 +65,7 @@ class HTTPInterface:
 
 
 class FlaskInterface:
+    # CHECK: This Func is not used
     class Func:
         def __init__(self, name, caller):
             self.name = name
@@ -106,21 +107,21 @@ class FlaskInterface:
         else:
             self.context = None
 
-    def wrapper_control(self, func_name):
+    def trainer_control(self, func_name):
         self.trainer.__class__.__dict__[func_name](self.trainer)
         return _dump("Performing %s\n" % func_name)
 
-    def wrapper_props(self, prop_name):
+    def trainer_props(self, prop_name):
         return _dump(self.trainer.__class__.__dict__[prop_name].fget(self.trainer))
 
-    def wrapper_get(self, func_name):
+    def trainer_get(self, func_name):
         status, response = getattr(self.trainer, func_name)()
         if status:
             return _dump({"success": response})
         else:
             return _dump({"error": response})
 
-    def wrapper_post(self, func_name):
+    def trainer_post(self, func_name):
         if hasattr(request, "json"):
             data = request.json
             status, response = getattr(self.trainer, func_name)(data)
@@ -139,11 +140,11 @@ class FlaskInterface:
             print(response)
             return Response(response, status=400, mimetype='application/json')
 
-    def wrapper_route(self, func_name):
+    def trainer_route(self, func_name):
         if request.method == "POST":
-            return self.wrapper_post(func_name)
+            return self.trainer_post(func_name)
         elif request.method == "GET":
-            return self.wrapper_get(func_name)
+            return self.trainer_get(func_name)
         else:
             return Response(status=405)
 
@@ -162,86 +163,96 @@ class FlaskInterface:
         def __props():
             return _dump(self.trainer.props)
 
-        # TODO: This should be a loop over add_rule like controls
-        # TODO: Type check, with types allowed in {"bool", "int", "float", "string", "list[type]"}
-        #       one level depth check
-        # @self.app.route('/_extras/call_adhoc_run', methods=["POST"])
-        def __call_adhoc_run():
-            error_dict = {"required_atleast_[split]": ["train", "val", "test"],
-                          "required_for_[split]": {"metrics": "[list[string]]_which_metrics",
-                                                   "epoch": "[int|string]_which_epoch",
-                                                   "fraction": "[float]_fraction_of_dataset"}}
-            if hasattr(request, "json"):
-                data = request.json
-                status, response = self.trainer.call_adhoc_run(data)
-                if not status:
-                    # TODO: Perhaps this should be sent by the trainer
-                    response = _dump({"error": "required input and " + response, **error_dict})
-                    return Response(response, status=400, mimetype='application/json')
-                else:
-                    return Response(_dump({"success": response}),
-                                    status=200, mimetype='application/json')
-            else:
-                response = _dump({"error": "Input parameters", **error_dict})
-                return Response(response, status=400, mimetype='application/json')
+        # # TODO: This should be a loop over add_rule like controls
+        # # TODO: Type check, with types allowed in {"bool", "int", "float", "string", "list[type]"}
+        # #       one level depth check
+        # # @self.app.route('/_extras/call_adhoc_run', methods=["POST"])
+        # def __call_adhoc_run():
+        #     error_dict = {"required_atleast_[split]": ["train", "val", "test"],
+        #                   "required_for_[split]": {"metrics": "[list[string]]_which_metrics",
+        #                                            "epoch": "[int|string]_which_epoch",
+        #                                            "fraction": "[float]_fraction_of_dataset"}}
+        #     if hasattr(request, "json"):
+        #         data = request.json
+        #         status, response = self.trainer.call_adhoc_run(data)
+        #         if not status:
+        #             # TODO: Perhaps this should be sent by the trainer
+        #             response = _dump({"error": "required input and " + response, **error_dict})
+        #             return Response(response, status=400, mimetype='application/json')
+        #         else:
+        #             return Response(_dump({"success": response}),
+        #                             status=200, mimetype='application/json')
+        #     else:
+        #         response = _dump({"error": "Input parameters", **error_dict})
+        #         return Response(response, status=400, mimetype='application/json')
 
-        # @self.app.route('/_extras/report_adhoc_run')
-        def __report_adhoc_run():
-            status, response = self.trainer.report_adhoc_run()
-            if status:
-                return Response(_dump(response), status=200, mimetype="application/json")
-            else:
-                return Response(_dump(response), status=400, mimetype="application/json")
+        # # @self.app.route('/_extras/report_adhoc_run')
+        # def __report_adhoc_run():
+        #     status, response = self.trainer.report_adhoc_run()
+        #     if status:
+        #         return Response(_dump(response), status=200, mimetype="application/json")
+        #     else:
+        #         return Response(_dump(response), status=400, mimetype="application/json")
 
-        # @self.app.route('/_extras/load_save', methods=["POST"])
-        def __load_save():
-            if hasattr(request, "json"):
-                data = request.json
-                status, response = self.trainer.load_save(data)
-                if not status:
-                    # TODO: Perhaps this should be sent by the trainer
-                    response = _dump({"error": response})
-                    return Response(response, status=400, mimetype='application/json')
-                else:
-                    return Response(_dump({"success": response}),
-                                    status=200, mimetype='application/json')
-            else:
-                response = _dump({"error": "Required save name"})
-                return Response(response, status=400, mimetype='application/json')
+        # # @self.app.route('/_extras/load_save', methods=["POST"])
+        # def __load_save():
+        #     if hasattr(request, "json"):
+        #         data = request.json
+        #         status, response = self.trainer.load_save(data)
+        #         if not status:
+        #             # TODO: Perhaps this should be sent by the trainer
+        #             response = _dump({"error": response})
+        #             return Response(response, status=400, mimetype='application/json')
+        #         else:
+        #             return Response(_dump({"success": response}),
+        #                             status=200, mimetype='application/json')
+        #     else:
+        #         response = _dump({"error": "Required save name"})
+        #         return Response(response, status=400, mimetype='application/json')
 
-        # @self.app.route("/update", methods=["POST"])
-        def __update():
-            data = json.loads(request.data.decode("utf-8"))
-            if not all(x in data for x in ["model_params", "trainer_params", "dataloader_params"]):
-                return Response(_dump("Invalid data format in update request"), status=412,
-                                mimetype="application/json")
-            status = self.trainer.try_update(data)
-            if status:
-                return json.dumps(status)
-            else:
-                return json.dumps(False)
+        # # @self.app.route("/update", methods=["POST"])
+        # def __update():
+        #     data = json.loads(request.data.decode("utf-8"))
+        #     if not all(x in data for x in ["model_params", "trainer_params", "dataloader_params"]):
+        #         return Response(_dump("Invalid data format in update request"), status=412,
+        #                         mimetype="application/json")
+        #     status = self.trainer.try_update(data)
+        #     if status:
+        #         return json.dumps(status)
+        #     else:
+        #         return json.dumps(False)
 
         # TODO: Right now, only functions with "report" are GET, rest are POST
         #       There should be a unified and sensible mechanism to define how
         #       these things are accessed.
+        #
+        # NOTE: I'm doing it with __doc__ strings in functions right now, which
+        #       probably is not a good idea.
+
+        @self.app.route("/destroy", methods=["GET"])
+        def __destroy():
+            self.logger.info("Destroying")
+            self.logger.info("Does nothing for now")
+        
         for x, y in self.trainer.controls.items():
-            self.app.add_url_rule("/" + x, x, partial(self.wrapper_control, x))
+            self.app.add_url_rule("/" + x, x, partial(self.trainer_control, x))
         for x in self.trainer.props:
-            self.app.add_url_rule("/" + "props/" + x, x, partial(self.wrapper_props, x))
+            self.app.add_url_rule("/" + "props/" + x, x, partial(self.trainer_props, x))
         # Adding extras
         for x, y in self.trainer._extras.items():
             if "report" in x:
-                self.app.add_url_rule("/_extras/" + x, x, partial(self.wrapper_get, x),
+                self.app.add_url_rule("/_extras/" + x, x, partial(self.trainer_get, x),
                                       methods=["GET"])
             else:
-                self.app.add_url_rule("/_extras/" + x, x, partial(self.wrapper_post, x),
+                self.app.add_url_rule("/_extras/" + x, x, partial(self.trainer_post, x),
                                       methods=["POST"])
+        # CHECK: Better way than y.__doc__
         for x, y in self.trainer._helpers.items():
             methods = []
-            if "POST" in y.__doc__:
+            if "POST" in y.__http_methods__:
                 methods.append("POST")
-            if "GET" in y.__doc__:
+            if "GET" in y.__http_methods__:
                 methods.append("GET")
-            self.app.add_url_rule("/_helpers/" + x, x, partial(self.wrapper_route, x),
+            self.app.add_url_rule("/_helpers/" + x, x, partial(self.trainer_route, x),
                                   methods=methods)
         serving.run_simple(self.api_host, self.api_port, self.app, ssl_context=self.context)

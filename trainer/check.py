@@ -87,6 +87,25 @@ class CheckGreaterName(CheckGreater):
             return False
 
 
+class CheckLesserName(CheckGreater):
+    def __init__(self, when, name):
+        super().__init__(when)
+        self._name = name
+        self._requires = {"when": when, "metrics": name}
+
+    def __call__(self, metrics):
+        vals = [*metrics[self._name].items()]
+        if vals:
+            vals.sort(key=lambda x: x[0])
+            vals = [v[1] for v in vals]
+            if all(vals[-1] < x for x in vals[:-1]):
+                return True
+            else:
+                return False
+        else:
+            return False
+
+
 class CheckAccuracy(CheckGreaterName):
     def __init__(self, when):
         super().__init__(when, "accuracy")

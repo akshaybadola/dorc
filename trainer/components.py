@@ -13,26 +13,71 @@ class Models:
         self._logger = logger
         # model attributes are added to torch.nn.Module directly
         for k, model in models.items():
-            assert hasattr(model, "forward"), f"No forward call in model {model.__qualname__}"
-            assert hasattr(model, "_device"), f"No \"_device\" attr in model {model.__qualname__}."
-            assert hasattr(model, "to_"), f"No \"to_\" attr in model {model.__qualname__}."
+            assert hasattr(model, "forward"), f"No forward call in model {type(model).__qualname__}"
+            if not hasattr(model, "_device"):
+                self._logger.warn(f"No \"_device\" attr in model {type(model).__qualname__}. ")
+            if not hasattr(model, "to_"):
+                self._logger.warn(f"No \"to_\" attr in model {type(model).__qualname__}. ")
             model._name = k
-            model._optimizer = optimizers[k]["optimizer"]
-            model._optimizer_name = optimizers[k]["name"]
-            # FIXME: `device`  is referred by the model which shouldn't be the case
-            model._device = devices[k]
+            model._optimizer = self._optimizers[k]["optimizer"]
+            model._optimizer_name = self._optimizers[k]["name"]
+            # FIXME: `device` is referred by the model which shouldn't be the
+            #        case In models_old.py, the model forks execution based on
+            #        the device.  _device is patched into the model later. It
+            #        can be queried externally but that would add additonal
+            #        complexity.
+            #
+            #        A better solution would be to use decorators. Inject the
+            #        code automatically, based on decorators.  e.g., @device
+            #
+            #        Functions in modern computer programming are meant as
+            #        demarcations. Instead of trying to inject code in arbitrary
+            #        places it would be better to segregate those areas into
+            #        functions and then use decorators. Another way would be a
+            #        device context.
+            model._device = self._devices[k]
             self._models[k] = model
             self.set_device(k, devices[k])
 
     def set_device(self, model_name, device):
-        # FIXME: `device`  is referred by the model which shouldn't be the case
+        """Sets the device and patches the model with _device and to_ attrs
+
+        :param model_name: 
+        :param device: 
+        :returns: 
+        :rtype: 
+
+        """
+        
+        # FIXME: `device` is referred by the model which shouldn't be the case
+        #        In models_old.py, Decoder refers to the _device as
+        #        self._device.  Ideally _device should be totally outside the
+        #        model, but torch.nn.DataParallel may not always work as not
+        #        everything in batch may have to be put on to the devices.
+        #
+        #        In the case below, the "_device" and "_to" attributes are
+        #        patched on to the model. Only way out of this is to implement a
+        #        custom dataparallel which allows different batch sizes AND non
+        #        device params.
         if str(device) == "parallel":
-            # NOTE: Doesn't work in captioning case as lengths cannot be split across GPUs
-            # TODO: It should be model[devices][0]
+            # NOTE: model = torch.nn.DataParallel doesn't work in certain cases
+            #       e.g., if not all attributes of the batch can be split across
+            #       GPUs.
+            # TODO: It should be model[devices][0] (NOTE Why? [Thu Jan  2 01:53:12 IST 2020])
             self._models[model_name].to_ = lambda x: x.cuda(self._gpus[0])
             self._models[model_name].gpus = self._gpus
             self._models[model_name] = self._models[model_name].to_(self._models[model_name])
             self._models[model_name]._device = "parallel"
+        elif str(device) == "dataparallel":
+            self._models[model_name] = torch.nn.DataParallel(
+                self._models[model_name], device_ids=self._gpus)
+            self._models[model_name].gpus = self._gpus
+            self._models[model_name].to_ = lambda x: x.cuda(self._gpus[0])
+            self._models[model_name] = self._models[model_name].to_(self._models[model_name])
+            self._models[model_name]._device = "dataparallel"
+            self._models[model_name]._name = model_name
+            self._models[model_name]._optimizer = self._optimizers[model_name]["optimizer"]
+            self._models[model_name]._optimizer_name = self._optimizers[model_name]["name"]
         else:
             self._models[model_name] = self._models[model_name].to(device)
             self._models[model_name].to_ = lambda x: x.to(device)

@@ -1,13 +1,19 @@
 import re
+import io
 import os
+import sys
 import base64
 import copy
 import time
+import json
 import torch
+import uuid
 from functools import partial
 from threading import Thread
 from PIL import Image
+import magic
 import numpy as np
+import zipfile
 from types import SimpleNamespace
 from torch.utils.data import Dataset, DataLoader
 
@@ -345,6 +351,8 @@ class Trainer:
                                  "required_for_[split]": {"metrics": "[list[string]]_which_metrics",
                                                           "epoch": "[int|string]_which_epoch",
                                                           "fraction": "[float]_fraction_of_dataset"}}
+        self.load_weights.__dict__["content_type"] = "form"
+        self.add_model.__dict__["content_type"] = "form"
 
     def _init_state_vars(self):
         """Initialize default state variables.
@@ -892,30 +900,89 @@ class Trainer:
 
     @POST
     @helpers
-    def load_weights(self, weights_data):
-        import ipdb; ipdb.set_trace()
-        if not isinstance(weights_data, dict):
-            return False, f"No params sent in data"
-        elif isinstance(weights_data, dict) and "model_names" not in weights_data:
-            return False, f"Need Model Name and Weights File in data"
-        else:
-            model_names = weights_data["model_names"]
-            file = weights_data["file"].split("base64")[1]
-            file = base64.b64decode(file[1:])
-            weights = None
-            # read_file_into_variable and then
-            # TODO: Save first and restore state later if error occurs
-            try:
-                for model_name in model_names:
-                    self.models.load_weights(model_name, weights[model_name])
-                return True, "Updated Models {model_names}"
-            except Exception as e:
-                return False, f"Error occured {e}"
+    def load_weights(self, request):
+        if "model_names" not in request.form:
+            model_names = json.loads(request.form["model_names"])
+            return False, f"Model name not sent in data"
+        try:
+            weights = torch.load(request.files["file"])
+        except Exception as e:
+            return False, f"Error occured while reading data {e}"
+        if not all(x in weights["models"] for x in model_names):
+            return False, f"Not all models required in given weights"
+        if not all(x in self.models.names for x in model_names):
+            return False, f"Some models currently not in scope"
+        try:
+            for model_name in model_names:
+                self.models.load_weights(model_name, weights[model_name])
+            return True, "Updated Models {model_names}"
+        except Exception as e:
+            return False, f"Error occured while loading models {e}"
+
+    def make_temp_directory(self):
+        dirname = "tmp_" + str(uuid.uuid4()).replace("-", "_")
+        os.mkdir(os.path.join("trainer_modules", dirname))
+        return dirname
 
     @POST
     @helpers
-    def add_model(self, model_file):
-        import ipdb; ipdb.set_trace()
+    def add_model(self, request):
+        """Add a model from a given python or module as a zip file to the current scope
+        file must be present in request and is read as request.files["file"]
+
+        The file can be either a python file in text format or a zipped
+        module. If it's a zipped module then __init__.py must be at the top
+        level in the zip file.
+
+        In either case only the relevant model names are imported from the
+        file/module.
+
+        :param request: request is the http request
+        :returns: status
+        :rtype: `tuple`
+
+        """
+        if not os.path.exists("trainer_modules"):
+            os.mkdir("trainer_modules")
+        if not os.path.abspath("trainer_modules") in sys.path:
+            sys.path.append(os.path.abspath("trainer_modules"))
+        if "model_names" not in request.form:
+            return False, f"Model name not sent in data"
+        model_names = json.loads(request.form["model_names"])
+        try:
+            # file can be zip or text
+            model_file = request.files["file"].read()
+            if "python" in magic.from_buffer(model_file).lower():
+                tmp_file = os.path.join("trainer_modules", str((uuid.uuid4()).replace("-", "_")))
+                with open(tmp_file) as f:
+                    f.write(model_file)
+                try:
+                    tmp_name = tmp_file.replace(".py", "")
+                    for model_name in model_names:
+                        exec(f"from {tmp_name} import model_name")
+                    # TODO: Something like self._add_model_to_self(model_name)
+                except ImportError as e:
+                    return False, f"Could not import {model_name} from given file. Error {e}"
+            elif zipfile.is_zipfile(io.BytesIO(model_file)):
+                zf = zipfile.ZipFile(io.BytesIO(model_file))
+                if not any(["__init__.py" in x.split("/")[0] for x in zf.namelist()]):
+                    return False, f"zip file must have __init__.py at the top level"
+                else:
+                    tmp_dir = self.make_temp_directory()
+                    zf.extractall(os.path.join("trainer_modules", tmp_dir))
+                    # make sure that __init__.py is at the root of tmp_dir
+                    try:
+                        for model_name in model_names:
+                            exec(f"from {tmp_dir} import model_name")
+                            # TODO: Something like self._add_model_to_self(model_name)
+                    except ImportError as e:
+                        return False, f"Could not import {model_name} from given file. Error {e}"
+                    except Exception as e:
+                        return False, f"Some weird error occured while importing. Error {e}"
+            else:
+                return False, f"Given file neither python nor zip."
+        except Exception as e:
+            return False, f"Error occured while reading file {e}"
 
     # TODO: How to resolve arbitrary callables being saved? Can they resume?
     #       In fact like I mentioned earlier, arbitrary callables shouldn't be allowed

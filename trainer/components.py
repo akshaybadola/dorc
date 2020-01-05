@@ -96,6 +96,18 @@ class Models:
     def load_weights(self, model_name, state_dict):
         self._models[model_name].load_state_dict(state_dict)
 
+    def add(self, model_name, model, params):
+        """Add model to self and initialize it according to the params
+
+        :param model_name: Name of the model
+        :param model: The model object :class: `torch.nn.Module` for now
+        :param params: params for the model
+        :returns: None
+        :rtype: None
+
+        """
+        pass
+
     # FIXME: There could be issues in dumping and loading with device allocation
     def dump(self):
         temp = {}

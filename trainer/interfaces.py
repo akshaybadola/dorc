@@ -121,8 +121,10 @@ class FlaskInterface:
         else:
             return _dump({"error": response})
 
+    def trainer_post_form(self, func_name):
+        status, response = getattr(self.trainer, func_name)(request)
+
     def trainer_post(self, func_name):
-        import ipdb; ipdb.set_trace()
         if hasattr(request, "json"):
             data = request.json
             status, response = getattr(self.trainer, func_name)(data)
@@ -143,7 +145,10 @@ class FlaskInterface:
 
     def trainer_route(self, func_name):
         if request.method == "POST":
-            return self.trainer_post(func_name)
+            if getattr(getattr(self.trainer, func_name), "content_type", "json") == "form":
+                return self.trainer_post_form(func_name)
+            else:
+                return self.trainer_post(func_name)
         elif request.method == "GET":
             return self.trainer_get(func_name)
         else:

@@ -315,16 +315,16 @@ class Trainer:
                 param_group['lr'] *= .9
             self.logger.info("Annealing...")
 
-    # TODO: Sample should not return Tensor but instead visualizable values
-    #       It's hard to quantify what a "visualizable" value is.
-    def sample(self, inputs: Union[List[Union[int, float]],
-                                   Tensor[Union[int, float]]]) -> Tensor[Union[int, float]]:
-        """Skeleton sample function, see PEP 484, and mypy for how the typing hint
-        syntax works. Docstring is automatically generated.
+    # # TODO: Sample should not return Tensor but instead visualizable values
+    # #       It's hard to quantify what a "visualizable" value is.
+    # def sample(self, inputs: Union[List[Union[int, float]],
+    #                                Tensor[Union[int, float]]]) -> Tensor[Union[int, float]]:
+    #     """Skeleton sample function, see PEP 484, and mypy for how the typing hint
+    #     syntax works. Docstring is automatically generated.
 
-        :param inputs: 
-        :returns: 
-        :rtype:
+    #     :param inputs: 
+    #     :returns: 
+    #     :rtype:
 
-        """
-        raise NotImplementedError
+    #     """
+    #     raise NotImplementedError

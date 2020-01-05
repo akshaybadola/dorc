@@ -103,26 +103,29 @@ from .version import __version__
 
 
 class Trainer:
-    """The :class: `Trainer` class is envisioned as
-    an interface to any training procedure.
+    """The :class:`Trainer` class is envisioned as an interface to any training
+    procedure. As of now it's not model agnostic and assumes :mod:`torch` is the
+    underlying backend. But the principles on which it's designed are universal
+    and any backend should be feasible.
+
     """
     __version__ = __version__
 
     def __init__(self, model_params, criteria, optimizer, model_defs, update_functions,
                  extra_metrics, trainer_params, data, dataloader_params):
-        """Initializes the :class: `Trainer` object. This is supposed to be a catch all
+        """Initializes the :class:`Trainer` object. This is supposed to be a catch all
         trainer which is robust and easy to train and can generate graphs automatically etc.
 
-        :param model: model which is a :class: `torch.nn.Module`
-        :param model_params: model params where (k, v) are (:class: `str` model_name, `list` of model params) :class: `dict`
-        :param criteria: `dict` where (k, v) are (`str`, :class: `torch.nn.Module`)
-        :param optimizer: `dict` where (k, v) are (`str`, :class: `torch.optim.Optimizer`)
+        :param model: model which is a :class:`torch.nn.Module`
+        :param model_params: model params where (k, v) are (:class:`str` model_name, `list` of model params) :class:`dict`
+        :param criteria: `dict` where (k, v) are (`str`, :class:`torch.nn.Module`)
+        :param optimizer: `dict` where (k, v) are (`str`, :class:`torch.optim.Optimizer`)
         :param model_init: `dict` where (k, v) are (`str` model_name, :function: returns the initialized model)
         :param train_step_func: :function: which is called for running each batch forward iteration
         :param trainer_params: TODO
-        :param train_loader: a train data loader usually :class: `torch.utils.data.Dataloader`
-        :param val_loader: a validation data loader usually :class: `torch.utils.data.Dataloader`
-        :param test_loader: a test data loader usually :class: `torch.utils.data.Dataloader`
+        :param train_loader: a train data loader usually :class:`torch.utils.data.Dataloader`
+        :param val_loader: a validation data loader usually :class:`torch.utils.data.Dataloader`
+        :param test_loader: a test data loader usually :class:`torch.utils.data.Dataloader`
         :param args: `types.SimpleNamespace` which contains the rest of the arguments
 
         """
@@ -816,7 +819,7 @@ class Trainer:
 
         :param img_path: Image Path
         :returns: preds: {\"beam_preds\": beam_preds, \"greedy_preds\": greedy_preds}
-        :rtype: :class: `dict`
+        :rtype: :class:`dict`
 
         """
         if True:              # img_path in self._temp_runner._processed_images:
@@ -928,18 +931,25 @@ class Trainer:
     @helpers
     def add_model(self, request):
         """Add a model from a given python or module as a zip file to the current scope
-        file must be present in request and is read as request.files["file"]
+        file must be present in request and is read as ``request.files["file"]``
 
         The file can be either a python file in text format or a zipped
-        module. If it's a zipped module then __init__.py must be at the top
+        module. If it's a zipped module then ``__init__.py`` must be at the top
         level in the zip file.
 
         In either case only the relevant model names are imported from the
         file/module.
+        :class:`torch.Tensor`
 
-        :param request: request is the http request
-        :returns: status
-        :rtype: `tuple`
+        .. code-block::
+
+            from torch import Tensor
+            t = Tensor([1, 2, 3])
+
+
+        :param flask.request request: request is the http request
+        :returns: :class:`bool` status, :class:`str` message
+        :rtype: :class:`tuple`
 
         """
         if not os.path.exists("trainer_modules"):
@@ -1524,7 +1534,7 @@ class Trainer:
         As of now non-serializable updates are not supported, so the both
         key/value pairs must be json-encodeable.
 
-        :param params: :class: `dict`
+        :param params: :class:`dict`
         :returns: None
         :rtype: None
 

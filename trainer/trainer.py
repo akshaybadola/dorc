@@ -8,6 +8,7 @@ import time
 import json
 import torch
 import uuid
+import inspect
 from functools import partial
 from threading import Thread
 from PIL import Image
@@ -930,49 +931,83 @@ class Trainer:
     @POST
     @helpers
     def add_model(self, request):
-        """Add a model from a given python or module as a zip file to the current scope
-        file must be present in request and is read as ``request.files["file"]``
-
-        The file can be either a python file in text format or a zipped
-        module. If it's a zipped module then ``__init__.py`` must be at the top
-        level in the zip file.
-
-        In either case only the relevant model names are imported from the
-        file/module.
-        :class:`torch.Tensor`
-
-        .. code-block::
-
-            from torch import Tensor
-            t = Tensor([1, 2, 3])
-
+        """Add a model from a given python or module as a zip file.
+        Delegates the request to :method:`add_module`
 
         :param flask.request request: request is the http request
         :returns: :class:`bool` status, :class:`str` message
         :rtype: :class:`tuple`
 
         """
+        status, response = self.add_module(request)
+        if status:
+            module_exports = response
+            if "model_names" not in module_exports:
+                return False, f"Model name not sent in data"
+            else:
+                status, models = self._get_new_models(module_exports["model_names"],
+                                                      module_exports["model_defs"],
+                                                      module_exports["model_params"])
+                if not status:
+                    return status, models
+                else:
+                    # What to do now?  If there are optimizer_params in the
+                    # module, import that else leave the optimizer on. Another
+                    # optimizer is initialized and added to the model There
+                    # should be an "active" mechanism to dump the inactive
+                    # models to disk and keep the active models in memory
+                    # 
+                    # How to force destruction of those models and resources and
+                    # initialize new ones? Does thread work?
+                    pass
+        else:
+            return status, response
+
+    @POST
+    @helpers
+    def add_module(self, request):
+        """Adds an arbitrary module from a given python or module as a zip file. File
+        must be present in request and is read as ``request.files["file"]``
+
+        The file can be either a python file in text format or a zipped
+        module. If it's a zipped module then ``__init__.py`` must be at the top
+        level in the zip file.
+
+        exports must be defined in ``module_exports``. e.g.:
+
+        .. code-block :: py
+
+            class ABC
+
+            def some_stuff()
+
+            module_exports = {"abc": ABC, "some_stuff"}
+
+        """
         if not os.path.exists("trainer_modules"):
             os.mkdir("trainer_modules")
         if not os.path.abspath("trainer_modules") in sys.path:
             sys.path.append(os.path.abspath("trainer_modules"))
-        if "model_names" not in request.form:
-            return False, f"Model name not sent in data"
-        model_names = json.loads(request.form["model_names"])
         try:
             # file can be zip or text
             model_file = request.files["file"].read()
-            if "python" in magic.from_buffer(model_file).lower():
-                tmp_file = os.path.join("trainer_modules", str((uuid.uuid4()).replace("-", "_")))
-                with open(tmp_file) as f:
-                    f.write(model_file)
+            if hasattr(magic, "from_buffer"):
+                test = "python" in magic.from_buffer(model_file).lower()
+            elif hasattr(magic, "detect_from_content"):
+                test = "python" in magic.detect_from_content(model_file).name.lower()
+            if test:
+                tmp_name = "tmp_" + str(uuid.uuid4()).replace("-", "_")
+                tmp_file = os.path.join("trainer_modules", tmp_name + ".py")
+                with open(tmp_file, "w") as f:
+                    f.write(model_file.decode())
                 try:
-                    tmp_name = tmp_file.replace(".py", "")
-                    for model_name in model_names:
-                        exec(f"from {tmp_name} import model_name")
-                    # TODO: Something like self._add_model_to_self(model_name)
+                    ldict = {}
+                    exec(f"from {tmp_name} import module_exports", globals(), ldict)
+                    return True, ldict["module_exports"]
                 except ImportError as e:
-                    return False, f"Could not import {model_name} from given file. Error {e}"
+                    return False, f"Could not import module_exports from given file. Error {e}"
+                except Exception as e:
+                    return False, f"Some weird error occured while importing. Error {e}"
             elif zipfile.is_zipfile(io.BytesIO(model_file)):
                 zf = zipfile.ZipFile(io.BytesIO(model_file))
                 if not any(["__init__.py" in x.split("/")[0] for x in zf.namelist()]):
@@ -982,17 +1017,48 @@ class Trainer:
                     zf.extractall(os.path.join("trainer_modules", tmp_dir))
                     # make sure that __init__.py is at the root of tmp_dir
                     try:
-                        for model_name in model_names:
-                            exec(f"from {tmp_dir} import model_name")
-                            # TODO: Something like self._add_model_to_self(model_name)
+                        ldict = {}
+                        exec(f"from {tmp_dir} import module_exports", globals(), ldict)
+                        return ldict["module_exports"]
                     except ImportError as e:
-                        return False, f"Could not import {model_name} from given file. Error {e}"
+                        return False, f"Could not import module_exports from given file. Error {e}"
                     except Exception as e:
                         return False, f"Some weird error occured while importing. Error {e}"
             else:
                 return False, f"Given file neither python nor zip."
         except Exception as e:
             return False, f"Error occured while reading file {e}"
+
+    def _get_new_models(self, model_names, model_defs, model_params):
+        """Extracts ``models`` from the ``model_names``, ``model_defs`` and ``model_params``
+
+        :param list model_names:
+        :param dict model_defs:
+        :param dict model_params:
+
+        :returns: A :class:`tuple` of ``status``, ``response`` where if
+        ``status`` is successful the response is model else an error string
+
+        :rtype: :class:`tuple`
+
+        """
+
+        if not all(x in model_params and x in model_defs for x in model_names):
+            return False, f"Some of the model_names not in given module"
+        models = {}
+        for model in model_names:
+            _def = model_defs[model]["model"]
+            _params = model_params[model]
+            if "__inherit" in _params:
+                inherit_name = _params["__inherit"]
+                sig = inspect.signature(_def)
+                model_args = {}
+                for x in sig.parameters.keys():
+                    model_args[x] = self._model_params[inherit_name][x]
+            else:
+                model_args = _params
+            models[model] = _def(**model_args)
+        return True, models
 
     # TODO: How to resolve arbitrary callables being saved? Can they resume?
     #       In fact like I mentioned earlier, arbitrary callables shouldn't be allowed

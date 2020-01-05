@@ -890,6 +890,33 @@ class Trainer:
             with open(img_path, "rb") as img_file:
                 return True, base64.b64encode(img_file.read()).decode("utf-8")
 
+    @POST
+    @helpers
+    def load_weights(self, weights_data):
+        import ipdb; ipdb.set_trace()
+        if not isinstance(weights_data, dict):
+            return False, f"No params sent in data"
+        elif isinstance(weights_data, dict) and "model_names" not in weights_data:
+            return False, f"Need Model Name and Weights File in data"
+        else:
+            model_names = weights_data["model_names"]
+            file = weights_data["file"].split("base64")[1]
+            file = base64.b64decode(file[1:])
+            weights = None
+            # read_file_into_variable and then
+            # TODO: Save first and restore state later if error occurs
+            try:
+                for model_name in model_names:
+                    self.models.load_weights(model_name, weights[model_name])
+                return True, "Updated Models {model_names}"
+            except Exception as e:
+                return False, f"Error occured {e}"
+
+    @POST
+    @helpers
+    def add_model(self, model_file):
+        import ipdb; ipdb.set_trace()
+
     # TODO: How to resolve arbitrary callables being saved? Can they resume?
     #       In fact like I mentioned earlier, arbitrary callables shouldn't be allowed
     #       in saved states.

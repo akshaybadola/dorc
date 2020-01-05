@@ -122,6 +122,7 @@ class FlaskInterface:
             return _dump({"error": response})
 
     def trainer_post(self, func_name):
+        import ipdb; ipdb.set_trace()
         if hasattr(request, "json"):
             data = request.json
             status, response = getattr(self.trainer, func_name)(data)

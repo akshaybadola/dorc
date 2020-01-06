@@ -96,7 +96,7 @@ class Models:
     def load_weights(self, model_name, state_dict):
         self._models[model_name].load_state_dict(state_dict)
 
-    def add(self, model_name, model, params):
+    def add(self, model, params):
         """Add model to self and initialize it according to the params
 
         :param model_name: Name of the model
@@ -106,7 +106,11 @@ class Models:
         :rtype: None
 
         """
-        pass
+        model_name = params["model_name"]
+        self._models[model_name] = model
+        self._models[model_name]._optimizer = params["optimizer"]
+        self._models[model_name]._optimizer_name = params["optimizer_name"]
+        self._models[model_name]._device = params["device"]
 
     # FIXME: There could be issues in dumping and loading with device allocation
     def dump(self):

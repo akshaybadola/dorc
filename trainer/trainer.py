@@ -582,6 +582,10 @@ class Trainer:
         self.logger.debug(x)
         return x
 
+    def _logw(self, x):
+        self.logger.warn(x)
+        return x
+
     @extras
     def load_saves(self, data):
         self.logger.info("Calling load saves")
@@ -932,7 +936,13 @@ class Trainer:
     @helpers
     def add_model(self, request):
         """Add a model from a given python or module as a zip file.
-        Delegates the request to :method:`add_module`
+        Delegates the request to :meth:`Trainer.add_module`
+
+        For this case ``module_exports`` has to include at models and
+        optimizers. Optimizers can be a string and if so, if optimizer_params
+        are given then it is initialized with that, else the params are checked
+        in instance scope. If both aren't present it's initialized with default
+        params from :mod:`torch.optim`
 
         :param flask.request request: request is the http request
         :returns: :class:`bool` status, :class:`str` message
@@ -959,7 +969,12 @@ class Trainer:
                     # 
                     # How to force destruction of those models and resources and
                     # initialize new ones? Does thread work?
-                    pass
+                    for name in models["models"]:
+                        model = models["models"][name]
+                        params = {"optimizer": models["optimizers"][name],
+                                  "optimizer_name": models["optim_names"][name],
+                                  "device": self.device}
+                        self.models.add(model, params)
         else:
             return status, response
 
@@ -978,56 +993,66 @@ class Trainer:
         .. code-block :: py
 
             class ABC
+                # some stuff here
 
-            def some_stuff()
+            def some_stuff():
+                # Do something here
 
             module_exports = {"abc": ABC, "some_stuff"}
 
         """
+        # TODO: Should be a configurable paramter self.modules_dir
         if not os.path.exists("trainer_modules"):
+            self.logger.debug("Creating directory trainer_modules")
             os.mkdir("trainer_modules")
         if not os.path.abspath("trainer_modules") in sys.path:
+            self.logger.debug("Modules path was not in sys")
             sys.path.append(os.path.abspath("trainer_modules"))
         try:
             # file can be zip or text
             model_file = request.files["file"].read()
             if hasattr(magic, "from_buffer"):
+                self.logger.debug("from_buffer in magic")
                 test = "python" in magic.from_buffer(model_file).lower()
             elif hasattr(magic, "detect_from_content"):
+                self.logger.debug("detect_from_content in magic")
                 test = "python" in magic.detect_from_content(model_file).name.lower()
             if test:
+                self.logger.debug("Detected python file")
                 tmp_name = "tmp_" + str(uuid.uuid4()).replace("-", "_")
                 tmp_file = os.path.join("trainer_modules", tmp_name + ".py")
                 with open(tmp_file, "w") as f:
+                    self.logger.debug(f"Written to {tmp_file}")
                     f.write(model_file.decode())
                 try:
                     ldict = {}
+                    self.logger.debug(f"Executing 'from {tmp_name} import module_exports'")
                     exec(f"from {tmp_name} import module_exports", globals(), ldict)
                     return True, ldict["module_exports"]
                 except ImportError as e:
-                    return False, f"Could not import module_exports from given file. Error {e}"
+                    return False, self._logd(f"Could not import module_exports from given file. Error {e}")
                 except Exception as e:
-                    return False, f"Some weird error occured while importing. Error {e}"
+                    return False, self._logd(f"Some weird error occured while importing. Error {e}")
             elif zipfile.is_zipfile(io.BytesIO(model_file)):
                 zf = zipfile.ZipFile(io.BytesIO(model_file))
+                # make sure that __init__.py is at the root of tmp_dir
                 if not any(["__init__.py" in x.split("/")[0] for x in zf.namelist()]):
-                    return False, f"zip file must have __init__.py at the top level"
+                    return False, self._logd(f"zip file must have __init__.py at the top level")
                 else:
                     tmp_dir = self.make_temp_directory()
                     zf.extractall(os.path.join("trainer_modules", tmp_dir))
-                    # make sure that __init__.py is at the root of tmp_dir
                     try:
                         ldict = {}
                         exec(f"from {tmp_dir} import module_exports", globals(), ldict)
                         return ldict["module_exports"]
                     except ImportError as e:
-                        return False, f"Could not import module_exports from given file. Error {e}"
+                        return False, self._logd(f"Could not import module_exports from given file. Error {e}")
                     except Exception as e:
-                        return False, f"Some weird error occured while importing. Error {e}"
+                        return False, self._logd(f"Some weird error occured while importing. Error {e}")
             else:
-                return False, f"Given file neither python nor zip."
+                return False, self._logd(f"Given file neither python nor zip.")
         except Exception as e:
-            return False, f"Error occured while reading file {e}"
+            return False, self._logd(f"Error occured while reading file {e}")
 
     def _get_new_models(self, model_names, model_defs, model_params):
         """Extracts ``models`` from the ``model_names``, ``model_defs`` and ``model_params``
@@ -1044,8 +1069,8 @@ class Trainer:
         """
 
         if not all(x in model_params and x in model_defs for x in model_names):
-            return False, f"Some of the model_names not in given module"
-        models = {}
+            return False, self._logd(f"Some of the model_names not in given module")
+        models = {"models": {}, "optimizers": {}, "optim_names": {}}
         for model in model_names:
             _def = model_defs[model]["model"]
             _params = model_params[model]
@@ -1057,7 +1082,24 @@ class Trainer:
                     model_args[x] = self._model_params[inherit_name][x]
             else:
                 model_args = _params
-            models[model] = _def(**model_args)
+            models["models"][model] = _def(**model_args)
+            if isinstance(model_defs[model]["optimizer"], str):
+                optim_name = model_defs[model]["optimizer"]
+                models["optim_names"][model] = optim_name
+                if "optimizer_params" in model_defs and hasattr(torch.optim, optim_name):
+                    models["optimizers"][model] = getattr(torch.optim, optim_name)(
+                        **model_defs[model]["optimizer_params"])
+                    self.logger.debug("Initialized optimizer for {model} in add_model with given params")
+                elif optim_name in self._optimizer_params:
+                    models["optimizers"][model] = self._optimizer_params[optim_name]["function"](
+                        models["models"][model].parameters(),
+                        **self._optimizer_params[optim_name]["params"])
+                    self.logger.debug("Initialized optimizer for {model} in add_model with self params")
+                else:
+                    models["optimizers"][model] = getattr(torch.optim, optim_name)()
+                    self.logger.warn("Initialized optimizer for {model} in add_model with default params")
+            else:
+                False, self._logd(f"Unrecognized optimizer for model {model}")
         return True, models
 
     # TODO: How to resolve arbitrary callables being saved? Can they resume?

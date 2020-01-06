@@ -15,6 +15,7 @@ from PIL import Image
 import magic
 import numpy as np
 import zipfile
+import inspect
 from types import SimpleNamespace
 from torch.utils.data import Dataset, DataLoader
 
@@ -266,8 +267,8 @@ class Trainer:
         if self._trainer_params["init_weights"]:
             self.logger.warn("Warning! Loading weights directly to model")
             load_state = torch.load(self._trainer_params["init_weights"])
-            for name in self.models.names:
-                self.models.load_weights(name, load_state["models"][name])
+            for name in self._models.names:
+                self._models.load_weights(name, load_state["models"][name])
         elif self._trainer_params["resume"]:  # implies resume from somewhere
             if self._trainer_params["resume_best"]:
                 # try to find and resume best weights
@@ -444,12 +445,12 @@ class Trainer:
                                       "optimizer": self._optimizer_params[optim_name]["function"](
                                           models[model_name].parameters(),
                                           **self._optimizer_params[optim_name]["params"])}
-        self.models = Models(models, optimizers, devices, self.gpus, self.logger)
+        self._models = Models(models, optimizers, devices, self.gpus, self.logger)
         # NOTE: Old optimizer initialization code
         # for k, v in self._optimizer_params.items():
         #     model_name = [x for x, y in self._model_defs.items()
         #                   if y["optimizer"] == k][0]
-        #     self.optimizers[k] = v["function"](self.models[model_name].parameters(),
+        #     self.optimizers[k] = v["function"](self._models[model_name].parameters(),
         #                                        **v["params"])
 
     def _init_dataloaders(self):
@@ -500,7 +501,7 @@ class Trainer:
     #     for k, v in self._optimizer_params.items():
     #         model_name = [x for x, y in self._model_defs.items()
     #                       if y["optimizer"] == k][0]
-    #         self.optimizers[k] = v["function"](self.models[model_name].parameters(),
+    #         self.optimizers[k] = v["function"](self._models[model_name].parameters(),
     #                                            **v["params"])
 
     # CHECK: Should I use namedtuple instead?
@@ -544,8 +545,8 @@ class Trainer:
                             for _x in self._extra_metrics[x][k]["inputs"]:
                                 if isinstance(_x, tuple):
                                     assert _x[0] == "models" and\
-                                        all(_ in self.models.names for _ in _x[1]),\
-                                        "Required model not in self.models"
+                                        all(_ in self._models.names for _ in _x[1]),\
+                                        "Required model not in self._models"
                             # assert all(all(_d in self.__dict__[d[0]].keys() for _d in d[1])
                             #            for d in self._extra_metrics[x][k]["inputs"]
                             #            if isinstance(d, tuple)), "failed on tuple %s, %s" % (x, k)
@@ -575,16 +576,43 @@ class Trainer:
                                    Signals, device_monitor, self.extra_report)
 
     def _logi(self, x):
+        f = inspect.currentframe()
+        prev_func = inspect.getframeinfo(f.f_back).function
+        x = f"[{prev_func}()] " + x
         self.logger.info(x)
         return x
 
     def _logd(self, x):
+        f = inspect.currentframe()
+        prev_func = inspect.getframeinfo(f.f_back).function
+        x = f"[{prev_func}()] " + x
         self.logger.debug(x)
         return x
 
     def _logw(self, x):
+        f = inspect.currentframe()
+        prev_func = inspect.getframeinfo(f.f_back).function
+        x = f"[{prev_func}()] " + x
         self.logger.warn(x)
         return x
+
+    def _loge(self, x):
+        f = inspect.currentframe()
+        prev_func = inspect.getframeinfo(f.f_back).function
+        x = f"[{prev_func}()] " + x
+        self.logger.error(x)
+        return x
+
+    def _set_model_active(self, model_name):
+        if model_name not in self._models.names:
+            return False, self._loge(f"No such model")
+        else:
+            for name in self._models:
+                if name != model_name:  # free only GPU resources
+                    self._models.set_device(model_name, torch.device("cpu"))
+            for x in self._update_functions:
+                self._update_functions[x]._model_name = model_name
+            return True, self._logd(f"Model {model_name} is now the current active model.")
 
     @extras
     def load_saves(self, data):
@@ -604,8 +632,8 @@ class Trainer:
             if method == "load":
                 load_state = torch.load(os.path.join(self._savedir, weights))
                 try:
-                    for name in self.models.names:
-                        self.models.load_weights(name, load_state["models"][name])
+                    for name in self._models.names:
+                        self._models.load_weights(name, load_state["models"][name])
                 except Exception as e:
                     return False,\
                         self._logi(f"Could not load weights {weights}. Error occured {e}")
@@ -689,6 +717,8 @@ class Trainer:
         step_loader = getattr(self, step + "_loader")
         if "seed" in params:
             np.random.seed(params["seed"])
+        # FIXME: Below line is a big hack. Need to fix params here and below
+        params["ruotianlou"] = None
         if "ruotianlou" in params:
             _proxy_dataset = step_loader.sub_dataset(params["fraction"])
             temp_loader = MyDataLoader(_proxy_dataset, batch_size=1, return_raw=True,
@@ -715,31 +745,36 @@ class Trainer:
                 temp_loader = MyDataLoader(_proxy_dataset, **temp_params)
                 self.logger.warn(f"{step} dataset doesn't define \"_get_raw\".\
                 Drawing samples from temp data will not be available.")
-        models = {}
-        optimizers = {}
-        devices = {}
-        for model_name, model_params in self._model_params.items():
-            models[model_name] = self._model_defs[model_name]["model"](**model_params)
-            optim_name = self._model_defs[model_name]["optimizer"]
-            optimizers[model_name] = {"name": optim_name,
-                                      "optimizer": self._optimizer_params[optim_name]["function"](
-                                          models[model_name].parameters(),
-                                          **self._optimizer_params[optim_name]["params"])}
-            devices[model_name] = self._device
-        temp_models = Models(models, optimizers, devices, self.gpus, self.logger)
+        if step == "train":
+            models = {}
+            optimizers = {}
+            devices = {}
+            for model_name, model_params in self._model_params.items():
+                models[model_name] = self._model_defs[model_name]["model"](**model_params)
+                optim_name = self._model_defs[model_name]["optimizer"]
+                optimizers[model_name] = {"name": optim_name,
+                                          "optimizer": self._optimizer_params[optim_name]["function"](
+                                              models[model_name].parameters(),
+                                              **self._optimizer_params[optim_name]["params"])}
+                devices[model_name] = self._device
+                # CHECK: This may not actually be needed
+                #        May be needed if weights are updated.
+                #        In that case dump/load may be a better option
+                # TODO: Put extra metrics while building the step_func
+                temp_models = Models(models, optimizers, devices, self.gpus, self.logger)
+                # TODO: Load from checkpoint like this
+                # _models.load(self._get_checkpoint(epoch)["models"])
+                # TODO: Maybe let model also be altered, checkpoint of course should be
+                temp_models.load(self._models.dump())  # replicate
+        else:
+            temp_models = self._models
         step_func = partial(self._update_functions[step], temp_models, self.criteria)
-
-        # TODO: Load from checkpoint like this
-        # _models.load(self._get_checkpoint(epoch)["models"])
-        # TODO: Maybe let model also be altered, checkpoint of course should be
-        temp_models.load(self.models.dump())  # replicate
-        # TODO: Put extra metrics here
 
         class Signals:
             paused = False
             aborted = False
         device_monitor = DeviceMonitor(self._device_handles)
-        self.logger.debug(f"params, {step}, {params}")
+        self.logger.debug(f"params:, {step}, {params}")
         temp_runner = Epoch({"metrics": {step: params["metrics"]}, "extra_metrics": {}},
                             Signals, device_monitor, self.extra_report)
         temp_runner.reset()
@@ -751,13 +786,16 @@ class Trainer:
         else:
             temp_runner.metrics[step].append("lengths")
         self._temp_runner = temp_runner
-        self.logger.debug(f"starting {self._temp_runner}")
+        self.logger.debug(f"starting temp_runner for {step} step")
         self._temp_runner.logger = self.logger
-        if hasattr(step_loader.dataset, "_get_raw"):
-            getattr(temp_runner, "run_" + step)(step_func, temp_loader, True)
+        if hasattr(temp_loader.dataset, "_get_raw"):
+            t = Thread(target=getattr(temp_runner, "run_" + step),
+                       args=[step_func, temp_loader, True])
         else:
-            getattr(temp_runner, "run_" + step)(step_func, temp_loader)
+            t = Thread(target=getattr(temp_runner, "run_" + step),
+                       args=[step_func, temp_loader])
         # report function only takes in targets and predictions
+        t.start()
         Thread(target=self._check_adhoc_run).start()
 
     def _check_adhoc_run(self):
@@ -816,6 +854,11 @@ class Trainer:
                 else:
                     output.append(x)
             return True, output
+
+    @POST
+    @helpers
+    def set_model(self, model_name):
+        return self._set_model_active(model_name)
 
     @POST
     @helpers
@@ -897,12 +940,12 @@ class Trainer:
         """Fetch the image from a given path.
         """
         if not os.path.exists(img_path):
-            return False, f"Image {img_path} doesn't exist"
+            return False, self._logd(f"Image {img_path} doesn't exist")
         else:
             try:
                 Image.open(img_path)
             except Exception as e:
-                return False, f"Error occurred while reading file {e}"
+                return False, self._loge(f"Error occurred while reading file {e}")
             with open(img_path, "rb") as img_file:
                 return True, base64.b64encode(img_file.read()).decode("utf-8")
 
@@ -910,22 +953,24 @@ class Trainer:
     @helpers
     def load_weights(self, request):
         if "model_names" not in request.form:
-            model_names = json.loads(request.form["model_names"])
-            return False, f"Model name not sent in data"
+            return False, self._logd(f"Model name not sent in data")
+        model_names = json.loads(request.form["model_names"])
         try:
             weights = torch.load(request.files["file"])
         except Exception as e:
-            return False, f"Error occured while reading data {e}"
-        if not all(x in weights["models"] for x in model_names):
-            return False, f"Not all models required in given weights"
-        if not all(x in self.models.names for x in model_names):
-            return False, f"Some models currently not in scope"
+            return False, self._loge(f"Error occured while reading data {e}")
+        if not all(x in weights for x in model_names):
+            return False, self._logd(f"Not all {model_names} in given weights {weights.keys()}")
+        if not all(x in self._models.names for x in model_names):
+            return False, self._logd(f"Some models currently not in scope")
         try:
             for model_name in model_names:
-                self.models.load_weights(model_name, weights[model_name])
-            return True, "Updated Models {model_names}"
+                status, err = self._models.load_weights(model_name, weights[model_name])
+                if err:
+                    return False, self._loge(f"Error while updating component")
+            return True, self._logd(f"Updated Models {model_names}")
         except Exception as e:
-            return False, f"Error occured while loading models {e}"
+            return False, self._loge(f"Error occured while loading models {e}")
 
     def make_temp_directory(self):
         dirname = "tmp_" + str(uuid.uuid4()).replace("-", "_")
@@ -953,7 +998,7 @@ class Trainer:
         if status:
             module_exports = response
             if "model_names" not in module_exports:
-                return False, f"Model name not sent in data"
+                return False, self._logw(f"Model name not sent in data")
             else:
                 status, models = self._get_new_models(module_exports["model_names"],
                                                       module_exports["model_defs"],
@@ -961,20 +1006,19 @@ class Trainer:
                 if not status:
                     return status, models
                 else:
-                    # What to do now?  If there are optimizer_params in the
-                    # module, import that else leave the optimizer on. Another
-                    # optimizer is initialized and added to the model There
-                    # should be an "active" mechanism to dump the inactive
-                    # models to disk and keep the active models in memory
-                    # 
-                    # How to force destruction of those models and resources and
-                    # initialize new ones? Does thread work?
-                    for name in models["models"]:
-                        model = models["models"][name]
-                        params = {"optimizer": models["optimizers"][name],
-                                  "optimizer_name": models["optim_names"][name],
-                                  "device": self.device}
-                        self.models.add(model, params)
+                    # CHECK: How to force destruction of those models and resources and
+                    #        initialize new ones? Does thread work?
+                    try:
+                        for name in models["models"]:
+                            model = models["models"][name]
+                            params = {"name": name,
+                                      "optimizer": models["optimizers"][name],
+                                      "optimizer_name": models["optim_names"][name],
+                                      "device": self.device}
+                            self._models.add(model, params)
+                    except Exception as e:
+                        return False, self._loge(f"Some weird error occured {e}")
+                    return status, self._logd(f"Added model {name} successfully")
         else:
             return status, response
 
@@ -1054,6 +1098,11 @@ class Trainer:
         except Exception as e:
             return False, self._logd(f"Error occured while reading file {e}")
 
+    # TODO: Any change in state of trainer vars should have a rollback mechanism
+    #       E.g., if some of the params change here and then an error is raised.
+    #
+    # TODO: model initialization is repetitive here and should be delegated to a
+    #       subroutine of _init_models. Fix.
     def _get_new_models(self, model_names, model_defs, model_params):
         """Extracts ``models`` from the ``model_names``, ``model_defs`` and ``model_params``
 
@@ -1082,22 +1131,31 @@ class Trainer:
                     model_args[x] = self._model_params[inherit_name][x]
             else:
                 model_args = _params
+            if model not in self._model_defs:
+                self._model_defs[model] = {}
+            else:
+                self.logger.warn(f"Will overwrite model, optimizer params and defs for {model}")
+            self._model_defs[model]["model"] = _def
+            self._model_params[model] = model_args.copy()
+            self.logger.debug(f"Updated model_params and model_def for {model}")
             models["models"][model] = _def(**model_args)
             if isinstance(model_defs[model]["optimizer"], str):
                 optim_name = model_defs[model]["optimizer"]
+                self._model_defs[model]["optimizer"] = optim_name
+                self.logger.debug(f"Updated optimizer params for {model}")
                 models["optim_names"][model] = optim_name
                 if "optimizer_params" in model_defs and hasattr(torch.optim, optim_name):
                     models["optimizers"][model] = getattr(torch.optim, optim_name)(
                         **model_defs[model]["optimizer_params"])
-                    self.logger.debug("Initialized optimizer for {model} in add_model with given params")
+                    self.logger.debug(f"Initialized optimizer for {model} in add_model with given params")
                 elif optim_name in self._optimizer_params:
                     models["optimizers"][model] = self._optimizer_params[optim_name]["function"](
                         models["models"][model].parameters(),
                         **self._optimizer_params[optim_name]["params"])
-                    self.logger.debug("Initialized optimizer for {model} in add_model with self params")
+                    self.logger.debug(f"Initialized optimizer for {model} in add_model with self params")
                 else:
                     models["optimizers"][model] = getattr(torch.optim, optim_name)()
-                    self.logger.warn("Initialized optimizer for {model} in add_model with default params")
+                    self.logger.warn(f"Initialized optimizer for {model} in add_model with default params")
             else:
                 False, self._logd(f"Unrecognized optimizer for model {model}")
         return True, models
@@ -1128,7 +1186,7 @@ class Trainer:
         self.logger.debug("Trying to save to %s" % save_path)
         save_state = {}
         save_state["epoch"] = self.epoch
-        save_state["models"] = self.models.dump()
+        save_state["models"] = self._models.dump()
         save_state["model_params"] = copy.deepcopy(self._model_params)
         save_state["criteria_params"] = copy.deepcopy(self._criteria_params)
         save_state["dataloader_params"] = {}
@@ -1255,13 +1313,13 @@ class Trainer:
         self._init_epoch_runner()
 
         # NOTE: This is checked in Models now
-        # assert all(k in self.models.keys() for k in saved_state['models'])
+        # assert all(k in self._models.keys() for k in saved_state['models'])
         # assert all(k in self.optimizers.keys() for k in saved_state['optimizers'])
-        # for k in self.models:
-        #     self.models[k].load_state_dict(saved_state["models"][k])
+        # for k in self._models:
+        #     self._models[k].load_state_dict(saved_state["models"][k])
         # for k in self.optimizers:
         #     self.optimizers[k].load_state_dict(saved_state["optimizers"][k])
-        self.models.load(saved_state["models"])
+        self._models.load(saved_state["models"])
 
         diff = set(self._metrics.keys()).difference(saved_state["metrics"].keys())
         if diff:
@@ -1421,16 +1479,24 @@ class Trainer:
         return self._device
 
     @property
+    def models(self):
+        return self._models.names
+
+    @property
     def train_step_func(self):
-        return partial(self._train_step_func, self.models, self.criteria)
+        return partial(self._train_step_func, self._models, self.criteria)
 
     @property
     def val_step_func(self):
-        return partial(self._val_step_func, self.models, self.criteria)
+        return partial(self._val_step_func, self._models, self.criteria)
 
     @property
     def test_step_func(self):
-        return partial(self._val_step_func, self.models, self.criteria)
+        return partial(self._val_step_func, self._models, self.criteria)
+
+    @property
+    def active_model(self):
+        return self._update_functions[self._trainer_params["training_steps"][0]]._model_name
 
     # exclude properties beginning with _
     @property
@@ -1523,7 +1589,7 @@ class Trainer:
     # Internal property. Will not be exposed outside
     @property
     def _save_path_with_epoch(self):
-        model_names = "_".join(self.models.names)
+        model_names = "_".join(self._models.names)
         save_name = os.path.join(self._savedir, "_".join([str(self._unique_id),
                                                           model_names,
                                                           "{:03}".format(self.epoch)]))
@@ -1531,14 +1597,14 @@ class Trainer:
 
     @property
     def _save_path_without_epoch(self):
-        model_names = "_".join(self.models.names)
+        model_names = "_".join(self._models.names)
         save_name = os.path.join(self._savedir, "_".join([str(self._unique_id),
                                                           model_names]))
         return save_name
 
     @property
     def _checkpoint_path(self):
-        # model_names = "_".join(self.models.names)
+        # model_names = "_".join(self._models.names)
         # save_name = "_".join([str(self._unique_id), model_names, "checkpoint"])
         return os.path.join(self._save_path_without_epoch + "_checkpoint" + ".pth")
 
@@ -1561,7 +1627,7 @@ class Trainer:
     def all_params(self):
         save_state = {}
         save_state["epoch"] = self.epoch
-        # save_state["models"] = dict((k, v.state_dict()) for k, v in self.models.items())
+        # save_state["models"] = dict((k, v.state_dict()) for k, v in self._models.items())
         save_state["optimizers"] = dict((k, v.state_dict()) for k, v in self.optimizers.items())
         save_state["model_params"] = self._model_params
         save_state["criteria_params"] = self._criteria_params

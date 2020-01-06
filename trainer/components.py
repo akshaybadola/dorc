@@ -12,32 +12,43 @@ class Models:
         self._gpus = gpus
         self._logger = logger
         # model attributes are added to torch.nn.Module directly
+        self._status = []
         for k, model in models.items():
-            assert hasattr(model, "forward"), f"No forward call in model {type(model).__qualname__}"
-            if not hasattr(model, "_device"):
-                self._logger.warn(f"No \"_device\" attr in model {type(model).__qualname__}. ")
-            if not hasattr(model, "to_"):
-                self._logger.warn(f"No \"to_\" attr in model {type(model).__qualname__}. ")
-            model._name = k
-            model._optimizer = self._optimizers[k]["optimizer"]
-            model._optimizer_name = self._optimizers[k]["name"]
-            # FIXME: `device` is referred by the model which shouldn't be the
-            #        case In models_old.py, the model forks execution based on
-            #        the device.  _device is patched into the model later. It
-            #        can be queried externally but that would add additonal
-            #        complexity.
-            #
-            #        A better solution would be to use decorators. Inject the
-            #        code automatically, based on decorators.  e.g., @device
-            #
-            #        Functions in modern computer programming are meant as
-            #        demarcations. Instead of trying to inject code in arbitrary
-            #        places it would be better to segregate those areas into
-            #        functions and then use decorators. Another way would be a
-            #        device context.
-            model._device = self._devices[k]
-            self._models[k] = model
-            self.set_device(k, devices[k])
+            status, message = self._check(model)
+            if status:
+                model._name = k
+                model._optimizer = self._optimizers[k]["optimizer"]
+                model._optimizer_name = self._optimizers[k]["name"]
+                # FIXME: `device` is referred by the model which shouldn't be the
+                #        case In models_old.py, the model forks execution based on
+                #        the device.  _device is patched into the model later. It
+                #        can be queried externally but that would add additonal
+                #        complexity.
+                #
+                #        A better solution would be to use decorators. Inject the
+                #        code automatically, based on decorators.  e.g., @device
+                #
+                #        Functions in modern computer programming are meant as
+                #        demarcations. Instead of trying to inject code in arbitrary
+                #        places it would be better to segregate those areas into
+                #        functions and then use decorators. Another way would be a
+                #        device context.
+                model._device = self._devices[k]
+                self._models[k] = model
+                self.set_device(k, devices[k])
+            self._status.append((status, message))
+
+    @property
+    def status(self):
+        return self._status
+
+    def _check(self, model):
+        if not hasattr(model, "forward"):
+            return False, f"No forward call in model {type(model).__qualname__}"
+        if not hasattr(model, "_device"):
+            return True, f"No \"_device\" attr in model {type(model).__qualname__}. "
+        if not hasattr(model, "to_"):
+            return True, f"No \"to_\" attr in model {type(model).__qualname__}. "
 
     def set_device(self, model_name, device):
         """Sets the device and patches the model with _device and to_ attrs
@@ -85,6 +96,9 @@ class Models:
     def __getitem__(self, key):
         return self._models[key]
 
+    def __iter__(self):
+        return iter(self._models)
+
     @property
     def names(self):
         return [*self._models.keys()]
@@ -94,23 +108,28 @@ class Models:
         return {k: v._device for k, v in self._models.items()}
 
     def load_weights(self, model_name, state_dict):
-        self._models[model_name].load_state_dict(state_dict)
+        try:
+            self._models[model_name].load_state_dict(state_dict)
+            return True, None
+        except Exception as e:
+            return False, e
 
     def add(self, model, params):
         """Add model to self and initialize it according to the params
 
-        :param model_name: Name of the model
-        :param model: The model object :class: `torch.nn.Module` for now
-        :param params: params for the model
+        :param params: params for the model. :class:`dict` with keys
+        ``["name", "optimizer", "optimizer_state", "device"]``
         :returns: None
         :rtype: None
 
         """
-        model_name = params["model_name"]
-        self._models[model_name] = model
-        self._models[model_name]._optimizer = params["optimizer"]
-        self._models[model_name]._optimizer_name = params["optimizer_name"]
-        self._models[model_name]._device = params["device"]
+        if self._check(model):
+            name = params["name"]
+            self._models[name] = model
+            self._models[name]._name = name
+            self._models[name]._optimizer = params["optimizer"]
+            self._models[name]._optimizer_name = params["optimizer_name"]
+            self._models[name]._device = params["device"]
 
     # FIXME: There could be issues in dumping and loading with device allocation
     def dump(self):
@@ -122,12 +141,18 @@ class Models:
             temp[name] = _model_state
         return temp
 
-    def load(self, model_state):
-        assert all(k in self.names for k in model_state)
-        for name, model in self._models.items():
-            if model._optimizer_name == model_state[model._name]["optimizer"]:
-                model._optimizer.load_state_dict(model_state[model._name]["optimizer_state"])
+    def load(self, model_states):
+        for name, state in model_states.items():
+            params = {"name": state["name"], "optimizer": state["optimizer"],
+                      "optimizer_name": state["optimizer_name"], "device": state["device"]}
+            if name not in self.names:
+                self._logger.debug(f"New model {name}")
+                self.add(name, params)
+            if self._models[name]._optimizer_name == state[name]["optimizer"]:
+                self.models[name]._optimizer.load_state_dict(state[name]["optimizer_state"])
             else:
-                self._logger.warn("Optimizers are different. Could not load state dict")
-            model._device = model_state[model._name]["device"]
-            model.load_state_dict(model_state[model._name]["state_dict"])
+                self._logger.warn(f"Optimizers are different." +
+                                  " Could not load state dict for model {name}")
+            self._models[name].load_state_dict(state[name]["state_dict"])
+            self._models[name]._device = state[name]["device"]
+        return True, None

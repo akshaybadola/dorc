@@ -123,6 +123,12 @@ class FlaskInterface:
 
     def trainer_post_form(self, func_name):
         status, response = getattr(self.trainer, func_name)(request)
+        if status:
+            response = _dump({"success": response})
+            return Response(response, status=200, mimetype='application/json')
+        else:
+            response = _dump({"error": response})
+            return Response(response, status=500, mimetype='application/json')
 
     def trainer_post(self, func_name):
         if hasattr(request, "json"):
@@ -178,68 +184,11 @@ class FlaskInterface:
         #                   "required_for_[split]": {"metrics": "[list[string]]_which_metrics",
         #                                            "epoch": "[int|string]_which_epoch",
         #                                            "fraction": "[float]_fraction_of_dataset"}}
-        #     if hasattr(request, "json"):
-        #         data = request.json
-        #         status, response = self.trainer.call_adhoc_run(data)
-        #         if not status:
-        #             # TODO: Perhaps this should be sent by the trainer
-        #             response = _dump({"error": "required input and " + response, **error_dict})
-        #             return Response(response, status=400, mimetype='application/json')
-        #         else:
-        #             return Response(_dump({"success": response}),
-        #                             status=200, mimetype='application/json')
-        #     else:
-        #         response = _dump({"error": "Input parameters", **error_dict})
-        #         return Response(response, status=400, mimetype='application/json')
-
-        # # @self.app.route('/_extras/report_adhoc_run')
-        # def __report_adhoc_run():
-        #     status, response = self.trainer.report_adhoc_run()
-        #     if status:
-        #         return Response(_dump(response), status=200, mimetype="application/json")
-        #     else:
-        #         return Response(_dump(response), status=400, mimetype="application/json")
-
-        # # @self.app.route('/_extras/load_save', methods=["POST"])
-        # def __load_save():
-        #     if hasattr(request, "json"):
-        #         data = request.json
-        #         status, response = self.trainer.load_save(data)
-        #         if not status:
-        #             # TODO: Perhaps this should be sent by the trainer
-        #             response = _dump({"error": response})
-        #             return Response(response, status=400, mimetype='application/json')
-        #         else:
-        #             return Response(_dump({"success": response}),
-        #                             status=200, mimetype='application/json')
-        #     else:
-        #         response = _dump({"error": "Required save name"})
-        #         return Response(response, status=400, mimetype='application/json')
-
-        # # @self.app.route("/update", methods=["POST"])
-        # def __update():
-        #     data = json.loads(request.data.decode("utf-8"))
-        #     if not all(x in data for x in ["model_params", "trainer_params", "dataloader_params"]):
-        #         return Response(_dump("Invalid data format in update request"), status=412,
-        #                         mimetype="application/json")
-        #     status = self.trainer.try_update(data)
-        #     if status:
-        #         return json.dumps(status)
-        #     else:
-        #         return json.dumps(False)
-
-        # TODO: Right now, only functions with "report" are GET, rest are POST
-        #       There should be a unified and sensible mechanism to define how
-        #       these things are accessed.
-        #
-        # NOTE: I'm doing it with __doc__ strings in functions right now, which
-        #       probably is not a good idea.
-
         @self.app.route("/destroy", methods=["GET"])
         def __destroy():
             self.logger.info("Destroying")
             self.logger.info("Does nothing for now")
-        
+
         for x, y in self.trainer.controls.items():
             self.app.add_url_rule("/" + x, x, partial(self.trainer_control, x))
         for x in self.trainer.props:
@@ -252,7 +201,7 @@ class FlaskInterface:
             else:
                 self.app.add_url_rule("/_extras/" + x, x, partial(self.trainer_post, x),
                                       methods=["POST"])
-        # CHECK: Better way than y.__doc__
+        # Adding helpers
         for x, y in self.trainer._helpers.items():
             methods = []
             if "POST" in y.__http_methods__:

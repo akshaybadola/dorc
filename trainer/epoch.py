@@ -121,13 +121,25 @@ class Epoch:
         self._running = False
         self._current_loop = "idle"
 
+    def _log(self, x):
+        if hasattr(self, "logger"):
+            self.logger.debug(x)
+
     def run_val(self, val_step, val_loader, get_raw=False):
         self._running = True
         self._current_loop = "val"
+        # CHECK: There may not be an iter
+        assert iter(val_loader), "val_loader has no iterator"
+        assert val_loader.batch_size, "val_loader has no batch_size"
+        self._log("Starting run_val")
+        self._log(f"Val Loader properties: {len(val_loader)}")
         for i, batch in enumerate(val_loader):
             start = time.time()
+            if not batch:
+                self._log("WTF is going on")
             if get_raw:
                 raw, batch = batch[0], batch[1]
+                self._log(f"Raw size {len(raw)}, batch_size {len(batch)}")
             received = val_step(batch)
             end = time.time()
             if self.keep_time["val"]:

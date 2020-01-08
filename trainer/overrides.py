@@ -55,7 +55,7 @@ class MyDataLoader:
     # batch is sent as a list. Maybe send as tensor? Not sure
     def __next__(self):
         batch_indices = self.get_next_indices()
-        if batch_indices:
+        if batch_indices is not None and len(batch_indices):
             batch = self.collate_fn([self.dataset[i] for i in batch_indices])
             if self.return_raw:
                 raw = [self.dataset._get_raw(i) for i in batch_indices]

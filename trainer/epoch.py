@@ -95,6 +95,8 @@ class Epoch:
         self._running = True
         self._current_loop = "train"
         for i, batch in enumerate(train_loader):
+            if not batch:
+                break
             start = time.time()
             self.device_poll.start()
             if get_raw:
@@ -136,10 +138,9 @@ class Epoch:
         for i, batch in enumerate(val_loader):
             start = time.time()
             if not batch:
-                self._log("WTF is going on")
+                break
             if get_raw:
                 raw, batch = batch[0], batch[1]
-                self._log(f"Raw size {len(raw)}, batch_size {len(batch)}")
             received = val_step(batch)
             end = time.time()
             if self.keep_time["val"]:
@@ -160,6 +161,8 @@ class Epoch:
         self._current_loop = "test"
         for i, batch in enumerate(test_loader):
             start = time.time()
+            if not batch:
+                break
             if get_raw:
                 raw, batch = batch[0], batch[1]
             received = test_step(batch)

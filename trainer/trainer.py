@@ -722,9 +722,13 @@ class Trainer:
         if "ruotianlou" in params:
             _proxy_dataset = step_loader.sub_dataset(params["fraction"])
             temp_loader = MyDataLoader(_proxy_dataset, batch_size=1, return_raw=True,
-                                       collate_fn=lambda x: x)
-            self.logger.info(f"{step} dataset has \"_get_raw\"\
-            Drawing samples from temp data is available!")
+                                       collate_fn=_proxy_dataset.collate_fn)
+            if hasattr(_proxy_dataset, "_get_raw"):
+                self.logger.info(f"{step} dataset has \"_get_raw\"\
+                Drawing samples from temp data is available!")
+            else:
+                self.logger.warn(f"{step} dataset doesn't define \"_get_raw\".\
+                Drawing samples from temp data will not be available.")
         else:
             indices = np.random.choice(len(step_loader.dataset),
                                        int(len(step_loader.dataset) * params["fraction"]))
@@ -874,6 +878,7 @@ class Trainer:
             if not hasattr(self._temp_runner, "running") or self._temp_runner.running:
                 return False, f"The function is still running"
             else:
+                import ipdb; ipdb.set_trace()
                 temp_list = [(x[1], [_x[0] for _x in x[-1]]) for x in self._temp_runner.batch_vars
                              if x[2] == "raw"]
                 indx = None

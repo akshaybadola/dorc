@@ -25,7 +25,7 @@ from .epoch import Epoch
 from .overrides import MyDataLoader
 from .components import Models
 from .helpers import (control, prop, extras, helpers, ProxyDataset, get_proxy_dataloader,
-                      PropertyProxy, HookDict, HookList, GET, POST)
+                      PropertyProxy, HookDict, HookList, GET, POST, Exposes)
 from .version import __version__
 
 
@@ -162,6 +162,7 @@ class Trainer:
         self._sanity_check()
         self._init_static_vars()
         self._init_state_vars()
+        self._init_property_vars()
         self._init_external_vars()
         if trainer_params["resume"] or "init_weights" in trainer_params:
             self._init_models()
@@ -356,8 +357,6 @@ class Trainer:
                                  "required_for_[split]": {"metrics": "[list[string]]_which_metrics",
                                                           "epoch": "[int|string]_which_epoch",
                                                           "fraction": "[float]_fraction_of_dataset"}}
-        self.load_weights.__dict__["content_type"] = "form"
-        self.add_model.__dict__["content_type"] = "form"
 
     def _init_state_vars(self):
         """Initialize default state variables.
@@ -375,6 +374,8 @@ class Trainer:
         # Initialize hooks
         # Validate test and save now can never be removed, LOL
         #
+        # TODO: Not sure if hooks are state or property vars
+        #       Maybe they're just hooks
         # TODO: There should be a better way as I should be able to disable
         #       validate and test That can only be if I specify order in certain
         #       hooks.
@@ -387,13 +388,35 @@ class Trainer:
         self._post_epoch_hooks_to_run.append("log")
         self._items_to_log_dict = {"metrics": self._log_metrics}
         self._set_device()
-        if "extra_report" not in self._trainer_params:
-            self.logger.debug("No Extra Reportables")
-            self.extra_report = {}
         self._epoch = 0
         self._init_nvml()
         self._temp_runner = SimpleNamespace()
         self._flag_adhoc_func_running = False
+
+    # TODO: For each such variable i.e., static, property etc. add a decorator
+    #       or a function such that they're added to that list e.g.,
+    #       property_vars and are initialized correctly or raise error if not
+    #       initialized so that while adding adhoc vars in the middle of the
+    #       code, I don't forget to initialize them somewhere
+    #
+    #       In the middle of file:
+    #       
+    #       >>> self.add_to_property_vars(meh)
+    #
+    #       In _init_property_vars:
+    #
+    #       >>> assert all(getattr(x) for x in self._property_vars)
+    #       
+    #       Or something like that.
+    def _init_property_vars(self):
+        self.logger.info("Initializing Property Variables")
+        if "extra_report" not in self._trainer_params:
+            self.logger.debug("No Extra Reportables")
+            self.extra_report = {}
+        self._user_funcs = {}
+        self.load_weights.__dict__["content_type"] = "form"
+        self.add_model.__dict__["content_type"] = "form"
+        self.add_user_funcs.__dict__["content_type"] = "form"
 
     def _init_external_vars(self):
         """Initialize some variables which will be attached to it later. Right now a
@@ -605,7 +628,7 @@ class Trainer:
 
     def _set_model_active(self, model_name):
         if model_name not in self._models.names:
-            return False, self._loge(f"No such model")
+            return False, self._loge(f"No such model {model_name}")
         else:
             for name in self._models:
                 if name != model_name:  # free only GPU resources
@@ -614,6 +637,7 @@ class Trainer:
                 self._update_functions[x]._model_name = model_name
             return True, self._logd(f"Model {model_name} is now the current active model.")
 
+    @POST
     @extras
     def load_saves(self, data):
         self.logger.info("Calling load saves")
@@ -653,10 +677,30 @@ class Trainer:
 
     # TODO: A curious case occurs because train, val, test are not only
     #       step_names but also dataset subsets. That may create confusion
+    #
+    # TODO: sphinx doctest setup
+    #       >>> call_adhoc_run(self, None)
+    #           False, "Called with null data"
+    #       should be converted to:
+    #       .. doctest::
+    #          call_adhoc_run(self, None)
+    #          # or self.call_adhoc_run(None), not sure
+    #          False, "Called with null data"
+    @POST
     @extras
     def call_adhoc_run(self, data):
-        self.logger.info(f"Calling adhoc run with data: {data}")
-        if not any(x in data for x in ["train", "val", "test"]):
+        """Call an arbitrary function. For now calls any of train/val/test or given
+        training_steps with a subset of the dataset.
+
+        :param data: data
+        :returns: status and response string
+        :rtype: :class:`tuple`
+
+        """
+        self._logi(f"Calling adhoc run with data: {data}")
+        if not data:
+            return False, self._logw(f"Called with null data")
+        if not any(x in data for x in self._trainer_params["training_steps"]):
             return False, {"error": self._logi("Required Input. Given unknown dataset"),
                            **self.adhoc_error_dict}
         else:
@@ -669,7 +713,7 @@ class Trainer:
         # maybe: {"report_function": <<function>>}
         # Or maybe device can be automatically determined
         # NOTE: Samples should be captured by default
-        self.logger.warn("Ignoring \"epoch\" for now")
+        self._logw("Ignoring \"epoch\" for now")
         try:
             iter(params)
         except TypeError:
@@ -808,19 +852,38 @@ class Trainer:
         self._flag_adhoc_func_running = False
         self.resume()
 
-    # FIXME: Currently this report function is added externally, which may not
-    #        be the best way to build it.
-    #
     # NOTE: Actually report_function should be user defined and should be
     #       uploaded as a python module so that along with the adhoc_func, it
     #       can be processed and reported according to how the _get_raw is
     #       implemented and how adhoc_function actually operates.
+    @POST
     @extras
-    def report_adhoc_run(self):
+    @Exposes("ix_to_word", "predictions", "targets", "report_function")
+    def report_adhoc_run(self, data):
+        # TODO: These generic checks should be in the POST or GET pre_call
+        #+FROM_HERE 
+        # ix_to_word may be used by user_func later
+        ix_to_word = self.train_loader.loader._ix_to_word
+        if data is None:
+            return False, self._loge("Called with null data.")
+        elif "report_function" not in data:
+            return False, self._loge("report_function not in data.")
+        elif data["report_function"] not in self._user_funcs:
+            report_function = data["report_function"]
+            return False, self._loge(f"Unknown report funciton {report_function}.")
+        else:
+            report_function = self._user_funcs[data["report_function"]]
+        # TODO: "check" would be better.  In fact these checks should be done
+        #       before the func is called
+        if not all(x in self.report_adhoc_run.exposes
+                   for x in inspect.signature(report_function)):
+            return False, f"Given function {data[report_function]}" +\
+                " is not compatible with report_adhoc_run"
+        #+TO_HERE
         if not hasattr(self._temp_runner, "running"):
-            return False, "Adhoc function was never initialized"
+            return False, self._logd("Adhoc function was never initialized")
         elif self._temp_runner.running:
-            return True, "Adhoc function is still running"
+            return True, self._logd("Adhoc function is still running")
         else:
             def _same(a, b):
                 # self.logger.debug(f"_same, {b is None}")
@@ -832,6 +895,8 @@ class Trainer:
             output = []
             temp_targets = None
             temp_predictions = None
+            # NOTE: this was the default value
+            # report_function = self.report_function
             for x in self._temp_runner.batch_vars:
                 if x[2] == "predictions":
                     temp_predictions = x
@@ -840,21 +905,25 @@ class Trainer:
                     output.append((x[0], x[1], "preds_topk", preds))
                     output.append((x[0], x[1], "probs_topk", probs))
                     if _same(temp_predictions, temp_targets):
-                        # self.logger.debug(self.report_function(temp_predictions[-1],
-                        # temp_targets[-1]))
+                        predictions = temp_predictions[-1]
+                        targets = temp_targets[-1]
                         output.append((x[0], x[1], "predictions_targets",
-                                       self.report_function(temp_predictions[-1], temp_targets[-1])))
+                                       report_function(predictions, targets)))
                         temp_predictions = None
                         temp_targets = None
+                        del predictions
+                        del targets
                 elif x[2] in {"labels", "targets"}:
                     temp_targets = x
                     if _same(temp_targets, temp_predictions):
-                        # self.logger.debug(self.report_function(temp_predictions[-1],
-                        # temp_targets[-1]))
+                        predictions = temp_predictions[-1]
+                        targets = temp_targets[-1]
                         output.append((x[0], x[1], "predictions_targets",
-                                       self.report_function(temp_predictions[-1], temp_targets[-1])))
+                                       report_function(temp_predictions[-1], temp_targets[-1])))
                         temp_predictions = None
                         temp_targets = None
+                        del predictions
+                        del targets
                 else:
                     output.append(x)
             return True, output
@@ -870,8 +939,12 @@ class Trainer:
         """Fetch the prediction for a given image. Returns predictions
 
         :param img_path: Image Path
-        :returns: preds: {\"beam_preds\": beam_preds, \"greedy_preds\": greedy_preds}
+        :returns: preds: {"beam_preds": beam_preds, "greedy_preds": greedy_preds}
         :rtype: :class:`dict`
+
+        # Test would be something like 
+        >>> response = requests.request("GET", server_url)
+        >>> 
 
         """
         if True:              # img_path in self._temp_runner._processed_images:
@@ -982,6 +1055,63 @@ class Trainer:
         os.mkdir(os.path.join("trainer_modules", dirname))
         return dirname
 
+    @property
+    def user_funcs(self):
+        return [x["name"] for x in self._user_funcs]
+
+    @POST
+    @helpers
+    def add_user_funcs(self, request):
+        """Add a user function from a given python or module as a zip file. Delegates
+        the requeste to :meth:`Trainer.add_module`
+
+        Prospective rules for adding a user func
+
+        1. `user_func` shouldn't be given access to the trainer instance itself as
+        it may cause unwanted states
+
+        2. `hooks` may be specific functions which can be given access to specific
+        locals of particular functions
+
+        3. `user_func` is the most generic function and has arbitrary call and
+        return values
+
+        4. In constrast `hooks` would be more restriced and while adding or
+        removing a hook certain checks can be performed
+
+        5. `user_funcs` maybe invoked in the middle of the program somewhere as
+        defined, or can be invoked in any situation parallelly. While other
+        functions may only execute in certain cricumstances
+
+        :param request: :func:`flask.request`
+
+        """
+        # NOTE: In the python way, we can't really restrain whatever is in
+        #       there, we can only warn and try to avoid it.
+        #       Checks can then be like:
+        #       1. "inspect." not in file
+        #       2. "self." not in file
+        checks = []
+        status, response = self.add_module(request, checks)
+        if status:
+            module_exports = response
+            if "functions" not in module_exports:
+                return False, self._logw("No functions in data")
+            else:
+                statuses = []
+                for f in module_exports["functions"]:
+                    # Arbitrary user func can be anything actually as long as it's a callable
+                    if "name" in f.keys() and "function" in f.keys():
+                        statuses.append((True, f["name"]))
+                        self._user_funcs[f["name"]] = f["function"]
+                    else:
+                        statuses.append((False, f["name"]))
+                if all(x[0] for x in statuses):
+                    return True, self._logd("All functions added successfully")
+                else:
+                    retval = [str(x[1]) + " added, " if x[0] else " failed, " for x in statuses]
+                    return False, self._logd(f"{retval}")
+
     @POST
     @helpers
     def add_model(self, request):
@@ -1029,7 +1159,7 @@ class Trainer:
 
     @POST
     @helpers
-    def add_module(self, request):
+    def add_module(self, request, checks):
         """Adds an arbitrary module from a given python or module as a zip file. File
         must be present in request and is read as ``request.files["file"]``
 
@@ -1075,9 +1205,18 @@ class Trainer:
                     f.write(model_file.decode())
                 try:
                     ldict = {}
-                    self.logger.debug(f"Executing 'from {tmp_name} import module_exports'")
-                    exec(f"from {tmp_name} import module_exports", globals(), ldict)
-                    return True, ldict["module_exports"]
+                    self._logd("Checking functions")
+                    flag = True
+                    for check_p in checks:
+                        if not check_p(tmp_file):
+                            flag = False
+                            break
+                    if not flag:
+                        return False, self._logd(f"Module check failed {check_p}")
+                    else:
+                        self._logd(f"Executing 'from {tmp_name} import module_exports'")
+                        exec(f"from {tmp_name} import module_exports", globals(), ldict)
+                        return True, ldict["module_exports"]
                 except ImportError as e:
                     return False, self._logd(f"Could not import module_exports from given file. Error {e}")
                 except Exception as e:
@@ -1093,7 +1232,7 @@ class Trainer:
                     try:
                         ldict = {}
                         exec(f"from {tmp_dir} import module_exports", globals(), ldict)
-                        return ldict["module_exports"]
+                        return True, ldict["module_exports"]
                     except ImportError as e:
                         return False, self._logd(f"Could not import module_exports from given file. Error {e}")
                     except Exception as e:

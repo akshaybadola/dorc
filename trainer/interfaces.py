@@ -193,14 +193,16 @@ class FlaskInterface:
             self.app.add_url_rule("/" + x, x, partial(self.trainer_control, x))
         for x in self.trainer.props:
             self.app.add_url_rule("/" + "props/" + x, x, partial(self.trainer_props, x))
+
         # Adding extras
         for x, y in self.trainer._extras.items():
-            if "report" in x:
+            if "GET" in y.__http_methods__:
                 self.app.add_url_rule("/_extras/" + x, x, partial(self.trainer_get, x),
                                       methods=["GET"])
-            else:
+            elif "POST" in y.__http_methods__:
                 self.app.add_url_rule("/_extras/" + x, x, partial(self.trainer_post, x),
                                       methods=["POST"])
+
         # Adding helpers
         for x, y in self.trainer._helpers.items():
             methods = []

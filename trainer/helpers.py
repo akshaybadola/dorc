@@ -4,6 +4,22 @@ from collections import OrderedDict
 from .overrides import MyDataLoader
 
 
+class Exposes:
+    def __init__(self, *args):
+        assert all((isinstance(x, str)) for x in args)
+        self._args = args
+
+    def __call__(self, fn, *args, **kwargs):
+        def new_func(*args, **kwargs):
+            return fn(*args, **kwargs)
+        new_func.exposes = set()
+        for x in self._args:
+            assert x in fn.__code__.co_names or x in fn.__code__.co_varnames,\
+                f"{x} not available in function {fn}"
+            new_func.exposes.add(x)
+        return new_func
+
+
 class HookDict:
     def __init__(self, permanent_items):
         self._items = OrderedDict()
@@ -176,4 +192,4 @@ def get_proxy_dataloader(dataset, params, fraction_or_number, logger=None):
 #     dummy._metrics = None
 #     dummy._extra_metrics = None
 #     temp_runner = Epoch(dummy, {})
-#     return temp_runner    
+#     return temp_runner

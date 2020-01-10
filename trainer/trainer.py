@@ -347,17 +347,13 @@ class Trainer:
             elif t != "gpus":
                 self.__dict__[t] = v
 
-    # def to_(self, x):
-    #     if self.device == "parallel":
-    #         return x.cuda()
-    #     else:
-    #         return x.to(self.device)
     def _init_static_vars(self):
-        self.adhoc_error_dict = {"required_atleast_[split]": ["train", "val", "test"],
-                                 "required_for_[split]": {"metrics": "[list[string]]_which_metrics",
-                                                          "epoch": "[int|string]_which_epoch",
-                                                          "num_or_fraction":
-                                                          "[int|float]number_of_points_or_fraction_of_dataset"}}
+        self.adhoc_error_dict = {"required_oneof_[function]": ["train", "val", "test", "user_func_name"],
+                                 "required_for_[function]": {"metrics": "[list[string]]_which_metrics",
+                                                             "epoch": "[int|string]_which_epoch",
+                                                             "data": "[string]_train_val_or_test",
+                                                             "num_or_fraction":
+                                                             "[int|float]_number_of_points_or_fraction_of_dataset"}}
 
     def _init_state_vars(self):
         """Initialize default state variables.
@@ -693,42 +689,68 @@ class Trainer:
         """Call an arbitrary function. For now calls any of train/val/test or given
         training_steps with a subset of the dataset.
 
+        1. If training, then pause trainer,
+        2. run the requested adhoc function in a thread
+        3. Result is stored in _adhoc_func_result
+        4. _adhoc_func_result is checked for uniqueness
+        5. Multiple funcs (upto 3) should be able to run, and they should be trackable
+        6. Auto resource allocation for funcs
+        7. If required, save state to disk before doing so
+
         :param data: data
         :returns: status and response string
         :rtype: :class:`tuple`
 
         """
-        self._logi(f"Calling adhoc run with data: {data}")
         if not data:
             return False, self._logw(f"Called with null data")
+        self._logi(f"Calling adhoc run with data: {data}")
         if not any(x in data for x in self._trainer_params["training_steps"]):
             return False, {"error": self._logi("Required Input. Given unknown dataset"),
                            **self.adhoc_error_dict}
         else:
             for x in data:
-                return self.try_call_adhoch_func_with_data(x, data[x])
+                return self.check_adhoc_func_params(x, data[x])
 
-    def try_call_adhoch_func_with_data(self, step, params):
-        # {"metrics": [list_of_metrics], "epoch": num_or_"current", fraction_of_dataset: 0 < x < 1,
-        # "device", one_of_gpus}
-        # maybe: {"report_function": <<function>>}
-        # Or maybe device can be automatically determined
-        # NOTE: Samples should be captured by default
+    def check_adhoc_func_params(self, func, params):
+        """Call :meth:`call_adhoc_func_on_data` with params. Perhaps it can be lifted above
+        though
+
+        :param func: Function name. Should be present in :meth:`Trainer.user_funcs`
+                     or one of {"train", "val", "test"}
+        :param params: `params` is a :class:`dict` of type
+                        {"metrics": [list_of_metrics] or "all",
+                         "epoch": :class:`int` num or "current",
+                         "num_or_fraction": 0 < x,
+                         "device", one_of_gpus,
+                         "data": "train_val_or_test"}
+        """
+        # NOTE: Samples should be captured by default, model defines a sampling
+        #       mechanism or else simply output is captured
         self._logw("Ignoring \"epoch\" for now")
         try:
             iter(params)
         except TypeError:
             return False, {"error": self._logi("Required Input. Incorrent format"),
                            **self.adhoc_error_dict}
-        if not all(x in params for x in ["metrics", "epoch", "num_or_fraction"]):
+        if not all(x in params for x in ["metrics", "epoch", "num_or_fraction", "data"]):
             return False, {"error": self._logi("Required Input. Incorrent parameters"),
                            **self.adhoc_error_dict}
+        # metrics have to be compatible
         elif not (params["metrics"] != "all") or\
-             not all(x in self._metrics[step] for x in params["metrics"]):
-            self.logger.debug(f'metrics given {params["metrics"]}')
-            return False, {"error": self._logi("Required Input. Given unknown metrics or incorrect format"),
+             not all(x in self._metrics[params["data"]] for x in params["metrics"]):
+            self._logd(f'metrics given {params["metrics"]}')
+            return False, {"error": self._loge("Required Input. Given unknown metrics or incorrect format"),
                            **self.adhoc_error_dict}
-
+        elif func not in (self.user_funcs + self._trainer_params["training_steps"]):
+            return False, {"error": self._loge(f"Unknown function \"{params['function']}\" given"),
+                           "available_functions": (self.user_funcs +
+                                                   self._trainer_params["training_steps"])}
+        # Making minimal assumptions on the function
+        elif func in self.user_funcs and\
+             not len(inspect.signature(self._user_funcs[func]).parameters) == 1:
+            return False, {"error": self._loge(f"Given function \"{params['function']}\"" +
+                                               " is not suited to process data")}
         # FIXME: WTF is self.checkpoints anyway? It has to be a dict now
         # elif not params["epoch"] in self.checkpoints:
         #     return False, "Checkpoint for epoch doesn't exist"
@@ -738,27 +760,25 @@ class Trainer:
             self.pause()
             while not self.paused:
                 time.sleep(10)
-            params["step"] = step
-            t = Thread(target=self.call_adhoc_func, args=[params])
+            params["function_name"] = func
+            t = Thread(target=self.call_adhoc_func_on_data, args=[params])
             if not self._flag_adhoc_func_running:
                 self._flag_adhoc_func_running = True
                 t.start()
                 return True, {"success": self._logi("Running the given adhoc function")}
             else:
                 return False, {"error": self._logi("Another adhoc function is still running")}
-            # 1. If training, then pause trainer,
-            # 2. run the requested adhoc function in a thread
-            # 3. Result is stored in _adhoc_func_result
-            # 4. _adhoc_func_result is checked for uniqueness
-            # 5. Multiple funcs (upto 3) should be able to run, and they should be trackable
-            # 6. Auto resource allocation for funcs
-            # 7. If required, save state to disk before doing so
 
-    def call_adhoc_func(self, params):
+    def call_adhoc_func_on_data(self, params):
         # have to call epoch runner with specific metrics (in case some are too expensive)
         # For now call all metrics but it's fraction of the data anyway.
         # Only used here
-        step = params.pop("step")
+        function_name = params["function_name"]
+        if function_name in self.user_funcs:
+            function = self._user_funcs[function_name]
+        else:
+            function = self._update_functions[function_name]
+        step = params["data"]
         step_loader = getattr(self, step + "_loader")
         if "seed" in params:
             np.random.seed(params["seed"])
@@ -820,7 +840,9 @@ class Trainer:
                 temp_models.load(self._models.dump())  # replicate
         else:
             temp_models = self._models
-        step_func = partial(self._update_functions[step], temp_models, self.criteria)
+        # NOTE: Big change here
+        # step_func = partial(self._update_functions[step], temp_models, self.criteria)
+        step_func = partial(function, temp_models, self.criteria)
 
         class Signals:
             paused = False
@@ -840,6 +862,7 @@ class Trainer:
         self._temp_runner = temp_runner
         self.logger.debug(f"starting temp_runner for {step} step")
         self._temp_runner.logger = self.logger
+        # TODO: It should be temp_runner.run_temp instead of run_ + step
         if hasattr(temp_loader.dataset, "_get_raw"):
             t = Thread(target=getattr(temp_runner, "run_" + step),
                        args=[step_func, temp_loader, True])
@@ -862,12 +885,13 @@ class Trainer:
     #       implemented and how adhoc_function actually operates.
     @POST
     @extras
-    @Exposes("ix_to_word", "predictions", "targets", "report_function")
+    @Exposes("ix_to_word", "batch_vars")
     def report_adhoc_run(self, data):
         # TODO: These generic checks should be in the POST or GET pre_call
         #+FROM_HERE
         # ix_to_word may be used by user_func later
         ix_to_word = self.train_loader.loader._ix_to_word
+        batch_vars = self._temp_runner.batch_vars
         if data is None:
             return False, self._loge("Called with null data.")
         elif "report_function" not in data:
@@ -881,7 +905,7 @@ class Trainer:
         #       before the func is called
         if not all(x in self.report_adhoc_run.exposes
                    for x in inspect.signature(report_function).parameters):
-            return False, f"Given function {data[report_function]}" +\
+            return False, f"Given function {data['report_function']}" +\
                 " is not compatible with report_adhoc_run"
         #+TO_HERE
         if not hasattr(self._temp_runner, "running"):
@@ -889,49 +913,55 @@ class Trainer:
         elif self._temp_runner.running:
             return True, self._logd("Adhoc function is still running")
         else:
-            def _same(a, b):
-                # self.logger.debug(f"_same, {b is None}")
-                if b is not None and a[1] == b[1]:
-                    # self.logger.debug(f"_same, {b[1], a[1]}")
-                    return True
-                else:
-                    return False
-            output = []
-            temp_targets = None
-            temp_predictions = None
-            # NOTE: this was the default value
-            # report_function = self.report_function
-            for x in self._temp_runner.batch_vars:
-                if x[2] == "predictions":
-                    temp_predictions = x
-                    probs, preds = torch.topk(torch.nn.functional.softmax(
-                        temp_predictions[-1], dim=1), 5)
-                    output.append((x[0], x[1], "preds_topk", preds))
-                    output.append((x[0], x[1], "probs_topk", probs))
-                    if _same(temp_predictions, temp_targets):
-                        predictions = temp_predictions[-1]
-                        targets = temp_targets[-1]
-                        output.append((x[0], x[1], "predictions_targets",
-                                       report_function(ix_to_word, predictions, targets)))
-                        temp_predictions = None
-                        temp_targets = None
-                        del predictions
-                        del targets
-                elif x[2] in {"labels", "targets"}:
-                    temp_targets = x
-                    if _same(temp_targets, temp_predictions):
-                        predictions = temp_predictions[-1]
-                        targets = temp_targets[-1]
-                        output.append((x[0], x[1], "predictions_targets",
-                                       report_function(ix_to_word, temp_predictions[-1],
-                                                       temp_targets[-1])))
-                        temp_predictions = None
-                        temp_targets = None
-                        del predictions
-                        del targets
-                else:
-                    output.append(x)
+            param_names = list(inspect.signature(report_function).parameters.keys())
+            params = {}
+            for x in param_names:
+                params[x] = locals()[x]
+            output = report_function(**params)
             return True, output
+            # def _same(a, b):
+            #     # self.logger.debug(f"_same, {b is None}")
+            #     if b is not None and a[1] == b[1]:
+            #         # self.logger.debug(f"_same, {b[1], a[1]}")
+            #         return True
+            #     else:
+            #         return False
+            # output = []
+            # temp_targets = None
+            # temp_predictions = None
+            # # NOTE: this was the default value
+            # # report_function = self.report_function
+            # for x in self._temp_runner.batch_vars:
+            #     if x[2] == "predictions":
+            #         temp_predictions = x
+            #         probs, preds = torch.topk(torch.nn.functional.softmax(
+            #             temp_predictions[-1], dim=1), 5)
+            #         output.append((x[0], x[1], "preds_topk", preds))
+            #         output.append((x[0], x[1], "probs_topk", probs))
+            #         if _same(temp_predictions, temp_targets):
+            #             predictions = temp_predictions[-1]
+            #             targets = temp_targets[-1]
+            #             output.append((x[0], x[1], "predictions_targets",
+            #                            report_function(ix_to_word, predictions, targets)))
+            #             temp_predictions = None
+            #             temp_targets = None
+            #             del predictions
+            #             del targets
+            #     elif x[2] in {"labels", "targets"}:
+            #         temp_targets = x
+            #         if _same(temp_targets, temp_predictions):
+            #             predictions = temp_predictions[-1]
+            #             targets = temp_targets[-1]
+            #             output.append((x[0], x[1], "predictions_targets",
+            #                            report_function(ix_to_word, temp_predictions[-1],
+            #                                            temp_targets[-1])))
+            #             temp_predictions = None
+            #             temp_targets = None
+            #             del predictions
+            #             del targets
+            #     else:
+            #         output.append(x)
+            # return True, output
 
     @POST
     @helpers
@@ -1060,9 +1090,10 @@ class Trainer:
         os.mkdir(os.path.join("trainer_modules", dirname))
         return dirname
 
+    # FIXME: self.user_funcs MAY create problems
     @property
     def user_funcs(self):
-        return [x["name"] for x in self._user_funcs]
+        return [x for x in self._user_funcs]
 
     @POST
     @helpers
@@ -1628,6 +1659,7 @@ class Trainer:
     def device(self):
         return self._device
 
+    # FIXME: self.models creates problems
     @property
     def models(self):
         return self._models.names

@@ -2,6 +2,53 @@
 import time
 
 
+class BatchVars:
+    """BatchVars makes minimal assumptions on the return values of the function. At
+    the very least it assumes that:
+        1. all batches give output structure.
+        2. each one has a format of (name, batch_num, prop_namme, value)
+
+    At each append it automatically updates its index so that it's convenient to
+    get values in the form of [batch_num][prop_name].
+
+    The iterator returned is of its list and not the index.
+
+    """
+    def __init__(self):
+        self._list = []
+        self._index = {}
+
+    def append(self, x):
+        self._list.append(x)
+        if x[1] not in self._index:
+            self._index[x[1]] = {}
+        self._index[x[1]][x[2]] = len(self._list) - 1
+
+    def __getitem__(self, i):
+        return self._list[i]
+
+    def __iter__(self):
+        return iter(self._list)
+
+    @property
+    def batches(self):
+        return list(self._index.keys())
+
+    @property
+    def prop_names(self):
+        if len(self._index):
+            return list(self._index[0].keys())
+        else:
+            return []
+
+    def get(self, batch_num, prop_name):
+        if batch_num in self._index and prop_name in self._index[batch_num]:
+            indx = self._index[batch_num][prop_name]
+            return self._list[indx][-1]
+        else:
+            return None
+
+
 # DONE: Why's epoch not reporting even standard losses?
 # Perhaps decouple the Epoch entirely from the wrapper
 # with a tcp socket like thingy
@@ -33,7 +80,7 @@ class Epoch:
     def reset(self):
         self.total_samples = {"train": 0, "val": 0, "test": 0}
         self.batch_num = {"train": 0, "val": 0, "test": 0}
-        self.batch_vars = []
+        self.batch_vars = BatchVars()
 
     @property
     def current_loop(self):

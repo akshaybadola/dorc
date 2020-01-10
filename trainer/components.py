@@ -109,6 +109,8 @@ class Models:
 
     def load_weights(self, model_name, state_dict):
         try:
+            for k in state_dict:
+                state_dict[k] = self._models[model_name].to_(state_dict[k])
             self._models[model_name].load_state_dict(state_dict)
             return True, None
         except Exception as e:

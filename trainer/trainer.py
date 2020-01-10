@@ -356,7 +356,8 @@ class Trainer:
         self.adhoc_error_dict = {"required_atleast_[split]": ["train", "val", "test"],
                                  "required_for_[split]": {"metrics": "[list[string]]_which_metrics",
                                                           "epoch": "[int|string]_which_epoch",
-                                                          "fraction": "[float]_fraction_of_dataset"}}
+                                                          "num_or_fraction":
+                                                          "[int|float]number_of_points_or_fraction_of_dataset"}}
 
     def _init_state_vars(self):
         """Initialize default state variables.
@@ -719,7 +720,7 @@ class Trainer:
         except TypeError:
             return False, {"error": self._logi("Required Input. Incorrent format"),
                            **self.adhoc_error_dict}
-        if not all(x in params for x in ["metrics", "epoch", "fraction"]):
+        if not all(x in params for x in ["metrics", "epoch", "num_or_fraction"]):
             return False, {"error": self._logi("Required Input. Incorrent parameters"),
                            **self.adhoc_error_dict}
         elif not (params["metrics"] != "all") or\
@@ -731,8 +732,8 @@ class Trainer:
         # FIXME: WTF is self.checkpoints anyway? It has to be a dict now
         # elif not params["epoch"] in self.checkpoints:
         #     return False, "Checkpoint for epoch doesn't exist"
-        elif params["fraction"] > 1 or params["fraction"] <= 0:
-            return False, self._logi("Incorrect fraction")
+        elif params["num_or_fraction"] <= 0:
+            return False, self._logi(f"Incorrect fraction or number of points {params['num_or_fraction']}")
         else:
             self.pause()
             while not self.paused:
@@ -764,7 +765,7 @@ class Trainer:
         # FIXME: Below line is a big hack. Need to fix params here and below
         params["ruotianlou"] = None
         if "ruotianlou" in params:
-            _proxy_dataset = step_loader.sub_dataset(params["fraction"])
+            _proxy_dataset = step_loader.sub_dataset(params["num_or_fraction"])
             temp_loader = MyDataLoader(_proxy_dataset, batch_size=1, return_raw=True,
                                        collate_fn=_proxy_dataset.collate_fn)
             if hasattr(_proxy_dataset, "_get_raw"):
@@ -774,8 +775,11 @@ class Trainer:
                 self.logger.warn(f"{step} dataset doesn't define \"_get_raw\".\
                 Drawing samples from temp data will not be available.")
         else:
-            indices = np.random.choice(len(step_loader.dataset),
-                                       int(len(step_loader.dataset) * params["fraction"]))
+            if params["num_or_fraction"] > 1:
+                indices = np.random.choice(len(step_loader.dataset), params["num_or_fraction"])
+            else:
+                indices = np.random.choice(len(step_loader.dataset),
+                                           int(len(step_loader.dataset) * params["num_or_fraction"]))
             _proxy_dataset = ProxyDataset(step_loader.dataset, indices)
             temp_params = self._dataloader_params[step].copy()
             temp_params.update({"batch_size": 1})  # stick to 1 right now
@@ -861,7 +865,7 @@ class Trainer:
     @Exposes("ix_to_word", "predictions", "targets", "report_function")
     def report_adhoc_run(self, data):
         # TODO: These generic checks should be in the POST or GET pre_call
-        #+FROM_HERE 
+        #+FROM_HERE
         # ix_to_word may be used by user_func later
         ix_to_word = self.train_loader.loader._ix_to_word
         if data is None:
@@ -876,7 +880,7 @@ class Trainer:
         # TODO: "check" would be better.  In fact these checks should be done
         #       before the func is called
         if not all(x in self.report_adhoc_run.exposes
-                   for x in inspect.signature(report_function)):
+                   for x in inspect.signature(report_function).parameters):
             return False, f"Given function {data[report_function]}" +\
                 " is not compatible with report_adhoc_run"
         #+TO_HERE
@@ -908,7 +912,7 @@ class Trainer:
                         predictions = temp_predictions[-1]
                         targets = temp_targets[-1]
                         output.append((x[0], x[1], "predictions_targets",
-                                       report_function(predictions, targets)))
+                                       report_function(ix_to_word, predictions, targets)))
                         temp_predictions = None
                         temp_targets = None
                         del predictions
@@ -919,7 +923,8 @@ class Trainer:
                         predictions = temp_predictions[-1]
                         targets = temp_targets[-1]
                         output.append((x[0], x[1], "predictions_targets",
-                                       report_function(temp_predictions[-1], temp_targets[-1])))
+                                       report_function(ix_to_word, temp_predictions[-1],
+                                                       temp_targets[-1])))
                         temp_predictions = None
                         temp_targets = None
                         del predictions
@@ -1034,7 +1039,7 @@ class Trainer:
             return False, self._logd(f"Model name not sent in data")
         model_names = json.loads(request.form["model_names"])
         try:
-            weights = torch.load(request.files["file"])
+            weights = torch.load(request.files["file"], map_location="cpu")
         except Exception as e:
             return False, self._loge(f"Error occured while reading data {e}")
         if not all(x in weights for x in model_names):
@@ -1129,7 +1134,8 @@ class Trainer:
         :rtype: :class:`tuple`
 
         """
-        status, response = self.add_module(request)
+        checks = []
+        status, response = self.add_module(request, checks)
         if status:
             module_exports = response
             if "model_names" not in module_exports:
@@ -1271,7 +1277,7 @@ class Trainer:
                 inherit_name = _params["__inherit"]
                 sig = inspect.signature(_def)
                 model_args = {}
-                for x in sig.parameters.keys():
+                for x in sig.parameters:
                     model_args[x] = self._model_params[inherit_name][x]
             else:
                 model_args = _params

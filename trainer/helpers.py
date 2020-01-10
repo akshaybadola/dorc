@@ -17,6 +17,8 @@ class Exposes:
             assert x in fn.__code__.co_names or x in fn.__code__.co_varnames,\
                 f"{x} not available in function {fn}"
             new_func.exposes.add(x)
+        # HACK: Big hack
+        new_func.__name__ = fn.__name__
         return new_func
 
 

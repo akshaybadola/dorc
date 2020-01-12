@@ -134,11 +134,6 @@ class FlaskInterface:
         if hasattr(request, "json"):
             data = request.json
             status, response = getattr(self.trainer, func_name)(data)
-            # if not func_name == "fetch_image":
-            #     response = _dump(response)
-            #     print(response)
-            # else:
-            #     response = json.dumps(response)
             response = _dump(response)
             if not status:
                 return Response(response, status=400, mimetype='application/json')
@@ -146,7 +141,6 @@ class FlaskInterface:
                 return Response(response, status=200, mimetype='application/json')
         else:
             response = _dump({"error": "No data given"})
-            print(response)
             return Response(response, status=400, mimetype='application/json')
 
     def trainer_route(self, func_name):

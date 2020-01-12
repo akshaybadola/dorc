@@ -167,6 +167,7 @@ class Trainer:
         if trainer_params["resume"] or "init_weights" in trainer_params:
             self._init_models()
             self._check_resume_or_init_weights()
+        print(trainer_params["image_root"])
 
     # TODO: Check certain variables after everything is initialized, like
     #       `update_funcs`.
@@ -898,7 +899,7 @@ class Trainer:
             return False, self._loge("report_function not in data.")
         elif data["report_function"] not in self._user_funcs:
             report_function = data["report_function"]
-            return False, self._loge(f"Unknown report funciton {report_function}.")
+            return False, self._loge(f"Unknown report function {report_function}.")
         else:
             report_function = self._user_funcs[data["report_function"]]
         # TODO: "check" would be better.  In fact these checks should be done
@@ -918,7 +919,7 @@ class Trainer:
             for x in param_names:
                 params[x] = locals()[x]
             output = report_function(**params)
-            return True, output
+            return True, {"success": output}
             # def _same(a, b):
             #     # self.logger.debug(f"_same, {b is None}")
             #     if b is not None and a[1] == b[1]:
@@ -1052,6 +1053,7 @@ class Trainer:
     def fetch_image(self, img_path):
         """Fetch the image from a given path.
         """
+        img_path = os.path.join(self._trainer_params["image_root"], img_path)
         if not os.path.exists(img_path):
             return False, self._logd(f"Image {img_path} doesn't exist")
         else:

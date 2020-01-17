@@ -15,7 +15,7 @@ from PIL import Image
 import magic
 import numpy as np
 import zipfile
-import inspect
+from multiprocessing.pool import ThreadPool
 from types import SimpleNamespace
 from torch.utils.data import Dataset, DataLoader
 
@@ -667,6 +667,70 @@ class Trainer:
                     return False, self._logi(f"Could not resume from {weights}. Error occured {e}")
                 return True, self._logi(f"Trying to {method} file")
 
+    @POST
+    @extras
+    def call_user_func(self, data):
+        """Call an arbitrary function. For now calls any of train/val/test or given
+        training_steps with a subset of the dataset.
+
+        This function is more generic than call_adhoc_run in the sense that any
+        adhoc function can be called on any attribute of the trainer (as of now).
+
+        Later only specified variables will be exposed.
+
+        """
+        if not data:
+            return False, self._loge(f"Called with null data")
+        elif len(data) != 1:
+            return False, self._loge(f"Can only call one function at a time. data is: {data}")
+        self._logi(f"Calling with data: {data}")
+        # NOTE: Function is not a dict right now
+        # func_name = [*data.keys()][0]
+        func_name = data[0]
+        if func_name not in self.user_funcs:
+            return False, {"error": self._loge(f"Unknown function {func_name} given"),
+                           "available_functions": self.user_funcs}
+        elif func_name in self.user_funcs:
+            func = self._user_funcs[func_name]
+            if not all(getattr(self, x, None) for x in inspect.signature(func).parameters):
+                return False, {"error": self._loge(f"Some of the parameters for {func_name}: " +
+                                                   f"{inspect.signature(func).parameters}" +
+                                                   " are not available")}
+            else:
+                params = {x: getattr(self, x) for x in inspect.signature(func).parameters}
+            self._logi(f"Running the given user func {func_name}")
+            pool = ThreadPool(processes=1)
+            async_result = pool.apply_async(func, kwds=params)
+            while not async_result.ready():
+                time.sleep(1)
+            try:
+                output, callback = async_result.get()
+            except Exception as e:
+                return False, f"Unexpected output format for function {func_name}," +\
+                    f" Error occured {e}"
+            if callback not in self.user_funcs:
+                return False, {"error": self._loge(f"Unknown function {callback} given"),
+                               "available_functions": self.user_funcs}
+            elif callback in self.user_funcs:
+                callback_func = self._user_funcs[callback]
+                param_names = [x for x in inspect.signature(callback_func).parameters]
+                flag = True
+                for _x in param_names:
+                    if not getattr(self, _x, None) and _x != "output":
+                        flag = False
+                        break
+                if not flag:
+                    return False, {"error": self._loge(f"Some of the parameters for callback function" +
+                                                       f" {callback}: " +
+                                                       f" {param_names}" +
+                                                       " are not available")}
+                else:
+                    params = {"output": output}
+                    param_names.remove("output")
+                    for _x in param_names:
+                        params[_x] = getattr(self, _x)
+                    return callback_func(**params)
+
     # TODO: Functions like this should return a json like form to update to the server
     #       For each such endpoint, there should be a "endpoint_params" endpoint which
     #       sends the required json_data format which is to be sent with the request
@@ -687,7 +751,7 @@ class Trainer:
     @POST
     @extras
     def call_adhoc_run(self, data):
-        """Call an arbitrary function. For now calls any of train/val/test or given
+        """Call an arbitrary function on any of train/val/test or given
         training_steps with a subset of the dataset.
 
         1. If training, then pause trainer,
@@ -704,7 +768,7 @@ class Trainer:
 
         """
         if not data:
-            return False, self._logw(f"Called with null data")
+            return False, self._loge(f"Called with null data")
         self._logi(f"Calling adhoc run with data: {data}")
         if not any(x in data for x in self._trainer_params["training_steps"]):
             return False, {"error": self._logi("Required Input. Given unknown dataset"),
@@ -1082,7 +1146,7 @@ class Trainer:
             for model_name in model_names:
                 status, err = self._models.load_weights(model_name, weights[model_name])
                 if err:
-                    return False, self._loge(f"Error while updating component")
+                    return False, self._loge(f"Error while updating component {err}")
             return True, self._logd(f"Updated Models {model_names}")
         except Exception as e:
             return False, self._loge(f"Error occured while loading models {e}")
@@ -1307,11 +1371,18 @@ class Trainer:
             _def = model_defs[model]["model"]
             _params = model_params[model]
             if "__inherit" in _params:
+                if "__add" in _params:  # NOTE: add params from self, stupid hack
+                    add_params = _params["__add"]
+                else:
+                    add_params = []
                 inherit_name = _params["__inherit"]
                 sig = inspect.signature(_def)
                 model_args = {}
                 for x in sig.parameters:
-                    model_args[x] = self._model_params[inherit_name][x]
+                    if x not in add_params:
+                        model_args[x] = self._model_params[inherit_name][x]
+                    else:
+                        model_args[x] = getattr(self, x)  # NOTE: Bad hack
             else:
                 model_args = _params
             if model not in self._model_defs:

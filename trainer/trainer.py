@@ -1146,13 +1146,15 @@ class Trainer:
         if test:
             import skimage
             self._logd("Detected image file")
-            img = skimage.io.imread(request.files["file"])
+            img = skimage.io.imread(io.BytesIO(img_file))
             # At this point, just run
             func_names = json.loads(request.form["callbacks"])
             funcs = [self._user_funcs[f] for f in func_names]
             model = self._models[self.active_model]
             self._logd(f"Calling functions {func_names}")
-            funcs[0](model, img, funcs[1])
+            ix_to_word = self.train_loader.loader._ix_to_word
+            funcs[0](model, img, ix_to_word, funcs[1])
+            return True, "meh"
         else:
             return False, self._loge("Data is not image")
             # call given funcs on the file

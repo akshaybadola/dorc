@@ -415,6 +415,7 @@ class Trainer:
         self.load_weights.__dict__["content_type"] = "form"
         self.add_model.__dict__["content_type"] = "form"
         self.add_user_funcs.__dict__["content_type"] = "form"
+        self.load_image.__dict__["content_type"] = "form"
 
     def _init_external_vars(self):
         """Initialize some variables which will be attached to it later. Right now a
@@ -597,6 +598,7 @@ class Trainer:
                                    Signals, device_monitor, self.extra_report)
 
     def _logi(self, x):
+        "Log to INFO and return string with name of calling function"
         f = inspect.currentframe()
         prev_func = inspect.getframeinfo(f.f_back).function
         x = f"[{prev_func}()] " + x
@@ -604,6 +606,7 @@ class Trainer:
         return x
 
     def _logd(self, x):
+        "Log to DEBUG and return string with name of calling function"
         f = inspect.currentframe()
         prev_func = inspect.getframeinfo(f.f_back).function
         x = f"[{prev_func}()] " + x
@@ -611,6 +614,7 @@ class Trainer:
         return x
 
     def _logw(self, x):
+        "Log to WARN and return string with name of calling function"
         f = inspect.currentframe()
         prev_func = inspect.getframeinfo(f.f_back).function
         x = f"[{prev_func}()] " + x
@@ -618,6 +622,7 @@ class Trainer:
         return x
 
     def _loge(self, x):
+        "Log to ERROR and return string with name of calling function"
         f = inspect.currentframe()
         prev_func = inspect.getframeinfo(f.f_back).function
         x = f"[{prev_func}()] " + x
@@ -1130,6 +1135,30 @@ class Trainer:
 
     @POST
     @helpers
+    def load_image(self, request):
+        """Load an image from the given data.
+        """
+        try:
+            img_file = request.files["file"].read()
+            test = self._check_file_magic(img_file, "image")
+        except Exception as e:
+            return False, self._loge(f"Error reading file {e}")
+        if test:
+            import skimage
+            self._logd("Detected image file")
+            img = skimage.io.imread(request.files["file"])
+            # At this point, just run
+            func_names = json.loads(request.form["callbacks"])
+            funcs = [self._user_funcs[f] for f in func_names]
+            model = self._models[self.active_model]
+            self._logd(f"Calling functions {func_names}")
+            funcs[0](model, img, funcs[1])
+        else:
+            return False, self._loge("Data is not image")
+            # call given funcs on the file
+
+    @POST
+    @helpers
     def load_weights(self, request):
         if "model_names" not in request.form:
             return False, self._logd(f"Model name not sent in data")
@@ -1260,6 +1289,15 @@ class Trainer:
         else:
             return status, response
 
+    def _check_file_magic(self, _file, test_str):
+        if hasattr(magic, "from_buffer"):
+            self.logger.debug("from_buffer in magic")
+            test = test_str in magic.from_buffer(_file).lower()
+        elif hasattr(magic, "detect_from_content"):
+            self.logger.debug("detect_from_content in magic")
+            test = test_str in magic.detect_from_content(_file).name.lower()
+        return test
+
     @POST
     @helpers
     def add_module(self, request, checks):
@@ -1293,18 +1331,13 @@ class Trainer:
         try:
             # file can be zip or text
             model_file = request.files["file"].read()
-            if hasattr(magic, "from_buffer"):
-                self.logger.debug("from_buffer in magic")
-                test = "python" in magic.from_buffer(model_file).lower()
-            elif hasattr(magic, "detect_from_content"):
-                self.logger.debug("detect_from_content in magic")
-                test = "python" in magic.detect_from_content(model_file).name.lower()
+            test = self._check_file_magic(model_file, "python")
             if test:
-                self.logger.debug("Detected python file")
+                self._logd("Detected python file")
                 tmp_name = "tmp_" + str(uuid.uuid4()).replace("-", "_")
                 tmp_file = os.path.join("trainer_modules", tmp_name + ".py")
                 with open(tmp_file, "w") as f:
-                    self.logger.debug(f"Written to {tmp_file}")
+                    self._logd(f"Written to {tmp_file}")
                     f.write(model_file.decode())
                 try:
                     ldict = {}

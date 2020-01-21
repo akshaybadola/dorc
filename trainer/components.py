@@ -137,12 +137,14 @@ class Models:
     def dump(self):
         temp = {}
         for name, model in self._models.items():
-            _model_state = {"name": model._name, "optimizer": model._optimizer_name,
+            _model_state = {"name": model._name, "optimizer_name": model._optimizer_name,
                             "optimizer_state": model._optimizer.state_dict(),
                             "device": str(model._device), "state_dict": model.state_dict()}
             temp[name] = _model_state
         return temp
 
+    # CHECK: Maybe optimizer can be none? In case there's nothing to optimize? Not sure.
+    #        Also how to exclude parameters of model?
     def load(self, model_states):
         for name, state in model_states.items():
             params = {"name": state["name"], "optimizer": state["optimizer"],
@@ -150,11 +152,11 @@ class Models:
             if name not in self.names:
                 self._logger.debug(f"New model {name}")
                 self.add(name, params)
-            if self._models[name]._optimizer_name == state[name]["optimizer"]:
-                self.models[name]._optimizer.load_state_dict(state[name]["optimizer_state"])
+            if self._models[name]._optimizer_name == state["optimizer_name"]:
+                self._models[name]._optimizer.load_state_dict(state["optimizer_state"])
             else:
                 self._logger.warn(f"Optimizers are different." +
                                   " Could not load state dict for model {name}")
-            self._models[name].load_state_dict(state[name]["state_dict"])
-            self._models[name]._device = state[name]["device"]
+            self._models[name].load_state_dict(state["state_dict"])
+            self._models[name]._device = state["device"]
         return True, None

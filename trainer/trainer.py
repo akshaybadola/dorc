@@ -119,7 +119,8 @@ class Trainer:
         trainer which is robust and easy to train and can generate graphs automatically etc.
 
         :param model: model which is a :class:`torch.nn.Module`
-        :param model_params: model params where (k, v) are (:class:`str` model_name, `list` of model params) :class:`dict`
+        :param model_params: model params where (k, v) are (:class:`str` model_name,
+        `list` of model params) :class:`dict`
         :param criteria: `dict` where (k, v) are (`str`, :class:`torch.nn.Module`)
         :param optimizer: `dict` where (k, v) are (`str`, :class:`torch.optim.Optimizer`)
         :param model_init: `dict` where (k, v) are (`str` model_name, :function: returns the initialized model)
@@ -136,7 +137,13 @@ class Trainer:
         #       that automatically resets the trainloader and the valloader
         #       Mostly Done.
         # Basic assign parameters
+
+        # __props is initialized early and anything that's to be exposed has to be
+        # appended to the list. _init_property_vars should check if everything in __props
+        # is a property or not
+        self.__props = set()
         self._unique_id = "bleh"
+        self.__props.add("unique_id")
         self._model_params = model_params
         self._model_defs = model_defs
         self._criteria_params = criteria
@@ -164,6 +171,7 @@ class Trainer:
         self._init_state_vars()
         self._init_property_vars()
         self._init_external_vars()
+        self._check_exports()
         if trainer_params["resume"] or "init_weights" in trainer_params:
             self._init_models()
             self._check_resume_or_init_weights()
@@ -241,9 +249,7 @@ class Trainer:
             self.test_frequency = 5
         assert "gpus" in self._trainer_params
         assert "cuda" in self._trainer_params
-        assert "max_epochs" in self._trainer_params
         assert "check_func" in self._trainer_params
-        self._max_epochs = self._trainer_params["max_epochs"]
         self._check_func = self._trainer_params["check_func"]
         if not self._have_resumed:
             self.logger.debug("Ignoring resume_params in while resuming")
@@ -253,11 +259,25 @@ class Trainer:
         assert all(x in ["train", "val", "test", "iterations"]
                    for x in self._trainer_params["training_steps"])
         if "iterations" in self._trainer_params["training_steps"]:
+            # NOTE: Rest (test_every_k_iterations etc.) is checked in init_dataloaders
+            # CHECK: Though should it be? Then that should be a training roadmap
+            assert "max_iterations" in self._trainer_params,\
+                "training with iterations must provide max_iterations parameter"
             assert len(self._trainer_params["training_steps"]) == 1,\
                 "train, val, test or other steps cannot be included with iterations"
-            raise NotImplementedError
-        assert all(x in self._update_functions for x in self._trainer_params["training_steps"]),\
-            "Steps in update_functions and training_steps should match"
+            assert "train" in self._update_functions, "At least train update_function has to be present"
+            assert "hooks_run_iter_frequency" in self._trainer_params, "Training with iterations" +\
+                " requires hooks_run_iter_frequency"
+            self._max_iterations = self._trainer_params["max_iterations"]
+            self._hooks_run_iter_frequency = self._trainer_params["hooks_run_iter_frequency"]
+            assert self._hooks_run_iter_frequency <= self._max_iterations, "hooks_run_iter_frequency" +\
+                " can be no more than max_iterations"
+        else:
+            assert "max_epochs" in self._trainer_params, "max_epochs not in trainer params"
+            self._max_epochs = self._trainer_params["max_epochs"]
+            assert all(x in self._update_functions
+                       for x in self._trainer_params["training_steps"]),\
+                "Steps in update_functions and training_steps should match"
 
     # assert anneal_lr_on in some metric
     # check metric decease or increase?
@@ -358,14 +378,48 @@ class Trainer:
 
     def _init_state_vars(self):
         """Initialize default state variables.
+        `epoch` always remains 0 if training only with iterations and
+        `self._iterations` increase.
+        
+        post_epoch_hooks are run after a specified number of iterations which is
+        `self._hooks_run_iter_frequency`
 
-        Hooks in theory needn't be ordered, as they don't really change the
-        state of the trainer (except update_metrics_post_epoch_hook, therefore it's not a hook)
-
+        
         :returns: None
         :rtype: None
 
         """
+        # params and state properties
+        self.__props.add("saves")
+        self.__props.add("gpus")
+        self.__props.add("system_info")
+        self.__props.add("device")
+        self.__props.add("models")
+        self.__props.add("active_model")
+        self.__props.add("epoch")
+        self.__props.add("max_epochs")
+        self.__props.add("iterations")
+        self.__props.add("max_iterations")
+        self.__props.add("updatable_params")
+        self.__props.add("all_attrs")
+        self.__props.add("all_params")
+        self.__props.add("metrics")
+        self.__props.add("post_epoch_hooks_to_run")
+        self.__props.add("all_post_epoch_hooks")
+        self.__props.add("items_to_log_dict")  # CHECK: WTF is this?
+
+        # running status
+        self.__props.add("aborted")
+        self.__props.add("current_run")
+        self.__props.add("paused")
+        self.__props.add("best_save")  # FIXME: Really?
+
+        # Other exposed API
+        self.__props.add("props")
+        self.__props.add("controls")
+        self.__props.add("_helpers")
+        self.__props.add("_extras")
+
         self.logger.info("Initializing State Variables")
         self._paused = True
         self._abort = False
@@ -387,6 +441,7 @@ class Trainer:
         self._items_to_log_dict = {"metrics": self._log_metrics}
         self._set_device()
         self._epoch = 0
+        self._iterations = 0
         self._init_nvml()
         self._temp_runner = SimpleNamespace()
         self._flag_adhoc_func_running = False
@@ -412,6 +467,7 @@ class Trainer:
             self.logger.debug("No Extra Reportables")
             self.extra_report = {}
         self._user_funcs = {}
+        self.__props.add("user_funcs")
         self.load_weights.__dict__["content_type"] = "form"
         self.add_model.__dict__["content_type"] = "form"
         self.add_user_funcs.__dict__["content_type"] = "form"
@@ -427,6 +483,22 @@ class Trainer:
         """
         if not hasattr(self, "report_function"):
             self.report_function = None
+
+    # TODO: Finish adding checks
+    def _check_exports(self):
+        """Checks the API as exported endpoints.
+
+        All the properties not beginning with _ are exported except _extras and
+        _helpers.
+
+        Controls and other export checks are to be added.
+
+        :returns: None
+        :rtype: None
+
+        """
+        attrs = [*self.__class__.__dict__.keys()]
+        assert all(x in attrs for x in self.__props), "Some properties not correctly exported"
 
     def _init_nvml(self):
         """Initializes the Nvidia monitoring library. It's called by _init_state_vars so
@@ -476,9 +548,21 @@ class Trainer:
         #                                        **v["params"])
 
     def _init_dataloaders(self):
+        """Dataloaders can be initialized from a {step, data, params} in which the
+        corresponding torch dataloader is initialized with the given data. Or
+        from a function like `get_dataloader` with certain parameters. In case
+        `train data` is available, then train_step has to be
+        available. Arbitrary custom named steps aren't supported as of now.
+
+        :returns: None
+        :rtype: None
+
+        """
+
         self.logger.info("Initializing Dataloaders")
 
         # FIXME: Remove this and streamline data and loaders
+        #        Maybe initialize dataloaders based on update_funcs? Not sure
         def _check_raw(loader, name):
             if loader and not hasattr(loader, "dataset"):
                 self.logger.warn(name + " loader doesn't have a dataset")
@@ -543,7 +627,7 @@ class Trainer:
         """
         self.logger.info("Initializing Metrics")
         self._metrics = {}
-        for x in self._trainer_params["training_steps"]:  # ["train", "val", "test"]
+        for x in self._update_functions:
             if self._dataloader_params[x] is not None:
                 self._metrics[x] = dict((l[1], {}) for l in self._update_functions[x].returns
                                         if l[0] == "metric")
@@ -575,8 +659,6 @@ class Trainer:
                 else:
                     self._extra_metrics[x] = {}
 
-    # TODO: Even though the name of "training_steps" is iterations, there still
-    #       have to be separate {train,val,test}_step_funcs, on separate datasets
     def _init_update_funcs(self):
         self.logger.info("Initializing Update Functions")
         for k, v in self._update_functions.items():
@@ -586,8 +668,6 @@ class Trainer:
                 self._val_step_func = self._update_functions["val"]
             elif k == "test":
                 self._test_step_func = self._update_functions["test"]
-            elif k == "iterations":
-                raise NotImplementedError
 
     def _init_epoch_runner(self):
         class Signals(object, metaclass=PropertyProxy):
@@ -630,6 +710,16 @@ class Trainer:
         return x
 
     def _set_model_active(self, model_name):
+        """Model name is an abstraction and a `model` can have multiple
+        :class:`torch.nn.Module` modules within it with separate criteria and
+        optimizers. It is the prerogative of the update_function to interact
+        with the model.
+
+        :param model_name: :class:`str` model_name
+        :returns: None
+        :rtype: None
+
+        """
         if model_name not in self._models.names:
             return False, self._loge(f"No such model {model_name}")
         else:
@@ -672,11 +762,12 @@ class Trainer:
                     return False, self._logi(f"Could not resume from {weights}. Error occured {e}")
                 return True, self._logi(f"Trying to {method} file")
 
+    # CHECK: I think it's more generic now.
     @POST
     @extras
     def call_user_func(self, data):
         """Call an arbitrary function. For now calls any of train/val/test or given
-        training_steps with a subset of the dataset.
+        update_funcs with a subset of the dataset.
 
         This function is more generic than call_adhoc_run in the sense that any
         adhoc function can be called on any attribute of the trainer (as of now).
@@ -1170,7 +1261,8 @@ class Trainer:
         except Exception as e:
             return False, self._loge(f"Error occured while reading data {e}")
         if not all(x in weights for x in model_names):
-            return False, self._logd(f"Not all {model_names} in given weights {weights.keys()}")
+            return False, self._logd(f"Check save file! " +
+                                     "Not all {model_names} in given weights {weights.keys()}")
         if not all(x in self._models.names for x in model_names):
             return False, self._logd(f"Some models currently not in scope")
         try:
@@ -1475,6 +1567,7 @@ class Trainer:
         self.logger.debug("Trying to save to %s" % save_path)
         save_state = {}
         save_state["epoch"] = self.epoch
+        save_state["iterations"] = self.iterations
         save_state["models"] = self._models.dump()
         save_state["model_params"] = copy.deepcopy(self._model_params)
         save_state["criteria_params"] = copy.deepcopy(self._criteria_params)
@@ -1568,6 +1661,7 @@ class Trainer:
         saved_state = torch.load(resume_path)
         # not_saved = saved_state["not_saved"]
         self.epoch = saved_state["epoch"]
+        self.iterations = saved_state["iterations"]
         self._model_params = saved_state["model_params"]
         self._criteria_params = saved_state["criteria_params"]
         if any([("collate_fn" in y or callable(y))
@@ -1601,15 +1695,26 @@ class Trainer:
         self._init_update_funcs()
         self._init_epoch_runner()
 
-        # NOTE: This is checked in Models now
-        # assert all(k in self._models.keys() for k in saved_state['models'])
-        # assert all(k in self.optimizers.keys() for k in saved_state['optimizers'])
-        # for k in self._models:
-        #     self._models[k].load_state_dict(saved_state["models"][k])
-        # for k in self.optimizers:
-        #     self.optimizers[k].load_state_dict(saved_state["optimizers"][k])
+        # NOTE: The model and optimizer checks are in Models
+        default = [*self._optimizer_params.keys()][0]
+        for k in saved_state["models"].keys():
+            if "optimizer" in saved_state["models"][k]:
+                self._logw(f"Optimizer shouldn't be in saved_state for model {k}")
+                x = saved_state.pop("optimizer")
+                saved_state["models"][k]["optimizer_name"] = x
+            elif "optimizer_name" not in saved_state["models"][k]:
+                optim_name = default
+                self._logw(f"No optimizer_name in saved_state for model {k}. Using {default}")
+            else:
+                optim_name = saved_state["models"][k]["optimizer_name"]
+                if optim_name not in self._optimizer_params:
+                    self._logw(f"{optim_name} not a known optimizer for model {k}. Using {default}")
+                    optim_name = default
+            optim = self._optimizer_params[optim_name]
+            saved_state["models"][k]["optimizer_name"] = optim_name
+            saved_state["models"][k]["optimizer"] = optim["function"](self._models[k].parameters(),
+                                                                      **optim["params"])
         self._models.load(saved_state["models"])
-
         diff = set(self._metrics.keys()).difference(saved_state["metrics"].keys())
         if diff:
             self.logger.warn(f"Some metric _steps_ aren't there in saved state {diff}")
@@ -1618,7 +1723,6 @@ class Trainer:
             if diff:
                 self.logger.warn(f"Some metrics {diff} in {k} aren't there in saved state")
         self._metrics = copy.deepcopy(saved_state["metrics"])
-        self.epoch = saved_state['epoch']
         self.logger.info("Resumed successfully")
 
     def check_and_save(self):
@@ -1687,7 +1791,7 @@ class Trainer:
         if os.path.exists(self.logdir):
             os.rename(self.logdir, self.logdir + "." + str(backup_num))
             os.mkdir(self.logdir)
-        self._init_criteria_optimizers()
+        # self._init_criteria_optimizers()
 
     @control
     def pause(self):
@@ -1742,6 +1846,17 @@ class Trainer:
         return self.__version__
 
     @property
+    def unique_id(self):
+        return self._unique_id
+
+    @property
+    def loop_type(self):
+        if "iterations" in self._trainer_params["training_steps"]:
+            return "iterations"
+        else:
+            return "epoch"
+
+    @property
     def logger(self):
         return self._logger
 
@@ -1786,7 +1901,10 @@ class Trainer:
 
     @property
     def active_model(self):
-        return self._update_functions[self._trainer_params["training_steps"][0]]._model_name
+        "Active model is both get and set by setting the _update_function"
+        # NOTE: Was self._update_functions[self._trainer_params["training_steps"][0]]._model_name
+        #       "train" is assumed to be present as a step
+        return self._update_functions["train"]._model_name
 
     # exclude properties beginning with _
     @property
@@ -1811,6 +1929,18 @@ class Trainer:
     @property
     def max_epochs(self):
         return self._max_epochs
+
+    @property
+    def iterations(self):
+        return self._iterations
+
+    @iterations.setter
+    def iterations(self, x):
+        self._iterations = x
+
+    @property
+    def max_iterations(self):
+        return self._max_iterations
 
     @property
     def controls(self):
@@ -1879,10 +2009,14 @@ class Trainer:
     # Internal property. Will not be exposed outside
     @property
     def _save_path_with_epoch(self):
+        if self.update_key == "epoch":
+            key = self.epoch
+        else:
+            key = self.iterations / self._hooks_run_iter_frequency
         model_names = "_".join(self._models.names)
         save_name = os.path.join(self._savedir, "_".join([str(self._unique_id),
                                                           model_names,
-                                                          "{:03}".format(self.epoch)]))
+                                                          "{:03}".format(key)]))
         return save_name
 
     @property
@@ -1907,16 +2041,11 @@ class Trainer:
         params["dataloader_params"] = self._dataloader_params
         return params
 
-    # as of now, returns all the dict. encoding is upto the backend
-    # TODO: Tag each property or dict with "param", so it can be automatically viewed
-    #       i.e., for_each x in self.__dict__, if self.__dict__[x]._tag == "param", then is_param
-    #       This can be accomplished with the `prop` function above. prop simply tags
-    #       whatever property that exists and that can be exported via @property
-    #       as an observable property
     @property
     def all_params(self):
         save_state = {}
         save_state["epoch"] = self.epoch
+        save_state["iterations"] = self._iterations
         # save_state["models"] = dict((k, v.state_dict()) for k, v in self._models.items())
         save_state["optimizers"] = dict((k, v.state_dict()) for k, v in self.optimizers.items())
         save_state["model_params"] = self._model_params
@@ -1943,7 +2072,6 @@ class Trainer:
         return self._metrics
 
     # TODO: Define what is a sample correctly
-    # TODO: Get random training samples also
     @property
     def val_samples(self):
         return dict((k, v) for k, v in self._metrics["val"].items()
@@ -2048,39 +2176,68 @@ class Trainer:
 
     # Train validate and stuff are relatively fine
     # TODO: custom reportables
+    # TODO: Things should get updated in a shared queue after each batch
+    # NOTE: Maybe not really required, as only that thread writes to those
+    #       variablesthingies.
+    # TODO: What if run has to be aborted in the middle?
+    #       Ensure that run returns
+    # TODO: What if the thread dies in the middle?
+    # epoch_loss, epoch_accuracy, total
+    # TODO: If abort, pause and await instructions?
     def train(self):
-        """Handles training.
+        """If `iterations` exists in self._trainer_params, then we do iterations only
+        training and loop_type is set to iterations, else we do standard epoch
+        wise training
 
         :returns: None
         :rtype: None
 
         """
-        self.logger.debug("Beginning training")
-        self.logger.debug("Total number of batches %d" % len(self.train_loader))
-        while self.epoch < self._max_epochs:
-            # TODO: Things should get updated in a shared queue after each batch
-            # NOTE: Maybe not really required, as only that thread writes to those
-            #       variablesthingies.
-            # TODO: What if run has to be aborted in the middle?
-            #       Ensure that run returns
-            # TODO: What if the thread dies in the middle?
-            self._epoch_runner.reset()
-            t = Thread(target=self._epoch_runner.run_train,
-                       args=[self.train_step_func, self.train_loader])
-            t.start()
-            t.join()
-            # epoch_loss, epoch_accuracy, total
-            # TODO: If abort, pause and await instructions?
+        def post_run_steps(loop_type):
+            """CRITICAL post_epoch_hooks have to be run correctly as I'm using the same
+                   epoch_runner, if it's reset without gathering data from
+                   run_train, then all the data will be lost
+
+            :param loop_type: :class:`str`
+            :returns: None
+            :rtype: None
+
+            """
             if self._abort:
                 self.logger.debug("Aborted training")
                 self._abort = False
             # Don't run post_epoch_hooks after abort
             else:
-                # TODO: CRITICAL post_epoch_hooks have to be run correctly as I'm using
-                #       the same epoch_runner, if it's reset without gathering data from
-                #       run_train, then all the data will be lost
                 self._run_post_epoch_hooks()
-                self.epoch += 1
+                if loop_type == "iterations":
+                    self._iterations += self._hooks_run_iter_frequency
+                else:
+                    self.epoch += 1
+        if "iterations" in self._trainer_params["training_steps"]:
+            loop_type = "iterations"
+        else:
+            loop_type = "epoch"
+        self._logd(f"Beginning training. Loop type is {loop_type}.")
+        if loop_type == "iterations":
+            self._logd(f"Total number of iterations is {self._max_iterations}")
+            self._logd(f"Will run hooks after {self._hooks_run_iter_frequency} iterations")
+            while self.iterations < self.max_iterations:
+                self._epoch_runner.reset()
+                t = Thread(target=self._epoch_runner.run_train,
+                           args=[self.train_step_func, self.train_loader, loop_type,
+                                 self._hooks_run_iter_frequency])
+                t.start()
+                t.join()
+                post_run_steps(loop_type)
+        else:
+            self._logd(f"Total number of batches is {len(self.train_loader)}")
+            while self.epoch < self._max_epochs:
+                self._epoch_runner.reset()
+                t = Thread(target=self._epoch_runner.run_train,
+                           args=[self.train_step_func, self.train_loader, loop_type])
+                t.start()
+                t.join()
+                post_run_steps(loop_type)
         self.logger.info('finished training')
 
     def validate(self):
@@ -2109,21 +2266,32 @@ class Trainer:
         else:
             self.logger.info("Finished Testing")
 
-    # TODO: There should be a separate definition of "steps" there where it
-    # could be {train, val, test} or simply iterations
+    # DONE: There should be a separate definition of "steps" there where it
+    #       could be {train, val, test} or simply iterations
+    #       NOTE: Now iterations are also handled.
     def _log_metrics(self):
+        if "iterations" in self._trainer_params["training_steps"]:
+            update_key = self.iterations / self._hooks_run_iter_frequency
+            key_name = "iterations chunk"
+        else:
+            update_key = self.epoch
+            key_name = "epoch"
         for step in self._metrics:
             if getattr(self, step + "_loader"):
                 metric_names = self._metrics[step]
-                self.logger.debug(f"Total datapoints processed for {step} step {self._metrics[step]['num_datapoints'][self.epoch]}")
+                self._logd(f"Total datapoints processed for {step} step in {key_name}: {update_key}" +
+                           " {self._metrics[step]['num_datapoints'][update_key]}")
                 for m in metric_names:
-                    if self.epoch in self._metrics[step][m]:
-                        self.logger.debug(f"Value of metric {m} for {step} step is: {self._metrics[step][m][self.epoch]}")
+                    if update_key in self._metrics[step][m]:
+                        self.logger.debug(f"Value of metric {m} for {step} step in {key_name} is:" +
+                                          " {self._metrics[step][m][update_key]}")
                     else:
-                        self.logger.debug(f"No value recorded for {step}_step, metric {m} and epoch {self.epoch}")
+                        self.logger.debug(f"No value recorded for {step}_step," +
+                                          " metric {m} and {key_name} {update_key}")
             else:
                 self.logger.debug(f"No dataloader for {step}")
 
+    # FIXME: TRAINING_STEPS
     # NOTE: For this a sample function has to be defined
     def _log_samples(self, fraction=0.01):
         """For a few randomly selected datapoints, log the datapoint_name and
@@ -2147,16 +2315,20 @@ class Trainer:
         :returns: None
         :rtype: None
         """
-        self.logger.debug("Updating the metrics")
+        self._logd("Updating the metrics")
+        if "iterations" in self._trainer_params["training_steps"]:
+            update_key = self.iterations / self._hooks_run_iter_frequency
+        else:
+            update_key = self.epoch
         for step in self._metrics:
             metric_names = self._metrics[step]
-            self._metrics[step]["num_datapoints"][self.epoch] =\
+            self._metrics[step]["num_datapoints"][update_key] =\
                 self._epoch_runner.total_samples[step]
             for m in metric_names:
                 all_vals = [x[3] for x in self._epoch_runner.batch_vars
                             if x[0] == step and x[2] == m]
                 if len(all_vals):
-                    self._metrics[step][m][self.epoch] = np.mean(all_vals)
+                    self._metrics[step][m][update_key] = np.mean(all_vals)
 
     # TODO: I should log some image names and output text also
     #       That should be there in _log_samples

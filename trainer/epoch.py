@@ -24,6 +24,9 @@ class BatchVars:
             self._index[x[1]] = {}
         self._index[x[1]][x[2]] = len(self._list) - 1
 
+    def __len__(self):
+        return len(self._list)
+
     def __getitem__(self, i):
         return self._list[i]
 
@@ -53,6 +56,10 @@ class BatchVars:
 # Perhaps decouple the Epoch entirely from the wrapper
 # with a tcp socket like thingy
 class Epoch:
+    """Epoch is an abstraction of epoch and in fact can not be a cyclical train/val
+    type but can be iterations or arbitrary training procedure. It's simply a
+    wrapper to hold the metrics and other variables collected while training.
+    """
     def __init__(self, metrics, signals, device_poll, extra_reportables):
         self.metrics = metrics["metrics"]
         self.extra_metrics = metrics["extra_metrics"]
@@ -129,21 +136,29 @@ class Epoch:
 
     # TODO: For all the timing hooks, ensure that paused time is not
     #       counted towards running
-    def run_train(self, train_step, train_loader, get_raw=False):
-        """Run the training loop until completion. `train_step` is purposely really simple
+    def run_train(self, train_step, train_loader, loop_type, num_iterations=0, get_raw=False):
+        """Run the training loop until completion. `train_step` is purposely really
+        simple. training
 
-        :param train_step: :class: `function` which takes a batch, processes it and returns output
-        :param train_loader: :class: `torch.nn.utils.data.DataLoader`
+        :param train_step:   :class:`function` which takes a batch, processes it and returns output
+        :param train_loader: :class:`torch.nn.utils.data.DataLoader`
+        :param loop_type:    :class:`str` `completion` or `iterations`. If the loop_type is 
+                             `completion` the loop is run until the train_loader is exhausted.
+                              Otherwise, the loop is run for num_iterations.
         :returns: None
         :rtype: None
 
         """
-
+        if loop_type == "iterations":
+            assert num_iterations, "num_iterations cannot be zero with loop_type iterations"
         self._running = True
         self._current_loop = "train"
-        for i, batch in enumerate(train_loader):
-            if not batch:
-                break
+        assert iter(train_loader), "train_loader has no iterator"
+        assert train_loader.batch_size, "train_loader has no batch_size"
+        self._log("Starting run_train")
+        self._log(f"Train Loader properties: {len(train_loader)}")
+
+        def do_train(batch):
             start = time.time()
             self.device_poll.start()
             if get_raw:
@@ -163,10 +178,25 @@ class Epoch:
             received["cpu_min_mem"] = self.device_poll.cpu_min_mem
             self.batch_num["train"] += 1
             self._run_post_batch_hooks(**{"step": "train", **received})
-            if self.signals.aborted:  # has to be here else, break won't work
-                self._running = False
-                self._current_loop = "idle"
-                break
+        if loop_type == "iterations":
+            for i in range(num_iterations):
+                batch = train_loader.__iter__().__next__()
+                if not batch:
+                    break
+                do_train(batch)
+                if self.signals.aborted:  # has to be here else, break won't work
+                    self._running = False
+                    self._current_loop = "idle"
+                    break
+        else:
+            for i, batch in enumerate(train_loader):
+                if not batch:
+                    break
+                do_train(batch)
+                if self.signals.aborted:  # has to be here else, break won't work
+                    self._running = False
+                    self._current_loop = "idle"
+                    break
         self._running = False
         self._current_loop = "idle"
 
@@ -174,6 +204,8 @@ class Epoch:
         if hasattr(self, "logger"):
             self.logger.debug(x)
 
+    # NOTE: run_val and run_test don't have option to run with only iterations right
+    #       now.
     def run_val(self, val_step, val_loader, get_raw=False):
         self._running = True
         self._current_loop = "val"
@@ -227,6 +259,96 @@ class Epoch:
         self._running = False
         self._current_loop = "idle"
 
+    # def run_val(self, val_step, val_loader, loop_type, num_iterations=0, get_raw=False):
+    #     if loop_type == "iterations":
+    #         assert num_iterations, "num_iterations cannot be zero with loop_type iterations"
+    #     self._running = True
+    #     self._current_loop = "val"
+    #     # CHECK: There may not be an iter
+    #     assert iter(val_loader), "val_loader has no iterator"
+    #     assert val_loader.batch_size, "val_loader has no batch_size"
+    #     self._log("Starting run_val")
+    #     self._log(f"Val Loader properties: {len(val_loader)}")
+
+    #     def do_val(batch):
+    #         start = time.time()
+    #         if get_raw:
+    #             raw, batch = batch[0], batch[1]
+    #         received = val_step(batch)
+    #         end = time.time()
+    #         if self.keep_time["val"]:
+    #             received["time"] = end - start
+    #         if get_raw:
+    #             received["raw"] = raw
+    #         self.batch_num["val"] += 1
+    #         self._run_post_batch_hooks(**{"step": "val", **received})
+    #     if loop_type == "iterations":
+    #         for i in num_iterations:
+    #             batch = val_loader.__next__()  # or iter.next?
+    #             if not batch:
+    #                 break
+    #             do_val(batch)
+    #             if self.signals.aborted:
+    #                 self._running = False
+    #                 self._current_loop = "idle"
+    #                 break
+    #     else:
+    #         for i, batch in enumerate(val_loader):
+    #             if not batch:
+    #                 break
+    #             do_val(batch)
+    #             if self.signals.aborted:
+    #                 self._running = False
+    #                 self._current_loop = "idle"
+    #                 break
+    #     self._running = False
+    #     self._current_loop = "idle"
+
+    # def run_test(self, test_step, test_loader, loop_type, num_iterations=0, get_raw=False):
+    #     if loop_type == "iterations":
+    #         assert num_iterations, "num_iterations cannot be zero with loop_type iterations"
+    #     self._running = True
+    #     self._current_loop = "test"
+    #     # CHECK: There may not be an iter
+    #     assert iter(test_loader), "test_loader has no iterator"
+    #     assert test_loader.batch_size, "test_loader has no batch_size"
+    #     self._log("Starting run_test")
+    #     self._log(f"Test Loader properties: {len(test_loader)}")
+
+    #     def do_test(batch):
+    #         start = time.time()
+    #         if get_raw:
+    #             raw, batch = batch[0], batch[1]
+    #         received = test_step(batch)
+    #         end = time.time()
+    #         if self.keep_time["test"]:
+    #             received["time"] = end - start
+    #         if get_raw:
+    #             received["raw"] = raw
+    #         self.batch_num["test"] += 1
+    #         self._run_post_batch_hooks(**{"step": "test", **received})
+    #     if loop_type == "iterations":
+    #         for i in num_iterations:
+    #             batch = test_loader.__next__()  # or iter.next?
+    #             if not batch:
+    #                 break
+    #             do_test(batch)
+    #             if self.signals.aborted:
+    #                 self._running = False
+    #                 self._current_loop = "idle"
+    #                 break
+    #     else:
+    #         for i, batch in enumerate(test_loader):
+    #             if not batch:
+    #                 break
+    #             do_test(batch)
+    #             if self.signals.aborted:
+    #                 self._running = False
+    #                 self._current_loop = "idle"
+    #                 break
+    #     self._running = False
+    #     self._current_loop = "idle"
+
     def _run_post_batch_hooks(self, **kwargs):
         all_hooks = self.all_post_batch_hooks
         hook_prefixes = self.post_batch_hooks_to_run[kwargs["step"]]
@@ -235,6 +357,7 @@ class Epoch:
 
     # NOTE: Aborting while paused is handled externally.
     # TODO: Ideally it should be async, but that's a bit complicated
+    #       I can use async_get maybe from concurrent.futures or something
     def _paused_post_batch_hook(self, **kwargs):
         self._waiting = True
         while self.signals.paused:

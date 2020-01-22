@@ -760,7 +760,7 @@ class Trainer:
                     self._resume_from_path(os.path.join(self._savedir, weights))
                 except Exception as e:
                     return False, self._logi(f"Could not resume from {weights}. Error occured {e}")
-                return True, self._logi(f"Trying to {method} file")
+                return True, self._logi(f"{method}ing from file")
 
     # CHECK: I think it's more generic now.
     @POST
@@ -1062,6 +1062,20 @@ class Trainer:
             return False, self._loge(f"Unknown report function {report_function}.")
         else:
             report_function = self._user_funcs[data["report_function"]]
+        # NOTE: Should I just call the report func all the time? and it should
+        #       be the report func's responsibility to check the data and
+        #       respond? Make the report func a generic class?  Although the
+        #       whole point was to avoid boilerplate.
+        #       - One way could be to wrap the function in a class and replace the
+        #         call method with the function. But then the function will never
+        #         access "self" and in any case has no idea what the instance may
+        #         have as its remote and opaque.
+        #       - And of course, the whole point of "Exposes" is to make sure that
+        #         the function's attributes are declared alongside the function to
+        #         enhance readability. I can declare it somewhere in the class but...
+        #       - I can make a self._exposes attribute which contains the func_name
+        #         list
+
         # TODO: "check" would be better.  In fact these checks should be done
         #       before the func is called
         if not all(x in self.report_adhoc_run.exposes
@@ -1076,6 +1090,7 @@ class Trainer:
         else:
             param_names = list(inspect.signature(report_function).parameters.keys())
             params = {}
+            # CHECK: Here. Can this be changed?
             for x in param_names:
                 params[x] = locals()[x]
             output = report_function(**params)
@@ -1279,10 +1294,62 @@ class Trainer:
         os.mkdir(os.path.join("trainer_modules", dirname))
         return dirname
 
+    @property
+    def progress(self):
+        predicate = "iterations" in self._trainer_params["training_steps"]
+        cur_step = self.iterations / self._hooks_run_iter_frequency\
+            if predicate else self.epoch
+        max_step = self.max_iterations / self._hooks_run_iter_frequency\
+            if predicate else self.max_epochs
+        cur_round = self._epoch_runner.info["batch_nums"]["train"]
+        max_round = self._trainer_params["hooks_run_iter_frequency"]\
+            if predicate else len(self.train_loader)
+        return {"cur_step": cur_step, "max_step": max_step,
+                "cur_round": cur_round, "max_round": max_round}
+
+    # @property
+    # def update_max(self):
+    #     if "iterations" in self._trainer_params["training_steps"]:
+    #         return self.max_iterations / self._hooks_run_iter_frequency
+    #     else:
+    #         return self.max_epochs
+
     # FIXME: self.user_funcs MAY create problems
     @property
     def user_funcs(self):
         return [x for x in self._user_funcs]
+
+    @POST
+    @helpers
+    def hack_param(self, data):
+        """Update a param as a hack. Data is assumed to be a pair of `{key, [type, value]}`
+        dictionary."""
+        statuses = []
+        for k, v in data.items():
+            if not hasattr(self, k):
+                self._logw(f"{k} not an attribute of {self}")
+            else:
+                try:
+                    if v["type"] in {"str", "int", "float"}:
+                        _v = {"str": str, "int": int, "float": float}[v["type"]](v["value"])
+                        if k not in self.__class__.__dict__:
+                            setattr(self, k, _v)
+                        else:
+                            self._loge(f"Cannot modify class attr {k}")
+                            statuses.append(False)
+                        statuses.append(True)
+                    else:
+                        self._loge(f"Not a recognized type for {k} {v['type']}")
+                        statuses.append(False)
+                except Exception as e:
+                    statuses.append(False)
+                    self._loge(f"could not set value for {k}: {v['value']}. Error {e}")
+        if all(statuses):
+            return True, "All values updated!"
+        elif any(statuses):
+            return True, "Some values could not be updated."
+        else:
+            return False, "None of the values could be updated."
 
     @POST
     @helpers
@@ -1592,13 +1659,19 @@ class Trainer:
                                 save_state["dataloader_params"][k][a][x] = y
                     else:
                         if callable(value):
-                            self.logger.warn(f"callable {value} in dataloader {k}" +
-                                             f" params {a} will not be saved")
+                            self._logw(f"callable {value} in dataloader {k}" +
+                                       f" params {a} will not be saved")
                             save_state["dataloader_params"][k][a] = "callable_" +\
                                 type(value).__qualname__
                         else:
                             save_state["dataloader_params"][k][a] = value
-        save_state["trainer_params"] = copy.deepcopy(self._trainer_params)
+        save_state["trainer_params"] = {}
+        for k, v in self._trainer_params.items():
+            if callable(v):
+                self._logw(f"callable {v} for trainer_params {k} will not be saved")
+                save_state["trainer_params"][k] = "callable_" + type(v).__qualname__
+            else:
+                save_state["trainer_params"][k] = copy.deepcopy(v)
         save_state["metrics"] = self._metrics
         self.logger.info("Saving to %s" % save_path)
 
@@ -1678,7 +1751,11 @@ class Trainer:
                     else:
                         if isinstance(value, str) and not value.startswith("callable_"):
                             self._dataloader_params[k][a] = value
-        self._trainer_params = saved_state["trainer_params"]
+        for k, v in saved_state["trainer_params"].items():
+            if isinstance(v, str) and v.startswith("callable_"):
+                self._logw("callable {k} not restored in trainer_params")
+            else:
+                self._trainer_params[k] = saved_state["trainer_params"][k]
         self._sanity_check()
         # FIXME: Init again only if model or model parameters have changed
         self._init_models()
@@ -1723,7 +1800,7 @@ class Trainer:
             if diff:
                 self.logger.warn(f"Some metrics {diff} in {k} aren't there in saved state")
         self._metrics = copy.deepcopy(saved_state["metrics"])
-        self.logger.info("Resumed successfully")
+        self._logi("Resumed successfully")
 
     def check_and_save(self):
         assert ("when" in self._check_func.requires and
@@ -1825,13 +1902,30 @@ class Trainer:
         if not paused:
             self.pause()
         # ensure paused
-        while not self._epoch_runner.waiting:
-            time.sleep(1)
-        self.logger.warn("Trying force save")
-        self._save(self._save_path_with_epoch + "_force")
+        if self._epoch_runner.running:
+            while not self._epoch_runner.waiting:
+                time.sleep(1)
+        self._logw("Trying force save")
+        try:
+            self._save(self._save_path_with_epoch + "_force")
+            status = True
+            message = f"Saved to {self._save_path_with_epoch}" + "_force"
+        except Exception as e:
+            status = False
+            message = f"Could not save to {self._save_path_with_epoch}" + "_force" +\
+                f" error {e}"
         # TODO: Keep track of self._abort
         if not paused and not self._abort:
             self.resume()
+        return status, message
+
+    @control
+    def force_eval(self):
+        pass
+
+    @control
+    def force_test(self):
+        pass
 
     # CHECK: How do I just run eval right at the beginning?
     # TODO: There should be a control to set current_loop to ["train", "val", "test"]
@@ -1915,8 +2009,12 @@ class Trainer:
                 (x in {"_extras", "_helpers"} or not x.startswith("_"))]
 
     @property
-    def epoch_progress(self):
-        return self._epoch_runner.info["batch_nums"]
+    def current_step_progress(self):
+        if "iterations" in self._trainer_params["training_steps"]:
+            return self._epoch_runner.info["batch_nums"],\
+                self._trainer_params["hooks_run_iter_frequency"]
+        else:
+            return self._epoch_runner.info["batch_nums"], len(self.train_loader)
 
     @property
     def epoch(self):
@@ -2009,14 +2107,14 @@ class Trainer:
     # Internal property. Will not be exposed outside
     @property
     def _save_path_with_epoch(self):
-        if self.update_key == "epoch":
-            key = self.epoch
+        if "iterations" in self._trainer_params["training_steps"]:
+            update_key = self.iterations / self._hooks_run_iter_frequency
         else:
-            key = self.iterations / self._hooks_run_iter_frequency
+            update_key = self.epoch
         model_names = "_".join(self._models.names)
         save_name = os.path.join(self._savedir, "_".join([str(self._unique_id),
                                                           model_names,
-                                                          "{:03}".format(key)]))
+                                                          "{:03}".format(update_key)]))
         return save_name
 
     @property

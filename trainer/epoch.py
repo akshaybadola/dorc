@@ -105,9 +105,9 @@ class Epoch:
     #       copy/deepcopy may not be enough
     @property
     def info(self):
-        return {"total_samples": self.total_samples.copy(),
-                "batch_nums": self.batch_num.copy(),
-                "batch_vars": self.batch_vars.copy()}
+        return {"total_samples": self.total_samples,
+                "batch_nums": self.batch_num,
+                "batch_vars": self.batch_vars}
 
     @property
     def all_post_batch_hooks(self):

@@ -14,7 +14,7 @@ def _serialize_defaults(x):
     elif x is None:
         return json.dumps(False)
     else:
-        return json.dumps(f"<<{type(x).__qualname__}>>")
+        return str(x)
 
 
 def _dump(x):

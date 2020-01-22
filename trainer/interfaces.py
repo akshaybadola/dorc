@@ -108,8 +108,11 @@ class FlaskInterface:
             self.context = None
 
     def trainer_control(self, func_name):
-        self.trainer.__class__.__dict__[func_name](self.trainer)
-        return _dump("Performing %s\n" % func_name)
+        retval = getattr(self.trainer, func_name)()
+        if retval:
+            return _dump(retval)
+        else:
+            return _dump("Performing %s\n" % func_name)
 
     def trainer_props(self, prop_name):
         return _dump(self.trainer.__class__.__dict__[prop_name].fget(self.trainer))

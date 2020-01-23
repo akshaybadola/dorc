@@ -125,8 +125,19 @@ class Epoch:
         for _x in x:
             self._post_batch_hooks_to_run[_x] = x[_x]
 
-    # TODO: Format it better in a yield manner so it isn't in a loop.
+    def _toggle_running(self):
+        if self.running:
+            self._running = False
+        elif not self.running:
+            self._running = True
 
+    def toggle_waiting(self):
+        if self.waiting:
+            self._waiting = False
+        elif not self.waiting:
+            self._waiting = True
+
+    # TODO: Format it better in a yield manner so it isn't in a loop.
     # CHECK: Why are there three functions here? Backprop happens in funcs
     #        anyway. Since I've decoupled the epoch, this should be better.
     #        One issue may be the batch_vars for each, as if the epoch is
@@ -151,7 +162,8 @@ class Epoch:
         """
         if loop_type == "iterations":
             assert num_iterations, "num_iterations cannot be zero with loop_type iterations"
-        self._running = True
+        if not self.running:
+            self._toggle_running()
         self._current_loop = "train"
         assert iter(train_loader), "train_loader has no iterator"
         assert train_loader.batch_size, "train_loader has no batch_size"
@@ -194,10 +206,12 @@ class Epoch:
                     break
                 do_train(batch)
                 if self.signals.aborted:  # has to be here else, break won't work
-                    self._running = False
+                    if self.running:
+                        self._toggle_running()
                     self._current_loop = "idle"
                     break
-        self._running = False
+        if self.running:
+            self._toggle_running()
         self._current_loop = "idle"
 
     def _log(self, x):
@@ -207,7 +221,8 @@ class Epoch:
     # NOTE: run_val and run_test don't have option to run with only iterations right
     #       now.
     def run_val(self, val_step, val_loader, get_raw=False):
-        self._running = True
+        if not self.running:
+            self._toggle_running()
         self._current_loop = "val"
         # CHECK: There may not be an iter
         assert iter(val_loader), "val_loader has no iterator"
@@ -232,11 +247,13 @@ class Epoch:
                 self._running = False
                 self._current_loop = "idle"
                 break
-        self._running = False
+        if self.running:
+            self._toggle_running()
         self._current_loop = "idle"
 
     def run_test(self, test_step, test_loader, get_raw=False):
-        self._running = True
+        if not self.running:
+            self._toggle_running()
         self._current_loop = "test"
         for i, batch in enumerate(test_loader):
             start = time.time()
@@ -253,10 +270,12 @@ class Epoch:
             self.batch_num["test"] += 1
             self._run_post_batch_hooks(**{"step": "test", **received})
             if self.signals.aborted:
-                self._running = False
+                if self.running:
+                    self._toggle_running()
                 self._current_loop = "idle"
                 break
-        self._running = False
+        if self.running:
+            self._toggle_running()
         self._current_loop = "idle"
 
     # def run_val(self, val_step, val_loader, loop_type, num_iterations=0, get_raw=False):
@@ -359,10 +378,10 @@ class Epoch:
     # TODO: Ideally it should be async, but that's a bit complicated
     #       I can use async_get maybe from concurrent.futures or something
     def _paused_post_batch_hook(self, **kwargs):
-        self._waiting = True
+        self.toggle_waiting()
         while self.signals.paused:
             time.sleep(5)
-        self._waiting = False
+        self.toggle_waiting()
 
     # def _abort_post_batch_hook(self, **kwargs):
     #     if self.signals.aborted:

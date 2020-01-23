@@ -409,7 +409,7 @@ class Trainer:
         self.__props.add("items_to_log_dict")  # CHECK: WTF is this?
 
         # running status
-        self.__props.add("aborted")
+        # self.__props.add("aborted")
         self.__props.add("current_run")
         self.__props.add("paused")
         self.__props.add("best_save")  # FIXME: Really?
@@ -422,7 +422,7 @@ class Trainer:
 
         self.logger.info("Initializing State Variables")
         self._paused = True
-        self._abort = False
+        self._aborted = False   # prev_loop_aborted
         # Initialize hooks
         # Validate test and save now can never be removed, LOL
         #
@@ -445,6 +445,128 @@ class Trainer:
         self._init_nvml()
         self._temp_runner = SimpleNamespace()
         self._flag_adhoc_func_running = False
+        self._control_transitions = {"start": ("paused_none", "unpaused_train"),
+                                     "pause": ("unpaused_any", "paused_any"),
+                                     "resume": ("paused_any", "unpaused_any"),
+                                     "reset": ("any_any", "paused_none")}
+        steps = self._trainer_params["training_steps"]
+        if "iterations" in steps:
+            self._transition_steps = {"train", "val", "test", "none"}
+        else:
+            self._transition_steps = steps.union({"none"})
+        self._forced_states = {"save", "eval", "test", "stop"}
+        self._current_state = "normal_paused_none"
+
+    def _allowed_transition(self, a, b):
+        a_force, a_run, a_step = a.split("_")
+        b_force, b_run, b_step = b.split("_")
+        # if a_run == b_run == "paused":  # can we have normal_paused_train -> normal_paused_val?
+        #     return False
+        # if a_force == b_force == "force":
+        #     return False
+        allowed_predicate_list = [(a_force == "normal" == b_force
+                                   and a_step == b_step  # in the same step
+                                   and ((a_run != b_run and a_run in {"running", "paused"}
+                                         and b_run in {"running", "paused"})  # running <-> paused
+                                        # only running -> finished
+                                        or (a_run == "running" and b_run == "finished"))),
+                                  (a_force == "normal" == b_force
+                                   and ((a_step != b_step
+                                         and a_run == "finished"  # finished -> {running, paused}
+                                         and b_run in {"running", "paused"})
+                                        or (a_step == "none" and a_run == "paused"  # if none -> any
+                                            and b_run in {"running", "paused"}))),  # paused -> {running, paused}
+                                  (a_force == "normal" != b_force        # normal -> force
+                                   and a_run != "running"
+                                   and b_run == "running"  # any -> running
+                                   and a_step != b_step
+                                   and a_step not in self._forced_states
+                                   and b_step in self._forced_states),  # step must change
+                                  (a_force == "force" != b_force
+                                   # paused previous first
+                                   and a_run == "finished" and b_run in {"paused", "running"}
+                                   and a_step in self._forced_states
+                                   and b_step not in self._forced_states)]
+        if any(allowed_predicate_list):
+            return allowed_predicate_list, True
+        else:
+            return allowed_predicate_list, False
+
+    def _stop_if_paused_or_running(self):
+        """Should not be called from `self._transition`
+
+        :returns: None
+        :rtype: None
+
+        """
+        force, run, step = self.current_state.split("_")
+        if run == "running":
+            self._transition(self.current_state, "_".join(force, "paused", step))
+        self._transition(self.currrent_state, "_".join(force, "finished", step))
+
+    def _pause_if_running(self):
+        """Should not be called from `self._transition`
+
+        :returns: None
+        :rtype: None
+
+        """
+        force, run, step = self.current_state.split("_")
+        if run == "running":
+            self._transition(self.currrent_state, "_".join(force, "paused", step))
+
+    def _ensure_paused(self):
+        if not self._paused:
+            self._paused = True
+        if self._epoch_runner.running:
+            while not self._epoch_runner.waiting:
+                time.sleep(1)
+                self._logd(f"Epoch runner is running")
+
+    def _ensure_unpaused(self):
+        if self.paused:
+            self._paused = False
+        if self._epoch_runner.waiting:
+            self._logd(f"Epoch runner is waiting. Should not wait.")
+
+    def _ensure_ready(self):
+        if self._epoch_runner.waiting:
+            self._epoch_runner.toggle_waiting()
+
+    def _ensure_finished(self):
+        self._paused = True
+        if self._epoch_runner.running:
+
+    def _transition(self, _from, _to):
+        if _from != self._current_state:
+            return False, self._loge(f"from state != current state: " +
+                                     "{_from} != {self._current_state}")
+        if not self._allowed_transition(_from, _to):
+            return False, self._loge(f"State transition {_from} -> {_to} is not allowed")
+        self._logd(f"Trying to transition from {_from} to {_to}")
+        a_force, a_run, a_step = _from.split("_")
+        b_force, b_run, b_step = _to.split("_")
+        if a_run == "paused":
+            self._ensure_paused()
+        if a_run == "finished":
+            self._ensure_finished()
+        if a_force == "normal" and b_force == "force":
+            self._ensure_paused()
+            self._prev_normal_state = self._current_state
+            self._current_state = _to
+        elif a_force == "force" and b_force == "normal":
+            assert _to == self._prev_normal_state
+            self._current_state = _to
+            self._ensure_unpaused()
+        if a_force == "normal" == b_force:
+            self._current_state = _to
+        if b_run == "running":
+            self._ensure_unpaused()
+        if b_run == "paused":
+            self._ensure_paused()
+        if b_run in {"paused", "running"}:
+            self._ensure_ready()
+        return True, self._logd("Transtioned from {_from} to {_to}")
 
     # TODO: For each such variable i.e., static, property etc. add a decorator
     #       or a function such that they're added to that list e.g.,
@@ -453,13 +575,13 @@ class Trainer:
     #       code, I don't forget to initialize them somewhere
     #
     #       In the middle of file:
-    #       
+    #
     #       >>> self.add_to_property_vars(meh)
     #
     #       In _init_property_vars:
     #
     #       >>> assert all(getattr(x) for x in self._property_vars)
-    #       
+    #
     #       Or something like that.
     def _init_property_vars(self):
         self.logger.info("Initializing Property Variables")
@@ -1302,8 +1424,7 @@ class Trainer:
         max_step = self.max_iterations / self._hooks_run_iter_frequency\
             if predicate else self.max_epochs
         cur_round = self._epoch_runner.info["batch_nums"]["train"]
-        max_round = self._trainer_params["hooks_run_iter_frequency"]\
-            if predicate else len(self.train_loader)
+        max_round = self._hooks_run_iter_frequency if predicate else len(self.train_loader)
         return {"cur_step": cur_step, "max_step": max_step,
                 "cur_round": cur_round, "max_round": max_round}
 
@@ -1334,6 +1455,7 @@ class Trainer:
                         _v = {"str": str, "int": int, "float": float}[v["type"]](v["value"])
                         if k not in self.__class__.__dict__:
                             setattr(self, k, _v)
+                            self._logi(f"Set param {k} to {_v} successfully!")
                         else:
                             self._loge(f"Cannot modify class attr {k}")
                             statuses.append(False)
@@ -1753,7 +1875,7 @@ class Trainer:
                             self._dataloader_params[k][a] = value
         for k, v in saved_state["trainer_params"].items():
             if isinstance(v, str) and v.startswith("callable_"):
-                self._logw("callable {k} not restored in trainer_params")
+                self._logw(f"callable {k} not restored in trainer_params")
             else:
                 self._trainer_params[k] = saved_state["trainer_params"][k]
         self._sanity_check()
@@ -1883,28 +2005,32 @@ class Trainer:
     @control
     def start(self):
         self.logger.info("Starting")
-        self._paused = False
+        self._transition("normal_paused_none", "normal_paused_train")
         Thread(target=self.train).start()
 
     # What does stop even do?
+    # Stop should
     @control
     def stop(self):
-        self.logger.info("Stopping")
-        self.abort_current_loop()
+        """`stop` stops training entirely. While `self.abort` should just abort the
+        current loop like train_epoch, val, test etc.
+
+        :returns: None
+        :rtype: None
+
+        """
+        self._abort_current()
         self.save()
+        self._transition(self.current_state, "force_finished_stop")
+        return True, self._logi("Forced stopped and saved")
         # listen for commands
 
     # Actually a "force_save", pause and then save
     @control
     def save(self):
         self.logger.info("Saving")
-        paused = self.paused
-        if not paused:
-            self.pause()
-        # ensure paused
-        if self._epoch_runner.running:
-            while not self._epoch_runner.waiting:
-                time.sleep(1)
+        self._pause_if_running()
+        self._transition(self.current_state, "force_running_save")
         self._logw("Trying force save")
         try:
             self._save(self._save_path_with_epoch + "_force")
@@ -1914,26 +2040,37 @@ class Trainer:
             status = False
             message = f"Could not save to {self._save_path_with_epoch}" + "_force" +\
                 f" error {e}"
-        # TODO: Keep track of self._abort
-        if not paused and not self._abort:
-            self.resume()
+        self._transition(self.current_state, self._prev_normal_state)
         return status, message
 
     @control
     def force_eval(self):
-        pass
+        self._pause_if_running()
+        self._transition(self.current_state, "force_running_eval")
+        # with a _temp_epoch_runner
+        # self.validate()
+        # Save everything to a temp_run_metrics
+        self._transition(self.current_state, self._prev_normal_state)
 
     @control
     def force_test(self):
-        pass
+        self._pause_if_running()
+        self._transition(self.current_state, "force_running_test")
+        # with a _temp_epoch_runner
+        # self.test()
+        self._transition(self.current_state, self._prev_normal_state)
 
-    # CHECK: How do I just run eval right at the beginning?
-    # TODO: There should be a control to set current_loop to ["train", "val", "test"]
     @control
-    def abort_current_loop(self):
-        self.logger.info("Aborting")
-        self._paused = False
-        self._abort = True
+    def abort(self):
+        try:
+            self._abort_current()
+        except Exception as e:
+            return False, self._logi(f"Could not abort {self.current_state}. Error {e}")
+        return True, self._logi(f"Aborted {self.current_state}")
+
+    def _abort_current(self):
+        self._stop_if_running()
+        self._transition(self.current_state, )
 
     @property
     def version(self):
@@ -1942,6 +2079,10 @@ class Trainer:
     @property
     def unique_id(self):
         return self._unique_id
+
+    @property
+    def current_state(self):
+        return self._current_state
 
     @property
     def loop_type(self):
@@ -2008,13 +2149,13 @@ class Trainer:
                 x != "props" and
                 (x in {"_extras", "_helpers"} or not x.startswith("_"))]
 
-    @property
-    def current_step_progress(self):
-        if "iterations" in self._trainer_params["training_steps"]:
-            return self._epoch_runner.info["batch_nums"],\
-                self._trainer_params["hooks_run_iter_frequency"]
-        else:
-            return self._epoch_runner.info["batch_nums"], len(self.train_loader)
+    # @property
+    # def current_step_progress(self):
+    #     if "iterations" in self._trainer_params["training_steps"]:
+    #         return self._epoch_runner.info["batch_nums"],\
+    #             self._trainer_params["hooks_run_iter_frequency"]
+    #     else:
+    #         return self._epoch_runner.info["batch_nums"], len(self.train_loader)
 
     @property
     def epoch(self):
@@ -2058,18 +2199,6 @@ class Trainer:
     @property
     def _extras(self):
         return dict((x.__name__, x) for x in extras.members)
-
-    # CHECK
-    # Why abort the running loop? The wrapper itself is paused?
-    @property
-    def aborted(self):
-        """returns whether the current loop was aborted or not
-
-        :returns: abort state
-        :rtype: bool
-
-        """
-        return self._abort
 
     @property
     def current_run(self):

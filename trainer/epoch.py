@@ -87,7 +87,19 @@ class Epoch:
     def reset(self):
         self.total_samples = {"train": 0, "val": 0, "test": 0}
         self.batch_num = {"train": 0, "val": 0, "test": 0}
+        self.finish()
         self.batch_vars = BatchVars()
+
+    def finish(self):
+        """Finishes the current execution loop by resetting running and waitin flags
+        `self._waiting` and `self._running` are set to False
+
+        :returns: 
+        :rtype: 
+
+        """
+        self._waiting = False
+        self._running = False
 
     @property
     def current_loop(self):

@@ -534,8 +534,24 @@ class Trainer:
             self._epoch_runner.toggle_waiting()
 
     def _ensure_finished(self):
-        self._paused = True
+        """`self._ensure_paused` should be called before calling _ensure_finished
+        :class:`Epoch.finish` doesn't actually reset the metrics and variables
+        stored in the batch.
+
+        :returns: None
+        :rtype: None
+
+        """
         if self._epoch_runner.running:
+            self._loge("epoch_runner running while _ensure_finished called")
+            return
+        if not self._epoch_runner.waiting:
+            self._logd("Waiting for epoch_runner to finsih")
+            while not self._epoch_runner.waiting:
+                time.sleep(1)
+        self._epoch_runner.finish()
+        self.update_metrics_post_epoch_hook()
+        self._epoch_runner.reset()
 
     def _transition(self, _from, _to):
         if _from != self._current_state:
@@ -562,11 +578,13 @@ class Trainer:
             self._current_state = _to
         if b_run == "running":
             self._ensure_unpaused()
-        if b_run == "paused":
+        elif b_run == "paused":
             self._ensure_paused()
+        elif b_run == "finished":
+            self._ensure_finished()
         if b_run in {"paused", "running"}:
             self._ensure_ready()
-        return True, self._logd("Transtioned from {_from} to {_to}")
+        return True, self._logd("Transitioned from {_from} to {_to}")
 
     # TODO: For each such variable i.e., static, property etc. add a decorator
     #       or a function such that they're added to that list e.g.,
@@ -1790,7 +1808,8 @@ class Trainer:
         save_state["trainer_params"] = {}
         for k, v in self._trainer_params.items():
             if callable(v):
-                self._logw(f"callable {v} for trainer_params {k} will not be saved")
+                self._logw(f"callable {type(v).__qualname__}" +
+                           " for trainer_params {k} will not be saved")
                 save_state["trainer_params"][k] = "callable_" + type(v).__qualname__
             else:
                 save_state["trainer_params"][k] = copy.deepcopy(v)
@@ -2068,9 +2087,9 @@ class Trainer:
             return False, self._logi(f"Could not abort {self.current_state}. Error {e}")
         return True, self._logi(f"Aborted {self.current_state}")
 
+    # NOTE: right now just an alias for _stop_if_paused_or_running
     def _abort_current(self):
-        self._stop_if_running()
-        self._transition(self.current_state, )
+        self._stop_if_paused_or_running()
 
     @property
     def version(self):

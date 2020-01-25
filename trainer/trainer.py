@@ -22,6 +22,10 @@ from .mods import Modules as Modules
 from .state_machine import StateMachine
 from .overrides import MyDataLoader
 from .components import Models
+from .functions import _log_metrics_for_step
+from ._log import Log
+from ._checks import (_check_model_params, _check_trainer_params, _check_data_params,
+                      _check_resume_or_init_weights)
 from .helpers import (control, prop, extras, helpers, ProxyDataset, get_proxy_dataloader,
                       PropertyProxy, HookDict, HookList, GET, POST, Exposes)
 from .version import __version__
@@ -160,6 +164,11 @@ class Trainer:
             os.mkdir(self._logdir)
         self._logfile, self._logger = gen_file_and_stream_logger(
             self._logdir, "_".join(["trainer", self._unique_id]), "debug", "debug")
+        log = Log(self._logger)
+        self._logd = log._logd
+        self._loge = log._loge
+        self._logi = log._logi
+        self._logw = log._logw
         self._logi(f"Initialized logger in {os.path.abspath(self._logdir)}")
         self._logi(f"Savedir is {os.path.abspath(self._savedir)}")
         # check all params here
@@ -173,7 +182,7 @@ class Trainer:
         self._check_exports()
         if trainer_params["resume"] or "init_weights" in trainer_params:
             self._init_models()
-            self._check_resume_or_init_weights()
+            _check_resume_or_init_weights(self)
         print(trainer_params["image_root"])
 
     # TODO: Check certain variables after everything is initialized, like
@@ -203,138 +212,32 @@ class Trainer:
         self._init_epoch_runner()
         # self._init_extra_controls()
 
+    # NOTE: Shouldn't export this to Checks as name will be mangled
+    def _check_exports(self):
+        """Checks the API as exported endpoints.
+
+        All the properties not beginning with _ are exported except _extras and
+        _helpers.
+
+        Controls and other export checks are to be added.
+
+        :returns: None
+        :rtype: None
+
+        """
+        attrs = [*self.__class__.__dict__.keys()]
+        assert all(x in attrs for x in self.__props), "Some properties not correctly exported"
+
+    # START: Checks
     def _sanity_check(self):
         self._logi("Performing Sanity Check")
-        self._check_model_params()  # checks model params and defs both
-        self._check_trainer_params()  # checks optimizer and stuff also
-        self._check_data_params()     # checks data and dataloaders
+        _check_model_params(self)   # checks model params and defs both
+        _check_trainer_params(self)  # checks optimizer and stuff also
+        _check_data_params(self)     # checks data and dataloaders
+    # END: Checks
 
-    def _check_model_params(self):
-        assert isinstance(self._model_params, dict), "_model_params has to be a dict"
-        assert len(self._model_params) > 0, "_model_params can't be empty"
-        assert all(isinstance(x, dict) for x in self._model_params.values()),\
-            "all the _model_params should be dict"
-        assert isinstance(self._model_defs, dict),\
-            "_model_defs has to be a dict"
-        assert len(self._model_defs) > 0, "_model_defs can't be empty"
-        assert all(callable(x["model"]) for x in self._model_defs.values()),\
-            "_model_defs value have to be callabes"
-
-    # TODO: Standardize the device nomenclature especially for dataparallel later
-    def _check_trainer_params(self):
-        """Checks trainer params
-
-        :returns: None
-        :rtype: None
-
-        """
-        # optimizer: function now has to be of type Optimizer. Also criterion
-        # has to have attribute forward.
-        assert all(isinstance(x, dict)
-                   for x in [self._trainer_params, self._criteria_params,
-                             self._optimizer_params])
-        assert all(len(x) > 0 for x in [self._trainer_params, self._criteria_params,
-                                        self._optimizer_params])
-        assert all(isinstance(x, dict) and callable(x["function"])
-                   and hasattr(x["function"], "forward")
-                   for x in self._criteria_params.values())
-        assert all(isinstance(x, dict) and issubclass(x["function"], torch.optim.Optimizer)
-                   for x in self._optimizer_params.values())
-        # TODO: This is no longer relevant
-        if "anneal" in self._trainer_params:
-            assert all(x in self._trainer_params
-                       for x in ["anneal_lr_after", "anneal_lr_factor", "anneal_lr_on"])
-        if "test_frequency" not in self._trainer_params:
-            self.test_frequency = 5
-        assert "gpus" in self._trainer_params
-        assert "cuda" in self._trainer_params
-        assert "check_func" in self._trainer_params
-        self._check_func = self._trainer_params["check_func"]
-        if not self._have_resumed:
-            self._logd("Ignoring resume_params in while resuming")
-            assert "init_weights" in self._trainer_params
-            assert "resume_weights" in self._trainer_params
-        assert "training_steps" in self._trainer_params
-        assert all(x in ["train", "val", "test", "iterations"]
-                   for x in self._trainer_params["training_steps"])
-        if "iterations" in self._trainer_params["training_steps"]:
-            # NOTE: Rest (test_every_k_iterations etc.) is checked in init_dataloaders
-            # CHECK: Though should it be? Then that should be a training roadmap
-            assert "max_iterations" in self._trainer_params,\
-                "training with iterations must provide max_iterations parameter"
-            assert len(self._trainer_params["training_steps"]) == 1,\
-                "train, val, test or other steps cannot be included with iterations"
-            assert "train" in self._update_functions, "At least train update_function has to be present"
-            assert "hooks_run_iter_frequency" in self._trainer_params, "Training with iterations" +\
-                " requires hooks_run_iter_frequency"
-            self._max_iterations = self._trainer_params["max_iterations"]
-            self._hooks_run_iter_frequency = self._trainer_params["hooks_run_iter_frequency"]
-            assert self._hooks_run_iter_frequency <= self._max_iterations, "hooks_run_iter_frequency" +\
-                " can be no more than max_iterations"
-        else:
-            assert "max_epochs" in self._trainer_params, "max_epochs not in trainer params"
-            self._max_epochs = self._trainer_params["max_epochs"]
-            assert all(x in self._update_functions
-                       for x in self._trainer_params["training_steps"]),\
-                "Steps in update_functions and training_steps should match"
-
-    # assert anneal_lr_on in some metric
-    # check metric decease or increase?
-    def _check_resume_or_init_weights(self):
-        if ("init_weights" in self._trainer_params and self._trainer_params["init_weights"]):
-            assert (not self._trainer_params["resume_best"] and
-                    not self._trainer_params["resume_weights"]),\
-                    "Cannot initialize from weights and resume from save data"
-        if self._trainer_params["init_weights"]:
-            self._logw("Warning! Loading weights directly to model")
-            load_state = torch.load(self._trainer_params["init_weights"])
-            for name in self._models.names:
-                self._models.load_weights(name, load_state["models"][name])
-        elif self._trainer_params["resume"]:  # implies resume from somewhere
-            if self._trainer_params["resume_best"]:
-                # try to find and resume best weights
-                self._loge("Resume from best is not yet implemented")
-                self._resume_path = None
-            elif self._trainer_params["resume_weights"]:
-                if os.path.exists(self._trainer_params["resume_weights"]):
-                    self._resume_path = self._trainer_params["resume_weights"]
-                else:
-                    self._logw("Given resume weights do not exist")
-                    self._resume_path = None  # set appropriate path
-            else:
-                if os.path.exists(self._checkpoint_path):
-                    self._logi("Checkpoint exists. Will resume from there")
-                    self._resume_path = self._checkpoint_path
-                else:
-                    self._logi("No checkpoint found. Will train from beginninng")
-                    self._resume_path = None
-        else:
-            # Don't resume
-            self._resume_path = None
-        if self._trainer_params["resume"] and self._resume_path:
-            self._logi(f"Resuming from {self._resume_path}")
-            self._resume_from_path(self._resume_path)
-
-    # TODO: What if there are other keys besides train/val/test
-    def _check_data_params(self):
-        """If self._data is None, then data is extracted from the dataloader later.
-
-        :returns: None
-        :rtype: None
-
-        """
-        assert all([x in self._dataloader_params for x in ["train", "val", "test"]])
-        assert self._dataloader_params["train"] is not None
-        if self._data is None:
-            for x in ["train", "val", "test"]:
-                if self._dataloader_params[x] is not None:
-                    assert "function" in self._dataloader_params[x],\
-                        "dataloader_params for data subset cannot be None if data is None"
-        else:
-            assert all([x in self._data for x in ["train", "val", "test"]])
-            assert self._data["train"] is not None, "Training data cannot be None"
-
-    def _set_device(self):
+    # START: Init Funcs
+    def _init_device(self):
         self._gpus = list(map(int, self._trainer_params["gpus"].split(",")))
         if self._trainer_params["cuda"] and not torch.cuda.is_available():
             self._loge("cuda specified but not available. Will run on cpu")
@@ -420,8 +323,11 @@ class Trainer:
         self.__props.add("_extras")
 
         self._logi("Initializing State Variables")
+        # NOTE: These should only be modified by the transition function
         self._paused = True
-        self._abort = False
+        self._current_aborted = False
+        self._session_aborted = False
+        self._running_threads = set()
         self._aborted = []   # prev_loop_aborted
         # Initialize hooks
         # Validate test and save can never be removed, LOL
@@ -439,7 +345,7 @@ class Trainer:
         self._post_epoch_hooks_to_run.append("save_checkpoint")
         self._post_epoch_hooks_to_run.append("log")
         self._items_to_log_dict = {"metrics": self._log_metrics}
-        self._set_device()
+        self._init_device()
         self._epoch = 0
         self._iterations = 0
         self._init_nvml()
@@ -456,142 +362,6 @@ class Trainer:
         else:
             self._transition_steps = steps.union({"none"})
         self._forced_states = {"save", "eval", "test", "stop"}
-
-    def _allowed_transition(self, a, b):
-        return self._sm.allowed_transition(a, b)
-
-    def _stop_if_paused_or_running(self):
-        """Should not be called from `self._transition`
-
-        :returns: None
-        :rtype: None
-
-        """
-        force, run, step = self.current_state.split("_")
-        if run == "running":
-            self._transition(self.current_state, "_".join(force, "paused", step))
-        self._transition(self.currrent_state, "_".join(force, "finished", step))
-
-    def _pause_if_running(self):
-        """Should not be called from `self._transition`
-
-        :returns: None
-        :rtype: None
-
-        """
-        force, run, step = self.current_state.split("_")
-        if run == "running":
-            self._transition(self.currrent_state, "_".join(force, "paused", step))
-
-    def _ensure_paused(self):
-        if not self._paused:
-            self._paused = True
-        if self._epoch_runner.running:
-            while not self._epoch_runner.waiting:
-                time.sleep(1)
-                self._logd(f"Epoch runner is running")
-
-    def _ensure_unpaused(self):
-        if self.paused:
-            self._paused = False
-        if self._epoch_runner.waiting:
-            self._logd(f"Epoch runner is waiting. Should not wait.")
-
-    def _ensure_ready(self):
-        if self._epoch_runner.waiting:
-            self._epoch_runner.toggle_waiting()
-
-    def _ensure_finished(self):
-        """`self._ensure_paused` should be called before calling _ensure_finished
-        :class:`Epoch.finish` doesn't actually reset the metrics and variables
-        stored in the batch.
-
-        :returns: None
-        :rtype: None
-
-        """
-        if self._epoch_runner.running:
-            self._loge("epoch_runner running while _ensure_finished called")
-            return
-        if not self._epoch_runner.waiting:
-            self._logd("Waiting for epoch_runner to finsih")
-            while not self._epoch_runner.waiting:
-                time.sleep(1)
-        self._epoch_runner.finish()
-        self.update_metrics_post_epoch_hook()
-        self._epoch_runner.reset()
-
-    def _transition(self, _from, _to):
-        """Transitions to the next state from the given state.
-
-        State is a string triple joined by "_". Each state `s` is composed of
-        `force_run_step`, where:
-                `force` can be in {"normal", "force"}
-                `run` can be in {"running", "paused", "finished"}
-                `step` can be any of the `self._trainer_params["training_steps"]
-                    or `{"train", "val", "test", "none"}
-
-        For a :class:`Trainer` instance the regular flow is `train_step ->
-        post_epoch_hooks` or equivalent steps. However, all those can be paused
-        to run auxiliary tasks to check how trainer is doing. As such, anything
-        that breaks the regular flow is a forced state.
-
-        `run` is the state of the trainer in the sense that if some active task
-        is going on which has reserved some of the resourcese, whether that be
-        training, validation or a given user function.
-            "running" implies that some such task is present.
-            "paused" implies that task is present but not active
-            "finished" means that the task has finished
-
-        On top of these `self._aborted` is not a :class:`list` of flags which is
-        to be set after a task was finished but was aborted by the user. See
-        `abort` for details.
-
-        The "step" refers to the current iteration of the :class:`Epoch` `step`:
-        is any of the possible steps (train, val, test, user_func).  See
-        :class:`Epoch` for the description of its states.
-
-        The valid states is managed by a separate module :class:`StateMachine`
-        and the progress of "training", "validation" etc. are kept track of by
-        the trainer itself.
-
-        :param _from: From state
-        :param _to: To state
-        :returns: None
-        :rtype: None
-
-        """
-        if _from != self.current_state:
-            return False, self._loge(f"from state != current state: " +
-                                     f"{_from} != {self.current_state}")
-        if not self._allowed_transition(_from, _to):
-            return False, self._loge(f"State transition {_from} -> {_to} is not allowed")
-        self._logd(f"Trying to transition from {_from} to {_to}")
-        a_force, a_run, a_step = _from.split("_")
-        b_force, b_run, b_step = _to.split("_")
-        if a_run == "paused":
-            self._ensure_paused()
-        if a_run == "finished":
-            self._ensure_finished()
-        if a_force == "normal" and b_force == "force":
-            self._ensure_paused()
-            self._prev_normal_state = self.current_state
-            self._sm.current_state = _to
-        elif a_force == "force" and b_force == "normal":
-            assert _to == self._prev_normal_state
-            self._sm.current_state = _to
-            self._ensure_unpaused()
-        if a_force == "normal" == b_force:
-            self._sm.current_state = _to
-        if b_run == "running":
-            self._ensure_unpaused()
-        elif b_run == "paused":
-            self._ensure_paused()
-        elif b_run == "finished":
-            self._ensure_finished()
-        if b_run in {"paused", "running"}:
-            self._ensure_ready()
-        return True, self._logd(f"Transitioned from {_from} to {_to}")
 
     # TODO: For each such variable i.e., static, property etc. add a decorator
     #       or a function such that they're added to that list e.g.,
@@ -614,6 +384,8 @@ class Trainer:
             self._logd("No Extra Reportables")
             self.extra_report = {}
         self._user_funcs = {}
+        self._current_user_func_name = None
+        self._current_user_func_params = None
         self.__props.add("user_funcs")
         self.load_weights.__dict__["content_type"] = "form"
         self.add_model.__dict__["content_type"] = "form"
@@ -635,22 +407,6 @@ class Trainer:
         """
         if not hasattr(self, "report_function"):
             self.report_function = None
-
-    # TODO: Finish adding checks
-    def _check_exports(self):
-        """Checks the API as exported endpoints.
-
-        All the properties not beginning with _ are exported except _extras and
-        _helpers.
-
-        Controls and other export checks are to be added.
-
-        :returns: None
-        :rtype: None
-
-        """
-        attrs = [*self.__class__.__dict__.keys()]
-        assert all(x in attrs for x in self.__props), "Some properties not correctly exported"
 
     def _init_nvml(self):
         """Initializes the Nvidia monitoring library. It's called by _init_state_vars so
@@ -682,7 +438,7 @@ class Trainer:
             devices = {m: self._device for m in self._model_params}
         else:
             # TODO: Model parallel and sharding
-            self._set_device()
+            self._init_device()
             devices = {m: self._device for m in self._model_params}
         for model_name, model_params in self._model_params.items():
             models[model_name] = self._model_defs[model_name]["model"](**model_params)
@@ -816,60 +572,172 @@ class Trainer:
         self._logi("Initializing Epoch Runner")
         self._epoch_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
                                    Signals, device_monitor, self.extra_report)
+    # END: Init Funcs
 
-    def _logi(self, x):
-        "Log to INFO and return string with name of calling function"
-        f = inspect.currentframe()
-        prev_func = inspect.getframeinfo(f.f_back).function
-        x = f"[{prev_func}()] " + x
-        self.logger.info(x)
-        return x
+    # START: State Machine
+    def _allowed_transition(self, a, b):
+        return self._sm.allowed_transition(a, b)
 
-    def _logd(self, x):
-        "Log to DEBUG and return string with name of calling function"
-        f = inspect.currentframe()
-        prev_func = inspect.getframeinfo(f.f_back).function
-        x = f"[{prev_func}()] " + x
-        self.logger.debug(x)
-        return x
+    def _stop_if_paused_or_running(self):
+        """Should not be called from `self._transition`
 
-    def _logw(self, x):
-        "Log to WARN and return string with name of calling function"
-        f = inspect.currentframe()
-        prev_func = inspect.getframeinfo(f.f_back).function
-        x = f"[{prev_func}()] " + x
-        self.logger.warn(x)
-        return x
-
-    def _loge(self, x):
-        "Log to ERROR and return string with name of calling function"
-        f = inspect.currentframe()
-        prev_func = inspect.getframeinfo(f.f_back).function
-        x = f"[{prev_func}()] " + x
-        self.logger.error(x)
-        return x
-
-    def _set_model_active(self, model_name):
-        """Model name is an abstraction and a `model` can have multiple
-        :class:`torch.nn.Module` modules within it with separate criteria and
-        optimizers. It is the prerogative of the update_function to interact
-        with the model.
-
-        :param model_name: :class:`str` model_name
         :returns: None
         :rtype: None
 
         """
-        if model_name not in self._models.names:
-            return False, self._loge(f"No such model {model_name}")
-        else:
-            for name in self._models:
-                if name != model_name:  # free only GPU resources
-                    self._models.set_device(model_name, torch.device("cpu"))
-            for x in self._update_functions:
-                self._update_functions[x]._model_name = model_name
-            return True, self._logd(f"Model {model_name} is now the current active model.")
+        force, run, step = self.current_state.split("_")
+        if run == "running":
+            self._transition(self.current_state, "_".join(force, "paused", step))
+        self._transition(self.currrent_state, "_".join(force, "finished", step))
 
+    def _pause_if_running(self):
+        """Should not be called from `self._transition`
+
+        :returns: None
+        :rtype: None
+
+        """
+        force, run, step = self.current_state.split("_")
+        if run == "running":
+            self._transition(self.currrent_state, "_".join(force, "paused", step))
+
+    def _run_if_paused(self):
+        """Should not be called from `self._transition`
+
+        :returns: None
+        :rtype: None
+
+        """
+        force, run, step = self.current_state.split("_")
+        if run == "paused":
+            self._transition(self.currrent_state, "_".join(force, "running", step))
+
+    def _ensure_paused(self):
+        if not self._paused:
+            self._paused = True
+        if self._epoch_runner.running:
+            while not self._epoch_runner.waiting:
+                time.sleep(1)
+                self._logd(f"Epoch runner is running")
+
+    def _ensure_unpaused(self):
+        if self.paused:
+            self._paused = False
+        if self._epoch_runner.waiting:
+            self._logd(f"Epoch runner is waiting. Should not wait.")
+
+    def _ensure_ready(self):
+        if self._epoch_runner.waiting:
+            self._epoch_runner.toggle_waiting()
+
+    def _ensure_finished(self):
+        """`self._ensure_paused` should be called before calling _ensure_finished
+        :class:`Epoch.finish` doesn't actually reset the metrics and variables
+        stored in the batch.
+
+        :returns: None
+        :rtype: None
+
+        """
+        if self._epoch_runner.running:
+            self._loge("epoch_runner running while _ensure_finished called")
+            return
+        if not self._epoch_runner.waiting:
+            self._logd("Waiting for epoch_runner to finsih")
+            while not self._epoch_runner.waiting:
+                time.sleep(1)
+        self._epoch_runner.finish()
+        self.update_metrics_post_epoch_hook()
+        self._epoch_runner.reset()
+
+    def _transition(self, _from, _to):
+        """Transitions to the next state from the given state.
+
+        State is a string triple joined by "_". Each state `s` is composed of
+        `force_run_step`, where:
+                `force` can be in {"normal", "force"}
+                `run` can be in {"running", "paused", "finished"}
+                `step` can be any of the `self._trainer_params["training_steps"]
+                    or `{"train", "val", "test", "none"}
+
+        For a :class:`Trainer` instance the regular flow is `train_step ->
+        post_epoch_hooks` or equivalent steps. However, all those can be paused
+        to run auxiliary tasks to check how trainer is doing. As such, anything
+        that breaks the regular flow is a forced state.
+
+        `run` is the state of the trainer in the sense that if some active task
+        is going on which has reserved some of the resourcese, whether that be
+        training, validation or a given user function.
+            "running" implies that some such task is present.
+            "paused" implies that task is present but not active
+            "finished" means that the task has finished
+
+        On top of these `self._aborted` is not a :class:`list` of flags which is
+        to be set after a task was finished but was aborted by the user. See
+        `abort` for details.
+
+        The "step" refers to the current iteration of the :class:`Epoch` `step`:
+        is any of the possible steps (train, val, test, user_func).  See
+        :class:`Epoch` for the description of its states.
+
+        The valid states is managed by a separate module :class:`StateMachine`
+        and the progress of "training", "validation" etc. are kept track of by
+        the trainer itself.
+
+        :param _from: From state
+        :param _to: To state
+        :returns: None
+        :rtype: None
+
+        """
+        if _from != self.current_state:
+            return False, self._loge(f"from state != current state: " +
+                                     f"{_from} != {self.current_state}")
+        if not self._allowed_transition(_from, _to):
+            return False, self._loge(f"State transition {_from} -> {_to} is not allowed")
+        self._logd(f"Trying to transition from {_from} to {_to}")
+        a_force, a_run, a_step = _from.split("_")
+        b_force, b_run, b_step = _to.split("_")
+
+        # NOTE: Pre transition checks
+        if a_run == "paused":
+            self._ensure_paused()
+        if a_run == "finished":
+            self._ensure_finished()
+        if a_force == "normal" and b_force == "force":
+            self._ensure_paused()
+            self._prev_normal_state = self.current_state
+            self._sm.current_state = _to
+        elif a_force == "force" and b_force == "normal":
+            assert _to == self._prev_normal_state
+            self._sm.current_state = _to
+
+        if False:               # thread not running
+            # NOTE: Actual state transition
+            if b_step == "train":
+                Thread(target=self.train).start()
+            elif b_step == "val":
+                Thread(target=self.validate).start()
+            elif b_step == "test":
+                Thread(target=self.test).start()
+            elif b_step == "user_func":
+                Thread(target=self._current_user_func).start()
+
+        # NOTE: Post transition checks
+        if a_force == "normal" == b_force:
+            self._sm.current_state = _to
+        if b_run == "running":
+            self._ensure_unpaused()
+        elif b_run == "paused":
+            self._ensure_paused()
+        elif b_run == "finished":
+            self._ensure_finished()
+        if b_run in {"paused", "running"}:
+            self._ensure_ready()
+        return True, self._logd(f"Transitioned from {_from} to {_to}")
+    # END: State Machine
+
+    # START: Extras
     @POST
     @extras
     def load_saves(self, data):
@@ -1236,11 +1104,34 @@ class Trainer:
                 params[x] = locals()[x]
             output = report_function(**params)
             return True, {"success": output}
+    # END: Extras
 
+    # START: Helpers
     @POST
     @helpers
     def set_model(self, model_name):
         return self._set_model_active(model_name)
+
+    def _set_model_active(self, model_name):
+        """Model name is an abstraction and a `model` can have multiple
+        :class:`torch.nn.Module` modules within it with separate criteria and
+        optimizers. It is the prerogative of the update_function to interact
+        with the model.
+
+        :param model_name: :class:`str` model_name
+        :returns: None
+        :rtype: None
+
+        """
+        if model_name not in self._models.names:
+            return False, self._loge(f"No such model {model_name}")
+        else:
+            for name in self._models:
+                if name != model_name:  # free only GPU resources
+                    self._models.set_device(model_name, torch.device("cpu"))
+            for x in self._update_functions:
+                self._update_functions[x]._model_name = model_name
+            return True, self._logd(f"Model {model_name} is now the current active model.")
 
     @POST
     @helpers
@@ -1375,23 +1266,6 @@ class Trainer:
         except Exception as e:
             return False, self._loge(f"Error occured while loading models {e}")
 
-    @property
-    def progress(self):
-        predicate = "iterations" in self._trainer_params["training_steps"]
-        cur_step = self.iterations / self._hooks_run_iter_frequency\
-            if predicate else self.epoch
-        max_step = self.max_iterations / self._hooks_run_iter_frequency\
-            if predicate else self.max_epochs
-        cur_round = self._epoch_runner.info["batch_nums"]["train"]
-        max_round = self._hooks_run_iter_frequency if predicate else len(self.train_loader)
-        return {"cur_step": cur_step, "max_step": max_step,
-                "cur_round": cur_round, "max_round": max_round}
-
-    # FIXME: self.user_funcs MAY create problems
-    @property
-    def user_funcs(self):
-        return [x for x in self._user_funcs]
-
     @POST
     @helpers
     def hack_param(self, data):
@@ -1476,11 +1350,6 @@ class Trainer:
         else:
             return status, response
 
-    @POST
-    @helpers
-    def add_module(self, request, checks):
-        return self._mods.add_module(request, checks)
-
     # TODO: Any change in state of trainer vars should have a rollback mechanism
     #       E.g., if some of the params change here and then an error is raised.
     #
@@ -1550,6 +1419,13 @@ class Trainer:
                 False, self._logd(f"Unrecognized optimizer for model {model}")
         return True, models
 
+    @POST
+    @helpers
+    def add_module(self, request, checks):
+        return self._mods.add_module(request, checks)
+    # END: Helpers
+
+    # START: Save, Load, Resume
     def _save(self, save_path=None, best=False):
         if not save_path:
             save_path = self._save_path_with_epoch
@@ -1744,19 +1620,9 @@ class Trainer:
             self._save(None, True)
         else:
             self._logi("Save check returned False. Not saving")
+    # END: Save, Load and Resume
 
-    # control_validation, e.g., can't call validate if it's already running
-    # Or what can be called in which state
-    # TODO: Define state machine
-    # def _define_controls(self):
-    #     self._controls = ["train", "validate", "test", "reset",
-    #                       "anneal_lr", "set_params", "pause", "abort_current_loop",
-    #                       "resume", "start", "stop", "destroy"]
-    #     assert all(x in self.__class__.__dict__ for x in self._controls)
-    #     assert all(callable(x) for x in self.controls.values())
-    def _define_controls(self):
-        pass
-
+    # START: Controls
     # # FIXME: resume_best can only be done if an index is kept which keeps
     # #        track of what's best.
     # # TODO: So basically save all the metrics outside in a separate file
@@ -1790,19 +1656,18 @@ class Trainer:
 
     @control
     def pause(self):
-        self._logi("Pausing")
-        self._paused = True
+        return self._logi("Pausing")
+        self._pause_if_running()
 
     @control
     def resume(self):
-        self._logi("Resuming")
-        self._paused = False
+        return self._logi("Resuming")
+        self._run_if_paused()
 
     @control
     def start(self):
         self._logi("Starting")
         self._transition("normal_paused_none", "normal_paused_train")
-        Thread(target=self.train).start()
 
     # What does stop even do?
     # Stop should
@@ -1857,8 +1722,27 @@ class Trainer:
         self._transition(self.current_state, self._prev_normal_state)
 
     @control
-    def abort(self):
-        """`abort` leads to "finished" state with aborted flag set to true.
+    def abort_session(self):
+        """``abort_session`` finishes the session and switches to "finished" state with
+        aborted flag set to true. Saves the current session with aborted suffix.
+
+        :returns: None
+        :rtype: None
+
+        """
+        try:
+            self._abort_current()
+            self.save()
+            self._abort_session()
+        except Exception as e:
+            return False, self._logi(f"Could not abort {self.current_state}. Error {e}")
+        return True, self._logi(f"Aborted state {self.current_state} and current session")
+
+    @control
+    def abort_loop(self):
+        """`abort_loop` aborts only the current loop stops with the aborted flag. Useful
+        for changing the parameters and starting again. Saves the current
+        metrics gathered.
 
         :returns: None
         :rtype: None
@@ -1869,13 +1753,19 @@ class Trainer:
         except Exception as e:
             return False, self._logi(f"Could not abort {self.current_state}. Error {e}")
         return True, self._logi(f"Aborted {self.current_state}")
+    # END: Controls
 
-    # NOTE: right now just an alias for _stop_if_paused_or_running
+    def _abort_session(self):
+        # any -> force_finished_none with aborted_session True
+        self._session_aborted = True
+        self._transition(self.current_state, "force_finshed_none")
+
     def _abort_current(self):
-        self._abort = False
+        self._current_aborted = False
         self._stop_if_paused_or_running()
         self._aborted.append(self.current_state.split("_")[-1])
 
+    # START: Properties
     @property
     def version(self):
         return self.__version__
@@ -2091,6 +1981,32 @@ class Trainer:
                     if k[0] == "loss")
 
     @property
+    def progress(self):
+        predicate = "iterations" in self._trainer_params["training_steps"]
+        cur_step = self.iterations / self._hooks_run_iter_frequency\
+            if predicate else self.epoch
+        max_step = self.max_iterations / self._hooks_run_iter_frequency\
+            if predicate else self.max_epochs
+        cur_round = self._epoch_runner.info["batch_nums"]["train"]
+        max_round = self._hooks_run_iter_frequency if predicate else len(self.train_loader)
+        return {"cur_step": cur_step, "max_step": max_step,
+                "cur_round": cur_round, "max_round": max_round}
+
+    # FIXME: self.user_funcs MAY create problems
+    @property
+    def user_funcs(self):
+        return [x for x in self._user_funcs]
+
+    @property
+    def _current_user_func(self):
+        if self._current_user_func_name and\
+           self._current_user_func_params:
+            return partial(self._user_funcs[self._current_user_func_name],
+                           kwargs=self._current_user_func_params)
+        else:
+            return lambda: None
+
+    @property
     def metrics(self):
         return self._metrics
 
@@ -2112,7 +2028,9 @@ class Trainer:
     @property
     def items_to_log_dict(self):
         return self._items_to_log_dict
+    # END: Properties
 
+    # START: Broken funcs
     # where are the hooks run?
     # @post_epoch_hooks_to_run.setter
     # def post_epoch_hooks_to_run(self, x):
@@ -2120,6 +2038,16 @@ class Trainer:
     #     assert all(all(__x in self.all_post_batch_hooks for __x in _x) for _x in x.values())
     #     for _x in x:
     #         self._post_batch_hooks_to_run[_x] = x[_x]
+
+    # control_validation, e.g., can't call validate if it's already running
+    # Or what can be called in which state
+    # TODO: Define state machine
+    # def _define_controls(self):
+    #     self._controls = ["train", "validate", "test", "reset",
+    #                       "anneal_lr", "set_params", "pause", "abort_current_loop",
+    #                       "resume", "start", "stop", "destroy"]
+    #     assert all(x in self.__class__.__dict__ for x in self._controls)
+    #     assert all(callable(x) for x in self.controls.values())
 
     # TODO: A lot of these controls and methods which depend on params will
     #       have to be rewritten.
@@ -2182,7 +2110,7 @@ class Trainer:
         # FIXME: BAD
         # self._gpus = trainer_params.gpus
         # self._cuda = trainer_params.cuda
-        self._set_device()
+        self._init_device()
         # if torch.cuda.is_available():
         #     self._device = torch.device("cuda:%d" % params.gpu)
         self.save_on = params.save_on
@@ -2193,10 +2121,13 @@ class Trainer:
     # # TODO: This thing doesn't do anything now
     # def _get_optimizer(self, name):
     #     if name.lower() == 'sgd':
-    #         return torch.optim.SGD(self.model.parameters(), lr=self.args.lr, momentum=self.args.momentum)
+    #         return torch.optim.SGD(self.model.parameters(), lr=self.args.lr,
+    #                                momentum=self.args.momentum)
     #     elif name.lower() == 'adam':
     #         return torch.optim.Adam(self.model.parameters())
+    # END: Broken funcs
 
+    # START: Traninig Steps
     # Train validate and stuff are relatively fine
     # TODO: custom reportables
     # TODO: Things should get updated in a shared queue after each batch
@@ -2288,7 +2219,9 @@ class Trainer:
             # TODO: Handle abort here
         else:
             self._logi("Finished Testing")
+    # END: Training Steps
 
+    # START: Stateless Functions
     # DONE: There should be a separate definition of "steps" there where it
     #       could be {train, val, test} or simply iterations
     #       NOTE: Now iterations are also handled.
@@ -2299,20 +2232,27 @@ class Trainer:
         else:
             update_key = self.epoch
             key_name = "epoch"
+        log_func = self._logd
         for step in self._metrics:
             if getattr(self, step + "_loader"):
-                metric_names = self._metrics[step]
-                self._logd(f"Total datapoints processed for {step} step in {key_name}: {update_key}," +
-                           f" {self._metrics[step]['num_datapoints'][update_key]}")
-                for m in metric_names:
-                    if update_key in self._metrics[step][m]:
-                        self._logd(f"Value of metric {m} for {step} step in {key_name} is:" +
-                                   f" {self._metrics[step][m][update_key]}")
-                    else:
-                        self._logd(f"No value recorded for {step}_step," +
-                                   f" metric {m} and {key_name} {update_key}")
+                _log_metrics_for_step(step, key_name, getattr(self, step + "_loader"),
+                                      self._metrics[step], update_key, log_func)
             else:
                 self._logd(f"No dataloader for {step}")
+        # for step in self._metrics:
+        #     if getattr(self, step + "_loader"):
+        #         metric_names = self._metrics[step]
+        #         self._logd(f"Total datapoints processed for {step} step in {key_name}: {update_key}," +
+        #                    f" {self._metrics[step]['num_datapoints'][update_key]}")
+        #         for m in metric_names:
+        #             if update_key in self._metrics[step][m]:
+        #                 self._logd(f"Value of metric {m} for {step} step in {key_name} is:" +
+        #                            f" {self._metrics[step][m][update_key]}")
+        #             else:
+        #                 self._logd(f"No value recorded for {step}_step," +
+        #                            f" metric {m} and {key_name} {update_key}")
+        #     else:
+        #         self._logd(f"No dataloader for {step}")
 
     # FIXME: TRAINING_STEPS
     # NOTE: For this a sample function has to be defined
@@ -2406,3 +2346,4 @@ class Trainer:
         hook_prefixes = self.post_epoch_hooks_to_run
         for hook in hook_prefixes:
             all_hooks["_".join([hook, "post_epoch_hook"])](self)
+    # END: Stateless Functions

@@ -73,6 +73,20 @@ class ClassificationTestStep:
         pass
 
 
+def _log_metrics_for_step(step, key_name, step_loader, metrics,
+                          update_key, log_func):
+    metric_names = metrics[step]
+    log_func(f"Total datapoints processed for {step} step in {key_name}: {update_key}," +
+             f" {metrics['num_datapoints'][update_key]}")
+    for m in metric_names:
+        if update_key in metrics[m]:
+            log_func(f"Value of metric {m} for {step} step in {key_name} is:" +
+                     f" {metrics[m][update_key]}")
+        else:
+            log_func(f"No value recorded for {step}_step," +
+                     f" metric {m} and {key_name} {update_key}")
+
+
 # Example of using extra metrics
 # extra_metrics = {"train": {"accuracy": {"function": accuracy,
 #                                         "inputs": ["outputs", "batch[1]"]}},

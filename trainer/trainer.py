@@ -1,20 +1,16 @@
 import re
 import io
 import os
-import sys
 import base64
 import copy
 import time
 import json
 import torch
-import uuid
 import inspect
 from functools import partial
 from threading import Thread
 from PIL import Image
-import magic
 import numpy as np
-import zipfile
 from multiprocessing.pool import ThreadPool
 from types import SimpleNamespace
 from torch.utils.data import Dataset, DataLoader
@@ -22,6 +18,7 @@ from torch.utils.data import Dataset, DataLoader
 from .device import init_nvml, gpu_util, cpu_info, memory_info, DeviceMonitor
 from .util import get_backup_num, gen_file_and_stream_logger
 from .epoch import Epoch
+from .mods import Modules as Modules
 from .overrides import MyDataLoader
 from .components import Models
 from .helpers import (control, prop, extras, helpers, ProxyDataset, get_proxy_dataloader,
@@ -170,6 +167,7 @@ class Trainer:
         self._init_static_vars()
         self._init_state_vars()
         self._init_property_vars()
+        self._init_modules()
         self._init_external_vars()
         self._check_exports()
         if trainer_params["resume"] or "init_weights" in trainer_params:
@@ -424,7 +422,7 @@ class Trainer:
         self._paused = True
         self._aborted = False   # prev_loop_aborted
         # Initialize hooks
-        # Validate test and save now can never be removed, LOL
+        # Validate test and save can never be removed, LOL
         #
         # TODO: Not sure if hooks are state or property vars
         #       Maybe they're just hooks
@@ -612,6 +610,9 @@ class Trainer:
         self.add_model.__dict__["content_type"] = "form"
         self.add_user_funcs.__dict__["content_type"] = "form"
         self.load_image.__dict__["content_type"] = "form"
+
+    def _init_modules(self):
+        self._mods = Modules("trainer_modules", self._logd, self._loge, self._logi, self._logw)
 
     def _init_external_vars(self):
         """Initialize some variables which will be attached to it later. Right now a
@@ -1401,9 +1402,9 @@ class Trainer:
             ix_to_word = self.train_loader.loader._ix_to_word
             funcs[0](model, img, ix_to_word, funcs[1])
             return True, "meh"
+            # call given funcs on the file?
         else:
             return False, self._loge("Data is not image")
-            # call given funcs on the file
 
     @POST
     @helpers
@@ -1429,11 +1430,6 @@ class Trainer:
         except Exception as e:
             return False, self._loge(f"Error occured while loading models {e}")
 
-    def make_temp_directory(self):
-        dirname = "tmp_" + str(uuid.uuid4()).replace("-", "_")
-        os.mkdir(os.path.join("trainer_modules", dirname))
-        return dirname
-
     @property
     def progress(self):
         predicate = "iterations" in self._trainer_params["training_steps"]
@@ -1445,13 +1441,6 @@ class Trainer:
         max_round = self._hooks_run_iter_frequency if predicate else len(self.train_loader)
         return {"cur_step": cur_step, "max_step": max_step,
                 "cur_round": cur_round, "max_round": max_round}
-
-    # @property
-    # def update_max(self):
-    #     if "iterations" in self._trainer_params["training_steps"]:
-    #         return self.max_iterations / self._hooks_run_iter_frequency
-    #     else:
-    #         return self.max_epochs
 
     # FIXME: self.user_funcs MAY create problems
     @property
@@ -1494,55 +1483,7 @@ class Trainer:
     @POST
     @helpers
     def add_user_funcs(self, request):
-        """Add a user function from a given python or module as a zip file. Delegates
-        the requeste to :meth:`Trainer.add_module`
-
-        Prospective rules for adding a user func
-
-        1. `user_func` shouldn't be given access to the trainer instance itself as
-        it may cause unwanted states
-
-        2. `hooks` may be specific functions which can be given access to specific
-        locals of particular functions
-
-        3. `user_func` is the most generic function and has arbitrary call and
-        return values
-
-        4. In constrast `hooks` would be more restriced and while adding or
-        removing a hook certain checks can be performed
-
-        5. `user_funcs` maybe invoked in the middle of the program somewhere as
-        defined, or can be invoked in any situation parallelly. While other
-        functions may only execute in certain cricumstances
-
-        :param request: :func:`flask.request`
-
-        """
-        # NOTE: In the python way, we can't really restrain whatever is in
-        #       there, we can only warn and try to avoid it.
-        #       Checks can then be like:
-        #       1. "inspect." not in file
-        #       2. "self." not in file
-        checks = []
-        status, response = self.add_module(request, checks)
-        if status:
-            module_exports = response
-            if "functions" not in module_exports:
-                return False, self._logw("No functions in data")
-            else:
-                statuses = []
-                for f in module_exports["functions"]:
-                    # Arbitrary user func can be anything actually as long as it's a callable
-                    if "name" in f.keys() and "function" in f.keys():
-                        statuses.append((True, f["name"]))
-                        self._user_funcs[f["name"]] = f["function"]
-                    else:
-                        statuses.append((False, f["name"]))
-                if all(x[0] for x in statuses):
-                    return True, self._logd("All functions added successfully")
-                else:
-                    retval = [str(x[1]) + " added, " if x[0] else " failed, " for x in statuses]
-                    return False, self._logd(f"{retval}")
+        return self._mods.add_user_funcs(request, self._user_funcs)
 
     @POST
     @helpers
@@ -1590,94 +1531,10 @@ class Trainer:
         else:
             return status, response
 
-    def _check_file_magic(self, _file, test_str):
-        if hasattr(magic, "from_buffer"):
-            self.logger.debug("from_buffer in magic")
-            test = test_str in magic.from_buffer(_file).lower()
-        elif hasattr(magic, "detect_from_content"):
-            self.logger.debug("detect_from_content in magic")
-            test = test_str in magic.detect_from_content(_file).name.lower()
-        return test
-
     @POST
     @helpers
     def add_module(self, request, checks):
-        """Adds an arbitrary module from a given python or module as a zip file. File
-        must be present in request and is read as ``request.files["file"]``
-
-        The file can be either a python file in text format or a zipped
-        module. If it's a zipped module then ``__init__.py`` must be at the top
-        level in the zip file.
-
-        exports must be defined in ``module_exports``. e.g.:
-
-        .. code-block :: py
-
-            class ABC
-                # some stuff here
-
-            def some_stuff():
-                # Do something here
-
-            module_exports = {"abc": ABC, "some_stuff"}
-
-        """
-        # TODO: Should be a configurable paramter self.modules_dir
-        if not os.path.exists("trainer_modules"):
-            self.logger.debug("Creating directory trainer_modules")
-            os.mkdir("trainer_modules")
-        if not os.path.abspath("trainer_modules") in sys.path:
-            self.logger.debug("Modules path was not in sys")
-            sys.path.append(os.path.abspath("trainer_modules"))
-        try:
-            # file can be zip or text
-            model_file = request.files["file"].read()
-            test = self._check_file_magic(model_file, "python")
-            if test:
-                self._logd("Detected python file")
-                tmp_name = "tmp_" + str(uuid.uuid4()).replace("-", "_")
-                tmp_file = os.path.join("trainer_modules", tmp_name + ".py")
-                with open(tmp_file, "w") as f:
-                    self._logd(f"Written to {tmp_file}")
-                    f.write(model_file.decode())
-                try:
-                    ldict = {}
-                    self._logd("Checking functions")
-                    flag = True
-                    for check_p in checks:
-                        if not check_p(tmp_file):
-                            flag = False
-                            break
-                    if not flag:
-                        return False, self._logd(f"Module check failed {check_p}")
-                    else:
-                        self._logd(f"Executing 'from {tmp_name} import module_exports'")
-                        exec(f"from {tmp_name} import module_exports", globals(), ldict)
-                        return True, ldict["module_exports"]
-                except ImportError as e:
-                    return False, self._logd(f"Could not import module_exports from given file. Error {e}")
-                except Exception as e:
-                    return False, self._logd(f"Some weird error occured while importing. Error {e}")
-            elif zipfile.is_zipfile(io.BytesIO(model_file)):
-                zf = zipfile.ZipFile(io.BytesIO(model_file))
-                # make sure that __init__.py is at the root of tmp_dir
-                if not any(["__init__.py" in x.split("/")[0] for x in zf.namelist()]):
-                    return False, self._logd(f"zip file must have __init__.py at the top level")
-                else:
-                    tmp_dir = self.make_temp_directory()
-                    zf.extractall(os.path.join("trainer_modules", tmp_dir))
-                    try:
-                        ldict = {}
-                        exec(f"from {tmp_dir} import module_exports", globals(), ldict)
-                        return True, ldict["module_exports"]
-                    except ImportError as e:
-                        return False, self._logd(f"Could not import module_exports from given file. Error {e}")
-                    except Exception as e:
-                        return False, self._logd(f"Some weird error occured while importing. Error {e}")
-            else:
-                return False, self._logd(f"Given file neither python nor zip.")
-        except Exception as e:
-            return False, self._logd(f"Error occured while reading file {e}")
+        return self._mods.add_module(request, checks)
 
     # TODO: Any change in state of trainer vars should have a rollback mechanism
     #       E.g., if some of the params change here and then an error is raised.
@@ -1725,43 +1582,30 @@ class Trainer:
                 self.logger.warn(f"Will overwrite model, optimizer params and defs for {model}")
             self._model_defs[model]["model"] = _def
             self._model_params[model] = model_args.copy()
-            self.logger.debug(f"Updated model_params and model_def for {model}")
+            self._logd(f"Updated model_params and model_def for {model}")
             models["models"][model] = _def(**model_args)
             if isinstance(model_defs[model]["optimizer"], str):
                 optim_name = model_defs[model]["optimizer"]
                 self._model_defs[model]["optimizer"] = optim_name
-                self.logger.debug(f"Updated optimizer params for {model}")
+                self._logd(f"Updated optimizer params for {model}")
                 models["optim_names"][model] = optim_name
                 if "optimizer_params" in model_defs and hasattr(torch.optim, optim_name):
                     models["optimizers"][model] = getattr(torch.optim, optim_name)(
                         **model_defs[model]["optimizer_params"])
-                    self.logger.debug(f"Initialized optimizer for {model} in add_model with given params")
+                    self._logd(f"Initialized optimizer for {model} in add_model with given params")
                 elif optim_name in self._optimizer_params:
                     models["optimizers"][model] = self._optimizer_params[optim_name]["function"](
                         models["models"][model].parameters(),
                         **self._optimizer_params[optim_name]["params"])
-                    self.logger.debug(f"Initialized optimizer for {model} in add_model with self params")
+                    self._logd(f"Initialized optimizer for {model} in add_model with self params")
                 else:
                     models["optimizers"][model] = getattr(torch.optim, optim_name)()
-                    self.logger.warn(f"Initialized optimizer for {model} in add_model with default params")
+                    self._logw(f"Initialized optimizer for {model} in add_model with default params")
             else:
                 False, self._logd(f"Unrecognized optimizer for model {model}")
         return True, models
 
-    # TODO: How to resolve arbitrary callables being saved? Can they resume?
-    #       In fact like I mentioned earlier, arbitrary callables shouldn't be allowed
-    #       in saved states.
     def _save(self, save_path=None, best=False):
-        # if isinstance(save_name_or_dict, dict):
-        #     save_name = '__'.join(['_'.join([a, str(b)])
-        #                            for a, b in save_name_or_dict.items()]) + '.pth'
-        # elif isinstance(save_name_or_dict, str):
-        #     save_name = save_name_or_dict if save_name_or_dict.endswith('.pth') else save_name_or_dict + '.pth'
-        # else:
-        #     raise AttributeError
-        #
-        # Save name is internal now
-        # wrapper should have a unique id
         if not save_path:
             save_path = self._save_path_with_epoch
         if best:
@@ -1984,18 +1828,6 @@ class Trainer:
     #     if self.best_save:
     #         self._resume_path = self.best_save
 
-    # def resume_checkpoint(self):
-    #     self.logger.debug("Trying to resume from checkpoint path %s" % self._checkpoint_path)
-    #     if os.path.exists(self._checkpoint_path):
-    #         self._resume(self._checkpoint_path)
-    #     else:
-    #         self.logger.debug("No checkpoint found. Will train from beginning %s" %
-    #                            self._checkpoint_path)
-
-    # def resume_weights(self, weights):
-    #     if os.path.exists(weights):
-    #         self._load_init_weights(weights)
-
     # CHECK if this thing works correctly. There might be a few things I may have missed
     # TODO: For any worker loop which returns an error, the next
     #       one should pause or halt or something.
@@ -2167,14 +1999,6 @@ class Trainer:
                 if isinstance(y, property) and
                 x != "props" and
                 (x in {"_extras", "_helpers"} or not x.startswith("_"))]
-
-    # @property
-    # def current_step_progress(self):
-    #     if "iterations" in self._trainer_params["training_steps"]:
-    #         return self._epoch_runner.info["batch_nums"],\
-    #             self._trainer_params["hooks_run_iter_frequency"]
-    #     else:
-    #         return self._epoch_runner.info["batch_nums"], len(self.train_loader)
 
     @property
     def epoch(self):

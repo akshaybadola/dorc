@@ -19,6 +19,7 @@ from .device import init_nvml, gpu_util, cpu_info, memory_info, DeviceMonitor
 from .util import get_backup_num, gen_file_and_stream_logger
 from .epoch import Epoch
 from .mods import Modules as Modules
+from .state_machine import StateMachine
 from .overrides import MyDataLoader
 from .components import Models
 from .helpers import (control, prop, extras, helpers, ProxyDataset, get_proxy_dataloader,
@@ -110,7 +111,7 @@ class Trainer:
     """
     __version__ = __version__
 
-    def __init__(self, model_params, criteria, optimizer, model_defs, update_functions,
+    def __init__(self, uid, model_params, criteria, optimizer, model_defs, update_functions,
                  extra_metrics, trainer_params, data, dataloader_params):
         """Initializes the :class:`Trainer` object. This is supposed to be a catch all
         trainer which is robust and easy to train and can generate graphs automatically etc.
@@ -139,7 +140,7 @@ class Trainer:
         # appended to the list. _init_property_vars should check if everything in __props
         # is a property or not
         self.__props = set()
-        self._unique_id = "bleh"
+        self._unique_id = uid
         self.__props.add("unique_id")
         self._model_params = model_params
         self._model_defs = model_defs
@@ -159,8 +160,8 @@ class Trainer:
             os.mkdir(self._logdir)
         self._logfile, self._logger = gen_file_and_stream_logger(
             self._logdir, "_".join(["trainer", self._unique_id]), "debug", "debug")
-        self.logger.info("Initialized logger in %s", os.path.abspath(self._logdir))
-        self.logger.info("Savedir is %s", os.path.abspath(self._savedir))
+        self._logi(f"Initialized logger in {os.path.abspath(self._logdir)}")
+        self._logi(f"Savedir is {os.path.abspath(self._savedir)}")
         # check all params here
         self._have_resumed = False
         self._sanity_check()
@@ -192,8 +193,8 @@ class Trainer:
     #       5. check_func
     def _init_all(self):
         if self._have_resumed:
-            self.logger.warn("\"_init_all\" being called after resume!")
-        self.logger.info("Initializing trainer")
+            self._logw("\"_init_all\" being called after resume!")
+        self._logi("Initializing trainer")
         self._init_models()
         self._init_dataloaders()
         # self._init_criteria_optimizers()
@@ -203,7 +204,7 @@ class Trainer:
         # self._init_extra_controls()
 
     def _sanity_check(self):
-        self.logger.info("Performing Sanity Check")
+        self._logi("Performing Sanity Check")
         self._check_model_params()  # checks model params and defs both
         self._check_trainer_params()  # checks optimizer and stuff also
         self._check_data_params()     # checks data and dataloaders
@@ -250,7 +251,7 @@ class Trainer:
         assert "check_func" in self._trainer_params
         self._check_func = self._trainer_params["check_func"]
         if not self._have_resumed:
-            self.logger.debug("Ignoring resume_params in while resuming")
+            self._logd("Ignoring resume_params in while resuming")
             assert "init_weights" in self._trainer_params
             assert "resume_weights" in self._trainer_params
         assert "training_steps" in self._trainer_params
@@ -285,33 +286,33 @@ class Trainer:
                     not self._trainer_params["resume_weights"]),\
                     "Cannot initialize from weights and resume from save data"
         if self._trainer_params["init_weights"]:
-            self.logger.warn("Warning! Loading weights directly to model")
+            self._logw("Warning! Loading weights directly to model")
             load_state = torch.load(self._trainer_params["init_weights"])
             for name in self._models.names:
                 self._models.load_weights(name, load_state["models"][name])
         elif self._trainer_params["resume"]:  # implies resume from somewhere
             if self._trainer_params["resume_best"]:
                 # try to find and resume best weights
-                self.logger.error("Resume from best is not yet implemented")
+                self._loge("Resume from best is not yet implemented")
                 self._resume_path = None
             elif self._trainer_params["resume_weights"]:
                 if os.path.exists(self._trainer_params["resume_weights"]):
                     self._resume_path = self._trainer_params["resume_weights"]
                 else:
-                    self.logger.warn("Given resume weights do not exist")
+                    self._logw("Given resume weights do not exist")
                     self._resume_path = None  # set appropriate path
             else:
                 if os.path.exists(self._checkpoint_path):
-                    self.logger.info("Checkpoint exists. Will resume from there")
+                    self._logi("Checkpoint exists. Will resume from there")
                     self._resume_path = self._checkpoint_path
                 else:
-                    self.logger.info("No checkpoint found. Will train from beginninng")
+                    self._logi("No checkpoint found. Will train from beginninng")
                     self._resume_path = None
         else:
             # Don't resume
             self._resume_path = None
         if self._trainer_params["resume"] and self._resume_path:
-            self.logger.info("Resuming from %s" % self._resume_path)
+            self._logi(f"Resuming from {self._resume_path}")
             self._resume_from_path(self._resume_path)
 
     # TODO: What if there are other keys besides train/val/test
@@ -336,33 +337,33 @@ class Trainer:
     def _set_device(self):
         self._gpus = list(map(int, self._trainer_params["gpus"].split(",")))
         if self._trainer_params["cuda"] and not torch.cuda.is_available():
-            self.logger.error("cuda specified but not available. Will run on cpu")
+            self._loge("cuda specified but not available. Will run on cpu")
             self._device = torch.device("cpu")
             self._gpus = [-1]
         elif len(self._gpus) == 1 and torch.cuda.is_available():
-            self.logger.info("GPU %d detected and specified" % self._gpus[0])
-            self._device = torch.device("cuda:%d" % self._gpus[0])
+            self._logi(f"GPU {self._gpus[0]} detected and specified")
+            self._device = torch.device(f"cuda:{self._gpus[0]}")
         elif len(self._gpus) > 1 and torch.cuda.is_available():
-            self.logger.info("Data parallel specified with gpus %s" % str(self._gpus))
+            self._logi(f"Data parallel specified with gpus {self._gpus}")
             if torch.cuda.device_count() >= len(self._gpus):
-                self.logger.info("%d gpus are available" % torch.cuda.device_count())
+                self._logi(f"{torch.cuda.device_count()} gpus are available")
                 if "parallel" in self._trainer_params:
-                    self.logger.info(f"Parallel call be functional {self._trainer_params['parallel']}")
+                    self._logi(f"Parallel call be functional {self._trainer_params['parallel']}")
                     self._device = self._trainer_params["parallel"]
                 else:
-                    self.logger.info("Parallel call be Module dataparallel")
+                    self._logi("Parallel call be Module dataparallel")
                     self._device = "dataparallel"
             else:
-                self.logger.error("%d gpus are not available" % torch.cuda.device_count())
+                self._loge(f"{torch.cuda.device_count()} gpus are not available")
                 raise AttributeError
         else:
-            self.logger.info("cuda not specified. Using cpu")
+            self._logi("cuda not specified. Using cpu")
             self._device = torch.device("cpu")
             self._gpus = [-1]
         torch.cuda.manual_seed(self._trainer_params["seed"])
         for t, v in self._trainer_params.items():
             if t in self.__class__.__dict__:
-                self.logger.warn(f"Tried overwriting attribute {t}! Denied.")
+                self._logw(f"Tried overwriting attribute {t}! Denied.")
             elif t != "gpus":
                 self.__dict__[t] = v
 
@@ -418,9 +419,10 @@ class Trainer:
         self.__props.add("_helpers")
         self.__props.add("_extras")
 
-        self.logger.info("Initializing State Variables")
+        self._logi("Initializing State Variables")
         self._paused = True
-        self._aborted = False   # prev_loop_aborted
+        self._abort = False
+        self._aborted = []   # prev_loop_aborted
         # Initialize hooks
         # Validate test and save can never be removed, LOL
         #
@@ -443,52 +445,20 @@ class Trainer:
         self._init_nvml()
         self._temp_runner = SimpleNamespace()
         self._flag_adhoc_func_running = False
-        self._control_transitions = {"start": ("paused_none", "unpaused_train"),
-                                     "pause": ("unpaused_any", "paused_any"),
-                                     "resume": ("paused_any", "unpaused_any"),
-                                     "reset": ("any_any", "paused_none")}
+        # self._control_transitions = {"start": ("paused_none", "unpaused_train"),
+        #                              "pause": ("unpaused_any", "paused_any"),
+        #                              "resume": ("paused_any", "unpaused_any"),
+        #                              "reset": ("any_any", "paused_none")}
         steps = self._trainer_params["training_steps"]
+        # runs = {"running", "paused", "finished"}
         if "iterations" in steps:
             self._transition_steps = {"train", "val", "test", "none"}
         else:
             self._transition_steps = steps.union({"none"})
         self._forced_states = {"save", "eval", "test", "stop"}
-        self._current_state = "normal_paused_none"
 
     def _allowed_transition(self, a, b):
-        a_force, a_run, a_step = a.split("_")
-        b_force, b_run, b_step = b.split("_")
-        # if a_run == b_run == "paused":  # can we have normal_paused_train -> normal_paused_val?
-        #     return False
-        # if a_force == b_force == "force":
-        #     return False
-        allowed_predicate_list = [(a_force == "normal" == b_force
-                                   and a_step == b_step  # in the same step
-                                   and ((a_run != b_run and a_run in {"running", "paused"}
-                                         and b_run in {"running", "paused"})  # running <-> paused
-                                        # only running -> finished
-                                        or (a_run == "running" and b_run == "finished"))),
-                                  (a_force == "normal" == b_force
-                                   and ((a_step != b_step
-                                         and a_run == "finished"  # finished -> {running, paused}
-                                         and b_run in {"running", "paused"})
-                                        or (a_step == "none" and a_run == "paused"  # if none -> any
-                                            and b_run in {"running", "paused"}))),  # paused -> {running, paused}
-                                  (a_force == "normal" != b_force        # normal -> force
-                                   and a_run != "running"
-                                   and b_run == "running"  # any -> running
-                                   and a_step != b_step
-                                   and a_step not in self._forced_states
-                                   and b_step in self._forced_states),  # step must change
-                                  (a_force == "force" != b_force
-                                   # paused previous first
-                                   and a_run == "finished" and b_run in {"paused", "running"}
-                                   and a_step in self._forced_states
-                                   and b_step not in self._forced_states)]
-        if any(allowed_predicate_list):
-            return allowed_predicate_list, True
-        else:
-            return allowed_predicate_list, False
+        return self._sm.allowed_transition(a, b)
 
     def _stop_if_paused_or_running(self):
         """Should not be called from `self._transition`
@@ -552,9 +522,48 @@ class Trainer:
         self._epoch_runner.reset()
 
     def _transition(self, _from, _to):
-        if _from != self._current_state:
+        """Transitions to the next state from the given state.
+
+        State is a string triple joined by "_". Each state `s` is composed of
+        `force_run_step`, where:
+                `force` can be in {"normal", "force"}
+                `run` can be in {"running", "paused", "finished"}
+                `step` can be any of the `self._trainer_params["training_steps"]
+                    or `{"train", "val", "test", "none"}
+
+        For a :class:`Trainer` instance the regular flow is `train_step ->
+        post_epoch_hooks` or equivalent steps. However, all those can be paused
+        to run auxiliary tasks to check how trainer is doing. As such, anything
+        that breaks the regular flow is a forced state.
+
+        `run` is the state of the trainer in the sense that if some active task
+        is going on which has reserved some of the resourcese, whether that be
+        training, validation or a given user function.
+            "running" implies that some such task is present.
+            "paused" implies that task is present but not active
+            "finished" means that the task has finished
+
+        On top of these `self._aborted` is not a :class:`list` of flags which is
+        to be set after a task was finished but was aborted by the user. See
+        `abort` for details.
+
+        The "step" refers to the current iteration of the :class:`Epoch` `step`:
+        is any of the possible steps (train, val, test, user_func).  See
+        :class:`Epoch` for the description of its states.
+
+        The valid states is managed by a separate module :class:`StateMachine`
+        and the progress of "training", "validation" etc. are kept track of by
+        the trainer itself.
+
+        :param _from: From state
+        :param _to: To state
+        :returns: None
+        :rtype: None
+
+        """
+        if _from != self.current_state:
             return False, self._loge(f"from state != current state: " +
-                                     "{_from} != {self._current_state}")
+                                     f"{_from} != {self.current_state}")
         if not self._allowed_transition(_from, _to):
             return False, self._loge(f"State transition {_from} -> {_to} is not allowed")
         self._logd(f"Trying to transition from {_from} to {_to}")
@@ -566,14 +575,14 @@ class Trainer:
             self._ensure_finished()
         if a_force == "normal" and b_force == "force":
             self._ensure_paused()
-            self._prev_normal_state = self._current_state
-            self._current_state = _to
+            self._prev_normal_state = self.current_state
+            self._sm.current_state = _to
         elif a_force == "force" and b_force == "normal":
             assert _to == self._prev_normal_state
-            self._current_state = _to
+            self._sm.current_state = _to
             self._ensure_unpaused()
         if a_force == "normal" == b_force:
-            self._current_state = _to
+            self._sm.current_state = _to
         if b_run == "running":
             self._ensure_unpaused()
         elif b_run == "paused":
@@ -582,7 +591,7 @@ class Trainer:
             self._ensure_finished()
         if b_run in {"paused", "running"}:
             self._ensure_ready()
-        return True, self._logd("Transitioned from {_from} to {_to}")
+        return True, self._logd(f"Transitioned from {_from} to {_to}")
 
     # TODO: For each such variable i.e., static, property etc. add a decorator
     #       or a function such that they're added to that list e.g.,
@@ -600,9 +609,9 @@ class Trainer:
     #
     #       Or something like that.
     def _init_property_vars(self):
-        self.logger.info("Initializing Property Variables")
+        self._logi("Initializing Property Variables")
         if "extra_report" not in self._trainer_params:
-            self.logger.debug("No Extra Reportables")
+            self._logd("No Extra Reportables")
             self.extra_report = {}
         self._user_funcs = {}
         self.__props.add("user_funcs")
@@ -613,6 +622,8 @@ class Trainer:
 
     def _init_modules(self):
         self._mods = Modules("trainer_modules", self._logd, self._loge, self._logi, self._logw)
+        self._sm = StateMachine("normal_paused_none", self._transition_steps, self._forced_states,
+                                self._logd, self._loge, self._logi, self._logw)
 
     def _init_external_vars(self):
         """Initialize some variables which will be attached to it later. Right now a
@@ -649,7 +660,7 @@ class Trainer:
         :rtype: None
 
         """
-        self.logger.info("Initializing nvml")
+        self._logi("Initializing nvml")
         # CHECK: I don't remember how the order is printed.
         # Assumes torch.cuda devices are of the same order as PCI BUS for
         # getting correct info with pynvml
@@ -659,7 +670,7 @@ class Trainer:
             self._device_handles = None
 
     def _init_models(self):
-        self.logger.info("Initializing Models, Optimizers and Criteria ")
+        self._logi("Initializing Models, Optimizers and Criteria ")
         self.criteria = {}
         for k, v in self._criteria_params.items():
             self.criteria[k] = v["function"](**v["params"])
@@ -700,15 +711,15 @@ class Trainer:
 
         """
 
-        self.logger.info("Initializing Dataloaders")
+        self._logi("Initializing Dataloaders")
 
         # FIXME: Remove this and streamline data and loaders
         #        Maybe initialize dataloaders based on update_funcs? Not sure
         def _check_raw(loader, name):
             if loader and not hasattr(loader, "dataset"):
-                self.logger.warn(name + " loader doesn't have a dataset")
+                self._logw(name + " loader doesn't have a dataset")
             elif loader and hasattr(loader.dataset, "_get_raw"):
-                self.logger.warn(name + " dataset doesn't define \"_get_raw\".\
+                self._logw(name + " dataset doesn't define \"_get_raw\".\
                 Drawing samples from validation data will not be available.")
 
         for loader, params in self._dataloader_params.items():
@@ -725,7 +736,7 @@ class Trainer:
                     else:
                         self.val_loader = DataLoader(self._data["val"], **params)
                 else:
-                    self.logger.info("No Val loader. Will not do validation")
+                    self._logi("No Val loader. Will not do validation")
                     self.val_loader = None
                 _check_raw(self.val_loader, "Val")
             elif loader == "test":
@@ -735,21 +746,9 @@ class Trainer:
                     else:
                         self.test_loader = DataLoader(self._data["test"], **params)
                 else:
-                    self.logger.info("No Test loader. Will not do testing")
+                    self._logi("No Test loader. Will not do testing")
                     self.test_loader = None
                 _check_raw(self.test_loader, "Test")
-
-    # def _init_criteria_optimizers(self):
-    #     self.logger.info("Initializing Optimizers and Criteria")
-    #     self.criteria = {}
-    #     self.optimizers = {}
-    #     for k, v in self._criteria_params.items():
-    #         self.criteria[k] = v["function"](**v["params"])
-    #     for k, v in self._optimizer_params.items():
-    #         model_name = [x for x, y in self._model_defs.items()
-    #                       if y["optimizer"] == k][0]
-    #         self.optimizers[k] = v["function"](self._models[model_name].parameters(),
-    #                                            **v["params"])
 
     # CHECK: Should I use namedtuple instead?
     def _init_metrics(self):
@@ -766,7 +765,7 @@ class Trainer:
         :rtype: None
 
         """
-        self.logger.info("Initializing Metrics")
+        self._logi("Initializing Metrics")
         self._metrics = {}
         for x in self._update_functions:
             if self._dataloader_params[x] is not None:
@@ -781,13 +780,13 @@ class Trainer:
                         if self._extra_metrics[x][k]["when"] == "batch":
                             retvals = [_[1] for _ in self._update_functions[x].returns]
                             assert all(_ in retvals for _ in self._extra_metrics[x][k]["inputs"]),\
-                                "failed on batch %s, %s" % (x, k)
+                                f"failed on batch {x}, {k}"
                         elif self._extra_metrics[x][k]["when"] == "epoch":
                             # NOTE: validation with inputs
                             vals = [*self.__dict__.keys(),
                                     *[_[1] for _ in self._update_functions[x].returns], "epoch"]
                             assert all(s in vals for s in self._extra_metrics[x][k]["inputs"]
-                                       if isinstance(s, str)), "failed on epoch %s, %s" % (x, k)
+                                       if isinstance(s, str)), f"failed on epoch {x}, {k}"
                             # FIXME: Only "models" as tuple allowed
                             for _x in self._extra_metrics[x][k]["inputs"]:
                                 if isinstance(_x, tuple):
@@ -801,7 +800,7 @@ class Trainer:
                     self._extra_metrics[x] = {}
 
     def _init_update_funcs(self):
-        self.logger.info("Initializing Update Functions")
+        self._logi("Initializing Update Functions")
         for k, v in self._update_functions.items():
             if k == "train":
                 self._train_step_func = self._update_functions["train"]
@@ -814,7 +813,7 @@ class Trainer:
         class Signals(object, metaclass=PropertyProxy):
             trainer = self
         device_monitor = DeviceMonitor(self._device_handles)
-        self.logger.info("Initializing Epoch Runner")
+        self._logi("Initializing Epoch Runner")
         self._epoch_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
                                    Signals, device_monitor, self.extra_report)
 
@@ -874,7 +873,7 @@ class Trainer:
     @POST
     @extras
     def load_saves(self, data):
-        self.logger.info("Calling load saves")
+        self._logi("Calling load saves")
         if "weights" not in data:
             return False, self._logi("No such file")
         else:
@@ -883,7 +882,7 @@ class Trainer:
             return False, self._logi("Invalid or no method")
         else:
             method = data["method"]
-        self.logger.debug(f"Data given was {data}")
+        self._logd(f"Data given was {data}")
         if weights not in os.listdir(self._savedir):
             return False, self._logi("No such file")
         else:
@@ -1071,6 +1070,7 @@ class Trainer:
             else:
                 return False, {"error": self._logi("Another adhoc function is still running")}
 
+    # FIXME: This should be user defined
     def call_adhoc_func_on_data(self, params):
         # have to call epoch runner with specific metrics (in case some are too expensive)
         # For now call all metrics but it's fraction of the data anyway.
@@ -1091,10 +1091,10 @@ class Trainer:
             temp_loader = MyDataLoader(_proxy_dataset, batch_size=1, return_raw=True,
                                        collate_fn=_proxy_dataset.collate_fn)
             if hasattr(_proxy_dataset, "_get_raw"):
-                self.logger.info(f"{step} dataset has \"_get_raw\"\
+                self._logi(f"{step} dataset has \"_get_raw\"\
                 Drawing samples from temp data is available!")
             else:
-                self.logger.warn(f"{step} dataset doesn't define \"_get_raw\".\
+                self._logw(f"{step} dataset doesn't define \"_get_raw\".\
                 Drawing samples from temp data will not be available.")
         else:
             if params["num_or_fraction"] > 1:
@@ -1113,11 +1113,11 @@ class Trainer:
                     _proxy_dataset._indices[x])
                 temp_loader = MyDataLoader(_proxy_dataset, return_raw=True,
                                            **temp_params)
-                self.logger.info(f"{step} dataset has \"_get_raw\"\
+                self._logi(f"{step} dataset has \"_get_raw\"\
                 Drawing samples from temp data is available!")
             else:
                 temp_loader = MyDataLoader(_proxy_dataset, **temp_params)
-                self.logger.warn(f"{step} dataset doesn't define \"_get_raw\".\
+                self._logw(f"{step} dataset doesn't define \"_get_raw\".\
                 Drawing samples from temp data will not be available.")
         if step == "train":
             models = {}
@@ -1150,7 +1150,7 @@ class Trainer:
             paused = False
             aborted = False
         device_monitor = DeviceMonitor(self._device_handles)
-        self.logger.debug(f"params:, {step}, {params}")
+        self._logd(f"params:, {step}, {params}")
         temp_runner = Epoch({"metrics": {step: params["metrics"]}, "extra_metrics": {}},
                             Signals, device_monitor, self.extra_report)
         temp_runner.reset()
@@ -1162,7 +1162,7 @@ class Trainer:
         else:
             temp_runner.metrics[step].append("lengths")
         self._temp_runner = temp_runner
-        self.logger.debug(f"starting temp_runner for {step} step")
+        self._logd(f"starting temp_runner for {step} step")
         self._temp_runner.logger = self.logger
         # TODO: It should be temp_runner.run_temp instead of run_ + step
         if hasattr(temp_loader.dataset, "_get_raw"):
@@ -1236,49 +1236,6 @@ class Trainer:
                 params[x] = locals()[x]
             output = report_function(**params)
             return True, {"success": output}
-            # def _same(a, b):
-            #     # self.logger.debug(f"_same, {b is None}")
-            #     if b is not None and a[1] == b[1]:
-            #         # self.logger.debug(f"_same, {b[1], a[1]}")
-            #         return True
-            #     else:
-            #         return False
-            # output = []
-            # temp_targets = None
-            # temp_predictions = None
-            # # NOTE: this was the default value
-            # # report_function = self.report_function
-            # for x in self._temp_runner.batch_vars:
-            #     if x[2] == "predictions":
-            #         temp_predictions = x
-            #         probs, preds = torch.topk(torch.nn.functional.softmax(
-            #             temp_predictions[-1], dim=1), 5)
-            #         output.append((x[0], x[1], "preds_topk", preds))
-            #         output.append((x[0], x[1], "probs_topk", probs))
-            #         if _same(temp_predictions, temp_targets):
-            #             predictions = temp_predictions[-1]
-            #             targets = temp_targets[-1]
-            #             output.append((x[0], x[1], "predictions_targets",
-            #                            report_function(ix_to_word, predictions, targets)))
-            #             temp_predictions = None
-            #             temp_targets = None
-            #             del predictions
-            #             del targets
-            #     elif x[2] in {"labels", "targets"}:
-            #         temp_targets = x
-            #         if _same(temp_targets, temp_predictions):
-            #             predictions = temp_predictions[-1]
-            #             targets = temp_targets[-1]
-            #             output.append((x[0], x[1], "predictions_targets",
-            #                            report_function(ix_to_word, temp_predictions[-1],
-            #                                            temp_targets[-1])))
-            #             temp_predictions = None
-            #             temp_targets = None
-            #             del predictions
-            #             del targets
-            #     else:
-            #         output.append(x)
-            # return True, output
 
     @POST
     @helpers
@@ -1340,18 +1297,6 @@ class Trainer:
                     # _raw = [x for x in self._temp_runner.batch_vars if x[2] == "raw"]
                     return True, {"preds_targets": [preds, targets],
                                   "topk_words": topk, "probs": probs}
-                    # for i, x in enumerate(_raw):
-                    #     if img_path in [_x[0] for _x in x[-1]]:
-                    #         _img_indx = i
-                    #         break
-                    # cumsum = np.cumsum(batch_lengths)
-                    # # How to segregate batch_preds now?
-                    # # get the correct set of predictions from batch_preds
-                    # # They're not argmax(), so they can be beamed over if required.
-                    # for i in range(batch_lengths[img_indx]):
-                    #     t = preds_targets[cumsum[i]:cumsum[i+1]][img_indx]
-                    #     words.append((vocab.idx2word[t[0]], vocab.idx2word[t[1]]))
-                    # import ipdb; ipdb.set_trace()
                 else:
                     return False, f"Img seems to not have been processed. Check."
         elif not os.path.exists(img_path):
@@ -1401,8 +1346,8 @@ class Trainer:
             self._logd(f"Calling functions {func_names}")
             ix_to_word = self.train_loader.loader._ix_to_word
             funcs[0](model, img, ix_to_word, funcs[1])
+            # FIXME: It calls the callback but return message should be better
             return True, "meh"
-            # call given funcs on the file?
         else:
             return False, self._loge("Data is not image")
 
@@ -1418,7 +1363,7 @@ class Trainer:
             return False, self._loge(f"Error occured while reading data {e}")
         if not all(x in weights for x in model_names):
             return False, self._logd(f"Check save file! " +
-                                     "Not all {model_names} in given weights {weights.keys()}")
+                                     f"Not all {model_names} in given weights {weights.keys()}")
         if not all(x in self._models.names for x in model_names):
             return False, self._logd(f"Some models currently not in scope")
         try:
@@ -1579,7 +1524,7 @@ class Trainer:
             if model not in self._model_defs:
                 self._model_defs[model] = {}
             else:
-                self.logger.warn(f"Will overwrite model, optimizer params and defs for {model}")
+                self._logw(f"Will overwrite model, optimizer params and defs for {model}")
             self._model_defs[model]["model"] = _def
             self._model_params[model] = model_args.copy()
             self._logd(f"Updated model_params and model_def for {model}")
@@ -1615,7 +1560,7 @@ class Trainer:
                 save_path = save_path.replace(".pth", "") + "_best.pth"
         elif not save_path.endswith(".pth"):
             save_path += ".pth"
-        self.logger.debug("Trying to save to %s" % save_path)
+        self._logd(f"Trying to save to {save_path}")
         save_state = {}
         save_state["epoch"] = self.epoch
         save_state["iterations"] = self.iterations
@@ -1627,7 +1572,7 @@ class Trainer:
             save_state["dataloader_params"][k] = {}
             for a, b in v.items():
                 if a == "collate_fn":
-                    self.logger.warn(f"collate_fn in dataloader {k} params will not be saved")
+                    self._logw(f"collate_fn in dataloader {k} params will not be saved")
                     save_state["dataloader_params"][k][a] = "callable_" + type(b).__qualname__
                 else:
                     value = self._dataloader_params[k][a]
@@ -1635,8 +1580,8 @@ class Trainer:
                         save_state["dataloader_params"][k][a] = {}
                         for x, y in value.items():
                             if callable(y):
-                                self.logger.warn(f"callable {type(y).__qualname__} in dataloader" +
-                                                 f" {k} params {a, x} will not be saved")
+                                self._logw(f"callable {type(y).__qualname__} in dataloader" +
+                                           f" {k} params {a, x} will not be saved")
                                 save_state["dataloader_params"][k][a][x] = "callable_" +\
                                     type(y).__qualname__
                             else:
@@ -1653,12 +1598,12 @@ class Trainer:
         for k, v in self._trainer_params.items():
             if callable(v):
                 self._logw(f"callable {type(v).__qualname__}" +
-                           " for trainer_params {k} will not be saved")
+                           f" for trainer_params {k} will not be saved")
                 save_state["trainer_params"][k] = "callable_" + type(v).__qualname__
             else:
                 save_state["trainer_params"][k] = copy.deepcopy(v)
         save_state["metrics"] = self._metrics
-        self.logger.info("Saving to %s" % save_path)
+        self._logi(f"Saving to {save_path}")
 
         # FIXME: If some thing is not saved, it cannot be resumed also
         # NOTE: As I've removed callable saving from dataloader params,
@@ -1699,8 +1644,8 @@ class Trainer:
         for key in keys[:-1]:
             x = x[key]
         x[keys[-1]] = type(x[keys[-1]]).__qualname__
-        self.logger.warn(f"Value with keychain {keys} could not be saved." +
-                         f" Replaced with name = {x[keys[-1]]}")
+        self._logw(f"Value with keychain {keys} could not be saved." +
+                   f" Replaced with name = {x[keys[-1]]}")
         if "not_saved" not in save_state:
             save_state["not_saved"] = [keys]
         else:
@@ -1724,7 +1669,7 @@ class Trainer:
         self._criteria_params = saved_state["criteria_params"]
         if any([("collate_fn" in y or callable(y))
                 for x, y in saved_state["dataloader_params"].items()]):
-            self.logger.warn("collate_fn will not be restored")
+            self._logw("collate_fn will not be restored")
         for k, v in saved_state["dataloader_params"].items():
             for a, b in v.items():
                 if a != "collate_fn":
@@ -1779,11 +1724,11 @@ class Trainer:
         self._models.load(saved_state["models"])
         diff = set(self._metrics.keys()).difference(saved_state["metrics"].keys())
         if diff:
-            self.logger.warn(f"Some metric _steps_ aren't there in saved state {diff}")
+            self._logw(f"Some metric _steps_ aren't there in saved state {diff}")
         for k in self._metrics.keys():
             diff = set(self._metrics[k].keys()).difference(saved_state["metrics"][k].keys())
             if diff:
-                self.logger.warn(f"Some metrics {diff} in {k} aren't there in saved state")
+                self._logw(f"Some metrics {diff} in {k} aren't there in saved state")
         self._metrics = copy.deepcopy(saved_state["metrics"])
         self._logi("Resumed successfully")
 
@@ -1795,10 +1740,10 @@ class Trainer:
         assert all(x in self._metrics[when] for x in self._check_func.requires["metrics"]),\
             "self._check_func requirements not fulfilled"
         if self._check_func(self._metrics[when]):
-            self.logger.info("Save check returned True.")
+            self._logi("Save check returned True.")
             self._save(None, True)
         else:
-            self.logger.info("Save check returned False. Not saving")
+            self._logi("Save check returned False. Not saving")
 
     # control_validation, e.g., can't call validate if it's already running
     # Or what can be called in which state
@@ -1824,7 +1769,7 @@ class Trainer:
     #     :rtype: None
 
     #     """
-    #     self.logger.debug("Trying to resume last best checkpoint %s" % self.best_save)
+    #     self._logd("Trying to resume last best checkpoint %s" % self.best_save)
     #     if self.best_save:
     #         self._resume_path = self.best_save
 
@@ -1833,7 +1778,7 @@ class Trainer:
     #       one should pause or halt or something.
     @control
     def reset(self):
-        self.logger.info("Resetting")
+        self._logi("Resetting")
         backup_num = get_backup_num(".", self._savedir)
         if os.path.exists(self._savedir):
             os.rename(self._savedir, self._savedir + "." + str(backup_num))
@@ -1845,17 +1790,17 @@ class Trainer:
 
     @control
     def pause(self):
-        self.logger.info("Pausing")
+        self._logi("Pausing")
         self._paused = True
 
     @control
     def resume(self):
-        self.logger.info("Resuming")
+        self._logi("Resuming")
         self._paused = False
 
     @control
     def start(self):
-        self.logger.info("Starting")
+        self._logi("Starting")
         self._transition("normal_paused_none", "normal_paused_train")
         Thread(target=self.train).start()
 
@@ -1879,7 +1824,7 @@ class Trainer:
     # Actually a "force_save", pause and then save
     @control
     def save(self):
-        self.logger.info("Saving")
+        self._logi("Saving")
         self._pause_if_running()
         self._transition(self.current_state, "force_running_save")
         self._logw("Trying force save")
@@ -1913,6 +1858,12 @@ class Trainer:
 
     @control
     def abort(self):
+        """`abort` leads to "finished" state with aborted flag set to true.
+
+        :returns: None
+        :rtype: None
+
+        """
         try:
             self._abort_current()
         except Exception as e:
@@ -1921,7 +1872,9 @@ class Trainer:
 
     # NOTE: right now just an alias for _stop_if_paused_or_running
     def _abort_current(self):
+        self._abort = False
         self._stop_if_paused_or_running()
+        self._aborted.append(self.current_state.split("_")[-1])
 
     @property
     def version(self):
@@ -1933,7 +1886,7 @@ class Trainer:
 
     @property
     def current_state(self):
-        return self._current_state
+        return self._sm.current_state
 
     @property
     def loop_type(self):
@@ -2174,14 +2127,14 @@ class Trainer:
     # FIXME: Annealing may depend on extra_metrics
     # TODO: Annealing can be an external function like CheckFunc
     def anneal_lr(self, multiplier=.9):
-        self.logger.info("Annealing Learning Rate")
+        self._logi("Annealing Learning Rate")
         check_losses = [l[2] for l in self.losses if l[0] == self.save_on]
         if len(check_losses) >= 2:
             delta = check_losses[-2] - check_losses[-1]
             if delta < .01 * check_losses[-2]:
                 for param_group in self.optimizer.param_groups:
                     param_group['lr'] *= multiplier
-                self.logger.info("Annealing...")
+                self._logi("Annealing...")
 
     # FIXME: THIS IS totally broken :-(
     # TODO: params should only be predefined names. As such, the required python
@@ -2201,7 +2154,7 @@ class Trainer:
         :rtype: None
 
         """
-        self.logger.info("Trying to update")
+        self._logi("Trying to update")
         if not all(k in self.updatable_params for k in params):
             return False
         valid_updates = []
@@ -2273,10 +2226,11 @@ class Trainer:
             :rtype: None
 
             """
+            # TODO: check_for_abort should be post_step_hook
             if self._abort:
-                self.logger.debug("Aborted training")
-                self._abort = False
-            # Don't run post_epoch_hooks after abort
+                self._logd("Aborting training")
+                self._abort_current()
+            # Don't run post_epoch_hooks after abort. Or should I?
             else:
                 self._run_post_epoch_hooks()
                 if loop_type == "iterations":
@@ -2308,33 +2262,32 @@ class Trainer:
                 t.start()
                 t.join()
                 post_run_steps(loop_type)
-        self.logger.info('finished training')
+        self._logi('finished training')
 
     def validate(self):
-        self.logger.debug("Validating")
+        self._logd("Validating")
         t = Thread(target=self._epoch_runner.run_val,
                    args=[self.val_step_func, self.val_loader])
         t.start()
         t.join()
         if self._abort:
-            self.logger.debug("Aborted validation")
-            self._abort = False
-            # TODO: Handle this
+            self._logd("Aborting after validation")
+            self._abort_current()
         else:
-            self.logger.info("Finished Validation")
+            self._logi("Finished Validation")
 
     def test(self):
-        self.logger.debug("Testing")
+        self._logd("Testing")
         t = Thread(target=self._epoch_runner.run_test,
                    args=[self.test_step_func, self.test_loader])
         t.start()
         t.join()
         if self._abort:
-            self.logger.debug("Aborted Testing")
-            self._abort = False
+            self._logd("Aborting after training")
+            self._abort_current()
             # TODO: Handle abort here
         else:
-            self.logger.info("Finished Testing")
+            self._logi("Finished Testing")
 
     # DONE: There should be a separate definition of "steps" there where it
     #       could be {train, val, test} or simply iterations
@@ -2349,17 +2302,17 @@ class Trainer:
         for step in self._metrics:
             if getattr(self, step + "_loader"):
                 metric_names = self._metrics[step]
-                self._logd(f"Total datapoints processed for {step} step in {key_name}: {update_key}" +
-                           " {self._metrics[step]['num_datapoints'][update_key]}")
+                self._logd(f"Total datapoints processed for {step} step in {key_name}: {update_key}," +
+                           f" {self._metrics[step]['num_datapoints'][update_key]}")
                 for m in metric_names:
                     if update_key in self._metrics[step][m]:
-                        self.logger.debug(f"Value of metric {m} for {step} step in {key_name} is:" +
-                                          " {self._metrics[step][m][update_key]}")
+                        self._logd(f"Value of metric {m} for {step} step in {key_name} is:" +
+                                   f" {self._metrics[step][m][update_key]}")
                     else:
-                        self.logger.debug(f"No value recorded for {step}_step," +
-                                          " metric {m} and {key_name} {update_key}")
+                        self._logd(f"No value recorded for {step}_step," +
+                                   f" metric {m} and {key_name} {update_key}")
             else:
-                self.logger.debug(f"No dataloader for {step}")
+                self._logd(f"No dataloader for {step}")
 
     # FIXME: TRAINING_STEPS
     # NOTE: For this a sample function has to be defined
@@ -2410,7 +2363,7 @@ class Trainer:
         :rtype: None
 
         """
-        self.logger.info("Running post epoch log hook")
+        self._logi("Running post epoch log hook")
         # But these are certain transformation I'm doing to metrics
         for k, v in self._items_to_log_dict.items():
             getattr(self, "_log_" + k)()
@@ -2419,36 +2372,36 @@ class Trainer:
         self.validate_post_epoch_hook(self)
 
     def validate_post_epoch_hook(self):
-        self.logger.debug("Running post epoch validate hook")
+        self._logd("Running post epoch validate hook")
         if self.val_loader is not None:
             self.validate()
         else:
-            self.logger.info("No val loader. Skipping")
+            self._logi("No val loader. Skipping")
 
     def test_post_epoch_hook(self):
-        self.logger.debug("Running post epoch test hook")
+        self._logd("Running post epoch test hook")
         if (self.epoch+1) % self.test_frequency == 0:
             if self.test_loader is not None:
                 self.test()
             else:
-                self.logger.info("No test loader. Skipping")
+                self._logi("No test loader. Skipping")
 
     def save_history_post_epoch_hook(self):
-        self.logger.debug("Running save history state post epoch hook")
+        self._logd("Running save history state post epoch hook")
         self._save(self._save_path_with_epoch)
 
     def save_best_post_epoch_hook(self):
-        self.logger.debug("Running save best post epoch hook")
+        self._logd("Running save best post epoch hook")
         self.check_and_save()
 
     def save_checkpoint_post_epoch_hook(self):
-        self.logger.debug("Running post epoch save hook")
+        self._logd("Running post epoch save hook")
         self._save(self._checkpoint_path)
         self.check_and_save()
 
     # log_train has to run first of all
     def _run_post_epoch_hooks(self):
-        self.logger.debug("Running post epoch hooks")
+        self._logd("Running post epoch hooks")
         all_hooks = self.all_post_epoch_hooks
         hook_prefixes = self.post_epoch_hooks_to_run
         for hook in hook_prefixes:

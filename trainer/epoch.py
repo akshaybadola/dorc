@@ -59,6 +59,23 @@ class Epoch:
     """Epoch is an abstraction of epoch and in fact can not be a cyclical train/val
     type but can be iterations or arbitrary training procedure. It's simply a
     wrapper to hold the metrics and other variables collected while training.
+
+    The `Epoch` has three variables which control its state:
+        `running`, `waiting` and `current_loop`
+
+    While running implies that some task is currently underway, waiting means
+    that it's waiting for the trainer to finish doing some other task before it
+    can resume the task.
+
+    `current_loop` determines which task is underway and "idle" signifies that
+    nothing is running right now.
+
+    For example, at the beginning, `current_loop` is idle and both `running` and
+    `waiting` are False. When `run_train` is called `current_loop` is "train",
+    `running` is true and `waiting` is False, after each batch, the runner waits
+    if "paused" is one of the post_batch_hooks, i.e., after each batch it checks
+    whether to pause itself or not. At that point it's in `waiting` state.
+
     """
     def __init__(self, metrics, signals, device_poll, extra_reportables):
         self.metrics = metrics["metrics"]

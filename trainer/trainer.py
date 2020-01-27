@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from torch.utils.data import Dataset, DataLoader
 
 from .device import init_nvml, gpu_util, cpu_info, memory_info, DeviceMonitor
-from .util import get_backup_num, gen_file_and_stream_logger
+from .util import get_backup_num, gen_file_and_stream_logger, deprecated
 from .epoch import Epoch
 from .mods import Modules as Modules
 from .state_machine import StateMachine
@@ -24,6 +24,7 @@ from .overrides import MyDataLoader
 from .components import Models
 from .functions import _log_metrics_for_step
 from ._log import Log
+from checks import Checks
 from ._checks import (_check_model_params, _check_trainer_params, _check_data_params,
                       _check_resume_or_init_weights)
 from .helpers import (control, prop, extras, helpers, ProxyDataset, get_proxy_dataloader,
@@ -230,6 +231,12 @@ class Trainer:
 
     # START: Checks
     def _sanity_check(self):
+        """Checks are imported from the file _checks.py
+
+        :returns: None
+        :rtype: None
+
+        """
         self._logi("Performing Sanity Check")
         _check_model_params(self)   # checks model params and defs both
         _check_trainer_params(self)  # checks optimizer and stuff also
@@ -397,6 +404,7 @@ class Trainer:
         self._sm = StateMachine("normal_paused_none", self._transition_steps, self._forced_states,
                                 self._logd, self._loge, self._logi, self._logw)
 
+    @deprecated
     def _init_external_vars(self):
         """Initialize some variables which will be attached to it later. Right now a
         hack but it could be more principled later.
@@ -742,6 +750,27 @@ class Trainer:
     @extras
     def load_saves(self, data):
         self._logi("Calling load saves")
+        # PROPOSED Checks mechanism
+        # checks = Checks(self._logd, self._loge)
+        # checks.add("weights" in data, "No such file")
+        # checks.add("method" in data and data["method"] in {"resume", "load"},
+        #            "Invalid or no such method")
+        # checks.add(data["weights"] in self.saves, "File doesn't exist")
+        # checks.check_all_true()
+        # weights = data["weights"]
+        # if data["method"] == "load":
+        #     with checks.catch_and_log(f"Successfuly loaded weights {weights}",
+        #                               f"Could not load weights {weights}") as ct:
+        #         if ct:
+        #             load_state = torch.load(os.path.join(self._savedir, data["weights"]))
+        #             for name in self._models.names:
+        #                 self._models.load_weights(name, load_state["models"][name])
+        # else:
+        #     with checks.catch_and_log("Resuming from file",
+        #                               f"Could not resume from {weights}.") as ct:
+        #         if ct:
+        #             self._resume_from_path(os.path.join(self._savedir, data["weights"]))
+        # return checks.status, checks.message
         if "weights" not in data:
             return False, self._logi("No such file")
         else:
@@ -768,7 +797,7 @@ class Trainer:
                     self._resume_from_path(os.path.join(self._savedir, weights))
                 except Exception as e:
                     return False, self._logi(f"Could not resume from {weights}. Error occured {e}")
-                return True, self._logi(f"{method}ing from file")
+                return True, self._logi(f"Resumed from file")
 
     # CHECK: I think it's more generic now.
     @POST

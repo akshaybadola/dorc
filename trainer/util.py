@@ -4,6 +4,12 @@ import json
 import logging
 import numpy
 import torch
+import warnings
+
+
+def deprecated(f):
+    warnings.warn(f"Function \"{f.__name__}\" is deprecated.")
+    return f
 
 
 def _serialize_defaults(x):

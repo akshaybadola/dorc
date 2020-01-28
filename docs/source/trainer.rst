@@ -60,6 +60,14 @@ trainer.interfaces module
    :undoc-members:
    :show-inheritance:
 
+trainer.mods module
+-------------------
+
+.. automodule:: trainer.mods
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 trainer.overrides module
 ------------------------
 
@@ -72,6 +80,14 @@ trainer.simple\_trainer module
 ------------------------------
 
 .. automodule:: trainer.simple_trainer
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+trainer.state\_machine module
+-----------------------------
+
+.. automodule:: trainer.state_machine
    :members:
    :undoc-members:
    :show-inheritance:

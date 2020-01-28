@@ -29,25 +29,6 @@ class Failure:
 
 
 class Checks:
-    """
-    # TEST
-    checks = Checks(print, print)
-    checks.add(4 > 5, "4 > 5, Should be false")
-    checks.add(6 > 5, "6 > 5, Should be True")
-    checks.check_all_true()
-    with checks.catch_and_log("yay", "no") as check_true:
-        if check_true:
-            print("test")
-    assert checks.status == False
-    assert checks.message == "4 > 5, Should be false"
-    checks.clear()
-    checks.add(4 < 5, "4 < 5, Should be Tue")
-    checks.add(6 > 5, "6 > 5, Should be True")
-    checks.check_all_true()
-    with checks.catch_and_log("yay", "no") as check_true:
-        if check_true:
-            raise AttributeError
-    """
     def __init__(self, default_message_func, default_error_func):
         self._list = []
         self._message_func = default_message_func
@@ -71,7 +52,7 @@ class Checks:
                 self.message_func = f
                 return
         self.status = True
-        self.message = "All checks paseed" if not message else message
+        self.message = "All checks passed" if not message else message
         self.message_func = self._message_func if not func else func
 
     def check_which_one_true(self, message=None, func=None):
@@ -90,25 +71,3 @@ class Checks:
             return CatchAll(success_message, failure_message, self)
         else:
             return Failure()
-
-
-# checks = Checks(print, print)
-# checks.add(4 > 5, "4 > 5, Should be false")
-# checks.add(6 > 5, "6 > 5, Should be True")
-# checks.check_all_true()
-# with checks.catch_and_log("yay", "no") as check_true:
-#     if check_true:
-#         print("test")
-# assert not checks.status
-# assert checks.message == "4 > 5, Should be false"
-
-# checks.clear()
-# checks.add(4 < 5, "4 < 5, Should be Tue")
-# checks.add(6 > 5, "6 > 5, Should be True")
-# checks.check_all_true()
-# assert checks.status
-# with checks.catch_and_log("yay", "no") as check_true:
-#     if check_true:
-#         raise Exception("meh")
-# assert not checks.status
-# assert checks.message == "no Error occured. Exception: meh"

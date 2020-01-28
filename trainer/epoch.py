@@ -1,5 +1,5 @@
-# import ipdb
 import time
+from threading import Event
 
 
 class BatchVars:
@@ -52,6 +52,87 @@ class BatchVars:
             return None
 
 
+class Task:
+    """Task should be a generic task which runs either:
+        1. Over an iterator
+        2. A discrete function
+
+    In case it runs over an iterator it should support waiting, finishing and
+    gather result.
+
+    In case it is a discrete function, it should simply return the results and
+    should indicate whether it's running or not.
+
+    Epoch is a kind of task, but it isn't a subclass right now.
+    """
+    def __init__(self, func, signals):
+        self.task_type = "loop_type"
+        self._waiting = Event()
+        self._running = Event()
+        if self.task_type == "loop_type":
+            self._current_loop = "idle"
+        else:
+            self._current_loop = None
+
+    def reset(self):
+        self.finish()
+
+    @property
+    def init_or_finished(self):
+        return (not self.running) and (not self.waiting)
+
+    def finish(self):
+        """Finishes the current execution loop by resetting running and waiting flags
+        `self._waiting` and `self._running` are set to False
+
+        :returns: None
+        :rtype: None
+
+        """
+        self._waiting.clear()
+        self._running.clear()
+
+    @property
+    def current_loop(self):
+        return self._current_loop
+
+    @property
+    def waiting(self):
+        return self._waiting.is_set()
+
+    @property
+    def running(self):
+        return self._running.is_set()
+
+    def _toggle_running(self):
+        if self.running:
+            self._running.clear()
+        elif not self.running:
+            self._running.set()
+
+    def toggle_waiting(self):
+        if self.waiting:
+            self._waiting.clear()
+        elif not self.waiting:
+            self._waiting.set()
+
+    def run_loop(self):
+        if not self.task_type == "loop_type":
+            return
+        else:
+            # do something
+            # gather output after each iteration
+            pass
+
+    def run_task(self):
+        if self.task_type == "loop_type":
+            return
+        else:
+            # do something
+            # gather output
+            self.finish()
+
+
 # DONE: Why's epoch not reporting even standard losses?
 # Perhaps decouple the Epoch entirely from the wrapper
 # with a tcp socket like thingy
@@ -60,12 +141,18 @@ class Epoch:
     type but can be iterations or arbitrary training procedure. It's simply a
     wrapper to hold the metrics and other variables collected while training.
 
-    The `Epoch` has three variables which control its state:
-        `running`, `waiting` and `current_loop`
+    The `Epoch` has two variables which control its state:
+        `running` and `waiting`
 
-    While running implies that some task is currently underway, waiting means
-    that it's waiting for the trainer to finish doing some other task before it
-    can resume the task.
+    In addition `current_loop` reports attribute of the current state. State
+    transition is simple in the sense that either the runner is running or
+    waiting. While running implies that some task is currently underway, waiting
+    means that it's waiting for the trainer to finish doing some other task
+    before it can resumes the task.
+
+    Even if it has reached the end of train_loader or some other iterator, it
+    has in fact no way to know that and will pause regardless. Therefore it can
+    be instructed to wrap up everything at any point in any loop
 
     `current_loop` determines which task is underway and "idle" signifies that
     nothing is running right now.
@@ -74,7 +161,9 @@ class Epoch:
     `waiting` are False. When `run_train` is called `current_loop` is "train",
     `running` is true and `waiting` is False, after each batch, the runner waits
     if "paused" is one of the post_batch_hooks, i.e., after each batch it checks
-    whether to pause itself or not. At that point it's in `waiting` state.
+    whether to pause itself or not. At that point it's in `waiting`
+    state. `current_loop` again doesn't really correspond to any iterator but
+    simply refers to whichever task it has been assigned right now.
 
     """
     def __init__(self, metrics, signals, device_poll, extra_reportables):
@@ -93,8 +182,8 @@ class Epoch:
                 else:
                     self.keep_time[step] = False
                 self.extra_reportables[step] = extra_reportables[step].copy()
-        self._waiting = False
-        self._running = False
+        self._waiting = Event()
+        self._running = Event()
         self._current_loop = "idle"
         self.reset()
         self._post_batch_hooks_to_run = {"train": ["log", "paused"],
@@ -108,15 +197,19 @@ class Epoch:
         self.batch_vars = BatchVars()
 
     def finish(self):
-        """Finishes the current execution loop by resetting running and waitin flags
+        """Finishes the current execution loop by resetting running and waiting flags
         `self._waiting` and `self._running` are set to False
 
-        :returns: 
-        :rtype: 
+        :returns: None
+        :rtype: None
 
         """
-        self._waiting = False
-        self._running = False
+        self._waiting.clear()
+        self._running.clear()
+
+    @property
+    def init_or_finished(self):
+        return (not self.running) and (not self.waiting)
 
     @property
     def current_loop(self):
@@ -124,11 +217,11 @@ class Epoch:
 
     @property
     def waiting(self):
-        return self._waiting
+        return self._waiting.is_set()
 
     @property
     def running(self):
-        return self._running
+        return self._running.is_set()
 
     # TODO: May not be threadsafe. Should avoid writes by other threads
     #       copy/deepcopy may not be enough
@@ -156,15 +249,15 @@ class Epoch:
 
     def _toggle_running(self):
         if self.running:
-            self._running = False
+            self._running.clear()
         elif not self.running:
-            self._running = True
+            self._running.set()
 
     def toggle_waiting(self):
         if self.waiting:
-            self._waiting = False
+            self._waiting.clear()
         elif not self.waiting:
-            self._waiting = True
+            self._waiting.set()
 
     # TODO: Format it better in a yield manner so it isn't in a loop.
     # CHECK: Why are there three functions here? Backprop happens in funcs
@@ -178,7 +271,7 @@ class Epoch:
     #       counted towards running
     def run_train(self, train_step, train_loader, loop_type, num_iterations=0, get_raw=False):
         """Run the training loop until completion. `train_step` is purposely really
-        simple. training
+        simple.
 
         :param train_step:   :class:`function` which takes a batch, processes it and returns output
         :param train_loader: :class:`torch.nn.utils.data.DataLoader`
@@ -226,7 +319,8 @@ class Epoch:
                     break
                 do_train(batch)
                 if self.signals.aborted:  # has to be here else, break won't work
-                    self._running = False
+                    if self.running:
+                        self._toggle_running()
                     self._current_loop = "idle"
                     break
         else:
@@ -273,7 +367,8 @@ class Epoch:
             self.batch_num["val"] += 1
             self._run_post_batch_hooks(**{"step": "val", **received})
             if self.signals.aborted:
-                self._running = False
+                if self.running:
+                    self._toggle_running()
                 self._current_loop = "idle"
                 break
         if self.running:
@@ -408,8 +503,10 @@ class Epoch:
     #       I can use async_get maybe from concurrent.futures or something
     def _paused_post_batch_hook(self, **kwargs):
         self.toggle_waiting()
-        while self.signals.paused:
-            time.sleep(5)
+        # while self.signals.paused:
+        #     time.sleep(5)
+        # wait for paused to clear (or actually unpaused to set)
+        self.signals.paused.wait()
         self.toggle_waiting()
 
     # def _abort_post_batch_hook(self, **kwargs):

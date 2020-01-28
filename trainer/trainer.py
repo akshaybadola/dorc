@@ -8,7 +8,7 @@ import json
 import torch
 import inspect
 from functools import partial
-from threading import Thread
+from threading import Thread, Event
 from PIL import Image
 import numpy as np
 from multiprocessing.pool import ThreadPool
@@ -24,7 +24,7 @@ from .overrides import MyDataLoader
 from .components import Models
 from .functions import _log_metrics_for_step
 from ._log import Log
-from checks import Checks
+from .checks import Checks
 from ._checks import (_check_model_params, _check_trainer_params, _check_data_params,
                       _check_resume_or_init_weights)
 from .helpers import (control, prop, extras, helpers, ProxyDataset, get_proxy_dataloader,
@@ -184,7 +184,6 @@ class Trainer:
         if trainer_params["resume"] or "init_weights" in trainer_params:
             self._init_models()
             _check_resume_or_init_weights(self)
-        print(trainer_params["image_root"])
 
     # TODO: Check certain variables after everything is initialized, like
     #       `update_funcs`.
@@ -331,10 +330,15 @@ class Trainer:
 
         self._logi("Initializing State Variables")
         # NOTE: These should only be modified by the transition function
-        self._paused = True
-        self._current_aborted = False
-        self._session_aborted = False
-        self._running_threads = set()
+        self._running_event = Event()
+        self._current_aborted_event = Event()
+        self._session_aborted_event = Event()
+        # NOTE: Default setting for tasks
+        self._task_runners = {"epoch": self._epoch_runner,
+                              "train": self._epoch_runner,
+                              "val": self._epoch_runner,
+                              "test": self._epoch_runner}
+        self._running_threads = {}
         self._aborted = []   # prev_loop_aborted
         # Initialize hooks
         # Validate test and save can never be removed, LOL
@@ -367,7 +371,7 @@ class Trainer:
         if "iterations" in steps:
             self._transition_steps = {"train", "val", "test", "none"}
         else:
-            self._transition_steps = steps.union({"none"})
+            self._transition_steps = set(steps).union({"none"})
         self._forced_states = {"save", "eval", "test", "stop"}
 
     # TODO: For each such variable i.e., static, property etc. add a decorator
@@ -574,12 +578,15 @@ class Trainer:
                 self._test_step_func = self._update_functions["test"]
 
     def _init_epoch_runner(self):
-        class Signals(object, metaclass=PropertyProxy):
-            trainer = self
+        # class Signals(object, metaclass=PropertyProxy):
+        #     trainer = self
         device_monitor = DeviceMonitor(self._device_handles)
+        signals = SimpleNamespace()
+        signals.paused = self._running_event
+        signals.aborted = self._current_aborted  # not an event
         self._logi("Initializing Epoch Runner")
         self._epoch_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
-                                   Signals, device_monitor, self.extra_report)
+                                   signals, device_monitor, self.extra_report)
     # END: Init Funcs
 
     # START: State Machine
@@ -620,27 +627,32 @@ class Trainer:
         if run == "paused":
             self._transition(self.currrent_state, "_".join(force, "running", step))
 
-    def _ensure_paused(self):
-        if not self._paused:
-            self._paused = True
-        if self._epoch_runner.running:
-            while not self._epoch_runner.waiting:
-                time.sleep(1)
-                self._logd(f"Epoch runner is running")
+    def _ensure_paused(self, task):
+        # ensure what is paused?
+        if not self.paused:
+            self._running_event.clear()  # not running
+        runner = self._task_runners.get(task)  # say epoch
+        if runner.running:
+            self._logd(f"Waiting for Epoch runner")
 
     def _ensure_unpaused(self):
+        # ensure what is unpaused?
         if self.paused:
-            self._paused = False
+            self._running_event.set()
         if self._epoch_runner.waiting:
-            self._logd(f"Epoch runner is waiting. Should not wait.")
+            self._logd(f"Epoch runner is waiting. Should not be waiting")
 
     def _ensure_ready(self):
-        if self._epoch_runner.waiting:
+        # ensure what is ready?        
+        if self.paused:
+            self._loge("Cannot ensure ready while paused")
+        elif self._epoch_runner.waiting:
             self._epoch_runner.toggle_waiting()
 
     def _ensure_finished(self):
+        # ensure what is finished?
         """`self._ensure_paused` should be called before calling _ensure_finished
-        :class:`Epoch.finish` doesn't actually reset the metrics and variables
+        :meth:`Epoch.finish` doesn't actually reset the metrics and variables
         stored in the batch.
 
         :returns: None
@@ -650,7 +662,7 @@ class Trainer:
         if self._epoch_runner.running:
             self._loge("epoch_runner running while _ensure_finished called")
             return
-        if not self._epoch_runner.waiting:
+        if not self._epoch_runner.waiting:  # should be waiting
             self._logd("Waiting for epoch_runner to finsih")
             while not self._epoch_runner.waiting:
                 time.sleep(1)
@@ -708,12 +720,15 @@ class Trainer:
         b_force, b_run, b_step = _to.split("_")
 
         # NOTE: Pre transition checks
+        #
+        # train/val/test point to self._epoch_runner, otherwise point to
+        # appropriate functions
         if a_run == "paused":
-            self._ensure_paused()
+            self._ensure_paused(a_step)
         if a_run == "finished":
-            self._ensure_finished()
+            self._ensure_finished(a_step)
         if a_force == "normal" and b_force == "force":
-            self._ensure_paused()
+            self._ensure_paused(a_step)
             self._prev_normal_state = self.current_state
             self._sm.current_state = _to
         elif a_force == "force" and b_force == "normal":
@@ -722,14 +737,44 @@ class Trainer:
 
         if False:               # thread not running
             # NOTE: Actual state transition
-            if b_step == "train":
-                Thread(target=self.train).start()
+            #
+            # train, val, test etc are epoch tasks.
+            #
+            # val, test are hooks and not really tasks. Still, they can be run
+            # in spearate threads and exception etc. captured.
+            # FIXME: Change all this
+            if b_step in {"train", "val", "test"}:
+                if "train" in self._running_threads:
+                    if not self._running_threads["train"].is_alive():
+                        # do something
+                        self.train()
+                else:
+                    self._running_threads["train"] = Thread(target=self.train)
+                    self._running_threads["train"].start()
             elif b_step == "val":
-                Thread(target=self.validate).start()
+                if "val" in self._running_threads:
+                    if not self._running_threads["val"].is_alive():
+                        # do something
+                        pass
+                else:
+                    self._running_threads["val"] = Thread(target=self.val)
+                    self._running_threads["val"].start()
             elif b_step == "test":
-                Thread(target=self.test).start()
+                if "test" in self._running_threads:
+                    if not self._running_threads["test"].is_alive():
+                        # do something
+                        pass
+                else:
+                    self._running_threads["test"] = Thread(target=self.test)
+                    self._running_threads["test"].start()
             elif b_step == "user_func":
-                Thread(target=self._current_user_func).start()
+                if "user_func" in self._running_threads:
+                    if not self._running_threads["user_func"].is_alive():
+                        # do something
+                        pass
+                else:
+                    self._running_threads["user_func"] = Thread(target=self.user_func)
+                    self._running_threads["user_func"].start()
 
         # NOTE: Post transition checks
         if a_force == "normal" == b_force:
@@ -750,12 +795,13 @@ class Trainer:
     @extras
     def load_saves(self, data):
         self._logi("Calling load saves")
-        # PROPOSED Checks mechanism
+        # NOTE: Proposed Checks mechanism. Actually it doesn't check at each
+        #       step, so it's a bit buggy but something like this can be made.
         # checks = Checks(self._logd, self._loge)
-        # checks.add("weights" in data, "No such file")
+        # checks.add("weights" in data, "Missing params \"weights\"")
         # checks.add("method" in data and data["method"] in {"resume", "load"},
         #            "Invalid or no such method")
-        # checks.add(data["weights"] in self.saves, "File doesn't exist")
+        # checks.add(data["weights"] in self.saves, "No such file")
         # checks.check_all_true()
         # weights = data["weights"]
         # if data["method"] == "load":
@@ -772,11 +818,11 @@ class Trainer:
         #             self._resume_from_path(os.path.join(self._savedir, data["weights"]))
         # return checks.status, checks.message
         if "weights" not in data:
-            return False, self._logi("No such file")
+            return False, self._logi("Missing params \"weights\"")
         else:
             weights = data["weights"]
         if "method" not in data or data["method"] not in {"resume", "load"}:
-            return False, self._logi("Invalid or no method")
+            return False, self._logi("Invalid or no such method")
         else:
             method = data["method"]
         self._logd(f"Data given was {data}")
@@ -1638,17 +1684,20 @@ class Trainer:
         self._logi("Resumed successfully")
 
     def check_and_save(self):
-        assert ("when" in self._check_func.requires and
-                self._check_func.requires["when"]
-                in ["train", "val", "test"]), "Not sure when to save"
-        when = self._check_func.requires["when"]
-        assert all(x in self._metrics[when] for x in self._check_func.requires["metrics"]),\
-            "self._check_func requirements not fulfilled"
-        if self._check_func(self._metrics[when]):
-            self._logi("Save check returned True.")
-            self._save(None, True)
+        if self._check_func is not None:
+            assert ("when" in self._check_func.requires and
+                    self._check_func.requires["when"]
+                    in ["train", "val", "test"]), "Not sure when to save"
+            when = self._check_func.requires["when"]
+            assert all(x in self._metrics[when] for x in self._check_func.requires["metrics"]),\
+                "self._check_func requirements not fulfilled"
+            if self._check_func(self._metrics[when]):
+                self._logi("Save check returned True.")
+                self._save(None, True)
+            else:
+                self._logi("Save check returned False. Not saving")
         else:
-            self._logi("Save check returned False. Not saving")
+            self._logi("Check func is None. Not saving")
     # END: Save, Load and Resume
 
     # START: Controls
@@ -1786,11 +1835,11 @@ class Trainer:
 
     def _abort_session(self):
         # any -> force_finished_none with aborted_session True
-        self._session_aborted = True
+        self._session_aborted_event.set()
         self._transition(self.current_state, "force_finshed_none")
 
     def _abort_current(self):
-        self._current_aborted = False
+        self._current_aborted_event.set()
         self._stop_if_paused_or_running()
         self._aborted.append(self.current_state.split("_")[-1])
 
@@ -1915,6 +1964,15 @@ class Trainer:
     def _extras(self):
         return dict((x.__name__, x) for x in extras.members)
 
+    # START: State props
+    @property
+    def running(self):
+        return self._running_event.is_set()
+        # if self._running_threads:
+        #     return [x for x in self._running_threads]
+        # else:
+        #     return None
+
     @property
     def current_run(self):
         if "_epoch_runner" not in self.__dict__:
@@ -1924,7 +1982,16 @@ class Trainer:
 
     @property
     def paused(self):
-        return self._paused
+        return not self._running_event.is_set()
+
+    @property
+    def _current_aborted(self):
+        return self._current_aborted_event.is_set()
+
+    @property
+    def _session_aborted(self):
+        return self._session_aborted_event.is_set()
+    # END: State props
 
     @property
     def best_save(self):
@@ -2207,11 +2274,14 @@ class Trainer:
             self._logd(f"Will run hooks after {self._hooks_run_iter_frequency} iterations")
             while self.iterations < self.max_iterations:
                 self._epoch_runner.reset()
+                # run for self._hooks_run_iter_frequency
                 t = Thread(target=self._epoch_runner.run_train,
                            args=[self.train_step_func, self.train_loader, loop_type,
                                  self._hooks_run_iter_frequency])
+                self._running_threads["train"] = t
                 t.start()
                 t.join()
+                # after thread t has joined
                 post_run_steps(loop_type)
         else:
             self._logd(f"Total number of batches is {len(self.train_loader)}")
@@ -2221,6 +2291,7 @@ class Trainer:
                            args=[self.train_step_func, self.train_loader, loop_type])
                 t.start()
                 t.join()
+                # after thread t has joined
                 post_run_steps(loop_type)
         self._logi('finished training')
 

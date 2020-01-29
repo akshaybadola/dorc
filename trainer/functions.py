@@ -75,7 +75,7 @@ class ClassificationTestStep:
 
 def _log_metrics_for_step(step, key_name, step_loader, metrics,
                           update_key, log_func):
-    metric_names = metrics[step]
+    metric_names = set(metrics.keys())
     log_func(f"Total datapoints processed for {step} step in {key_name}: {update_key}," +
              f" {metrics['num_datapoints'][update_key]}")
     for m in metric_names:

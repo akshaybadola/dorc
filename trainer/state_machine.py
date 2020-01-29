@@ -19,16 +19,12 @@ class StateMachine:
     def allowed_transition(self, a, b):
         a_force, a_run, a_step = a.split("_")
         b_force, b_run, b_step = b.split("_")
-        # if a_run == b_run == "paused":  # can we have normal_paused_train -> normal_paused_val?
-        #     return False
-        # if a_force == b_force == "force":
-        #     return False
         allowed_predicate_list = [(a_force == "normal" == b_force
                                    and a_step == b_step  # in the same step
                                    and ((a_run != b_run and a_run in {"running", "paused"}
                                          and b_run in {"running", "paused"})  # running <-> paused
-                                        # only running -> finished
-                                        or (a_run == "running" and b_run == "finished"))),
+                                        # only paused -> finished
+                                        or (a_run == "paused" and b_run == "finished"))),
                                   (a_force == "normal" == b_force
                                    and ((a_step != b_step
                                          and a_run == "finished"  # finished -> {running, paused}
@@ -36,9 +32,18 @@ class StateMachine:
                                         or (a_step == "none" and a_run == "paused"  # if none -> any
                                             and b_run in {"running", "paused"}))),  # paused -> {running, paused}
                                   (a_force == "normal" != b_force        # normal -> force
-                                   and a_run != "running"
-                                   and b_run == "running"  # any -> running
-                                   and a_step != b_step
+                                   and ((a_step == b_step
+                                         and ((a_run in {"paused", "running"}
+                                               and b_run in {"paused", "running"})
+                                              or (a_run == "paused"
+                                                  and b_run == "finished")))
+                                        or (a_step != b_step
+                                            # no point a_running -> b_paused
+                                            and b_run == "running"
+                                            and a_run in {"paused", "finished"})
+                                        or (b_step == "stop"
+                                            and a_run == "paused"
+                                            and b_run == "finished"))
                                    and a_step not in self._forced_states
                                    and b_step in self._forced_states),  # step must change
                                   (a_force == "force" != b_force

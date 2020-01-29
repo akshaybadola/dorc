@@ -167,6 +167,7 @@ class Epoch:
 
     """
     def __init__(self, metrics, signals, device_poll, extra_reportables):
+        self.name = "no_name"
         self.metrics = metrics["metrics"]
         self.extra_metrics = metrics["extra_metrics"]
         self.signals = signals
@@ -184,6 +185,7 @@ class Epoch:
                 self.extra_reportables[step] = extra_reportables[step].copy()
         self._waiting = Event()
         self._running = Event()
+        self.aborted = Event()
         self._current_loop = "idle"
         self.reset()
         self._post_batch_hooks_to_run = {"train": ["log", "paused"],
@@ -195,6 +197,7 @@ class Epoch:
         self.batch_num = {"train": 0, "val": 0, "test": 0}
         self.finish()
         self.batch_vars = BatchVars()
+        self.aborted.clear()
 
     def finish(self):
         """Finishes the current execution loop by resetting running and waiting flags
@@ -206,6 +209,7 @@ class Epoch:
         """
         self._waiting.clear()
         self._running.clear()
+        self._current_loop = "idle"
 
     @property
     def init_or_finished(self):
@@ -292,7 +296,7 @@ class Epoch:
         self._log("Starting run_train")
         self._log(f"Train Loader properties: {len(train_loader)}")
 
-        def do_train(batch):
+        def train_one_batch(batch):
             start = time.time()
             self.device_poll.start()
             if get_raw:
@@ -317,22 +321,28 @@ class Epoch:
                 batch = train_loader.__iter__().__next__()
                 if not batch:
                     break
-                do_train(batch)
-                if self.signals.aborted:  # has to be here else, break won't work
+                train_one_batch(batch)
+                if self.signals.aborted():  # has to be here else, break won't work
+                    print("aborting from epoch runner")
                     if self.running:
                         self._toggle_running()
                     self._current_loop = "idle"
-                    break
+                    self.finish()
+                    self.aborted.set()
+                    return
         else:
             for i, batch in enumerate(train_loader):
                 if not batch:
                     break
-                do_train(batch)
-                if self.signals.aborted:  # has to be here else, break won't work
+                train_one_batch(batch)
+                if self.signals.aborted():  # has to be here else, break won't work
+                    print("aborting from epoch runner")
                     if self.running:
                         self._toggle_running()
                     self._current_loop = "idle"
-                    break
+                    self.finish()
+                    self.aborted.set()
+                    return
         if self.running:
             self._toggle_running()
         self._current_loop = "idle"
@@ -366,11 +376,13 @@ class Epoch:
                 received["raw"] = raw
             self.batch_num["val"] += 1
             self._run_post_batch_hooks(**{"step": "val", **received})
-            if self.signals.aborted:
+            if self.signals.aborted():
                 if self.running:
                     self._toggle_running()
                 self._current_loop = "idle"
-                break
+                self.finish()
+                self.aborted.set()
+                return
         if self.running:
             self._toggle_running()
         self._current_loop = "idle"
@@ -393,11 +405,13 @@ class Epoch:
                 received["raw"] = raw
             self.batch_num["test"] += 1
             self._run_post_batch_hooks(**{"step": "test", **received})
-            if self.signals.aborted:
+            if self.signals.aborted():
                 if self.running:
                     self._toggle_running()
                 self._current_loop = "idle"
-                break
+                self.finish()
+                self.aborted.set()
+                return
         if self.running:
             self._toggle_running()
         self._current_loop = "idle"
@@ -431,7 +445,7 @@ class Epoch:
     #             if not batch:
     #                 break
     #             do_val(batch)
-    #             if self.signals.aborted:
+    #             if self.signals.aborted():
     #                 self._running = False
     #                 self._current_loop = "idle"
     #                 break
@@ -440,7 +454,7 @@ class Epoch:
     #             if not batch:
     #                 break
     #             do_val(batch)
-    #             if self.signals.aborted:
+    #             if self.signals.aborted():
     #                 self._running = False
     #                 self._current_loop = "idle"
     #                 break
@@ -476,7 +490,7 @@ class Epoch:
     #             if not batch:
     #                 break
     #             do_test(batch)
-    #             if self.signals.aborted:
+    #             if self.signals.aborted():
     #                 self._running = False
     #                 self._current_loop = "idle"
     #                 break
@@ -485,7 +499,7 @@ class Epoch:
     #             if not batch:
     #                 break
     #             do_test(batch)
-    #             if self.signals.aborted:
+    #             if self.signals.aborted():
     #                 self._running = False
     #                 self._current_loop = "idle"
     #                 break
@@ -510,7 +524,7 @@ class Epoch:
         self.toggle_waiting()
 
     # def _abort_post_batch_hook(self, **kwargs):
-    #     if self.signals.aborted:
+    #     if self.signals.aborted():
     #         pass
 
     # TODO: log GPU, CPU, Memory per batch

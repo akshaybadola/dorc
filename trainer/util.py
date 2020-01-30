@@ -8,7 +8,8 @@ import warnings
 
 
 def deprecated(f):
-    warnings.warn(f"Function \"{f.__name__}\" is deprecated.")
+    warn_str = f"Function {f.__name__} is deprecated."
+    warnings.warn(warn_str)
     return f
 
 

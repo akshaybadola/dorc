@@ -293,15 +293,19 @@ class Trainer:
         self.__props.add("_extras")
 
         self._logi("Initializing State Variables")
+
         # NOTE: These should only be modified by the transition function
         self._running_event = Event()  # something is running
         self._current_aborted_event = Event()  # current task was aborted
         self._session_aborted_event = Event()  # entire session was aborted
+
+        # FIXME: Threads should be accessible to check if they're alive or dead
         self._threads = {"main": Thread(target=self.train)}
+
         # NOTE: Default setting for tasks
         self._aborted = []  # prev_loop_aborted
-        # Initialize hooks
-        # Validate test and save can never be removed, LOL
+
+        # Initialize hooks. Validate test and save can never be removed, LOL
         #
         # TODO: Not sure if hooks are state or property vars
         #       Maybe they're just hooks
@@ -309,12 +313,14 @@ class Trainer:
         #       validate and test That can only be if I specify order in certain
         #       hooks.
         self._post_epoch_hooks_to_run = HookList(["validate", "test", "update_metrics"])
+
         # FIXME: validate, test, update_metrics is mandatory for now,
         #        unless val_loader and test_loader are none of course
         self._post_epoch_hooks_to_run.append("save_history")
         self._post_epoch_hooks_to_run.append("save_best")
         self._post_epoch_hooks_to_run.append("save_checkpoint")
         self._post_epoch_hooks_to_run.append("log")
+
         # NOTE: _log_metrics is a function so "metrics" defines a way to log it
         #       rather than just copying the values.
         self._items_to_log_dict = {"metrics": self._log_metrics}
@@ -324,12 +330,7 @@ class Trainer:
         self._init_nvml()
         self._temp_runner = SimpleNamespace()
         self._flag_adhoc_func_running = False
-        # self._control_transitions = {"start": ("paused_none", "unpaused_train"),
-        #                              "pause": ("unpaused_any", "paused_any"),
-        #                              "resume": ("paused_any", "unpaused_any"),
-        #                              "reset": ("any_any", "paused_none")}
         steps = self._trainer_params["training_steps"]
-        # runs = {"running", "paused", "finished"}
         if "iterations" in steps:
             self._transition_steps = {"train", "val", "test", "none"}
         else:
@@ -554,21 +555,17 @@ class Trainer:
                                    signals, device_monitor, self.extra_report)
         self._epoch_runner.name = "epoch_runner"
         self._task_runners = {"epoch": self._epoch_runner,
-                              "train": self._epoch_runner,
-                              "val": self._epoch_runner,
-                              "test": self._epoch_runner}
+                              "train": self._epoch_runner}
+        self._task_thread_keys = {"epoch": "main",
+                                  "train": "main"}
         # FIXME: For val and test maybe update in separate variables
         self._tasks_callbacks = {"epoch": self._run_post_epoch_hooks,
-                                 "train": self._run_post_epoch_hooks,
-                                 "val": None,
-                                 "test": None}
+                                 "train": self._run_post_epoch_hooks}
     # END: Init Funcs
 
-    # START: State Machine
-    def _allowed_transition(self, a, b):
-        return self._sm.allowed_transition(a, b)
-
-    def _finish_if_paused_or_running(self, _force=False):
+    # START: Internal Controls
+    #        These functions interact with the SM
+    def _finish_if_paused_or_running(self, _force=False, gather=False):
         """Should not be called from `self._transition`
         Stops the current running main flow (or alternate flow?)
 
@@ -576,6 +573,9 @@ class Trainer:
         :rtype: None
 
         """
+        self._transition_flags = {}
+        if gather:
+            self._transition_flags["run_cb"] = True
         force, run, step = self.current_state.split("_")
         if _force:
             force = "force"
@@ -618,7 +618,10 @@ class Trainer:
                 self._transition(self.current_state, "_".join(["force", "running", step]))
             else:
                 self._transition(self.current_state, "_".join(["normal", "running", step]))
+    # END: Internal Controls
 
+    # START: State Machine Helpers
+    #        Helper functions to enforce state machine commands
     def _ensure_paused(self, task):
         "Should not be called from anywhere but `self._transition`"
         print("calling ensure paused")
@@ -670,43 +673,33 @@ class Trainer:
 
         """
         # This is like a guard
-        print("Calling _ensure_finished")
+        self._logd("Calling _ensure_finished")
         if not self._current_aborted:
             self._toggle_current_aborted()
         runner = self._task_runners.get(task)
         callback = self._tasks_callbacks.get(task)
         if runner is not None:
             if self.paused:
-                print("was self paused")
                 self._toggle_running()  # unpause for abort
-                print("was runner aborted", runner.aborted.is_set())
-                print("was runner running", runner.running)
-                print("was runner waiting", runner.waiting)
                 runner.aborted.wait()
                 self._toggle_running()
             else:
-                print("was not paused")
                 runner.aborted.wait()
-            print("later runner aborted", runner.aborted.is_set())
-            print("later runner running", runner.running)
-            print("later runner waiting", runner.waiting)
-            # to = 0
-            # if runner.running:
-            #     self._loge(f"{task} runner running while _ensure_finished called." +
-            #                f" Will wait for at most {timeout} seconds")
-            #     while runner.running and to < timeout:
-            #         time.sleep(1)
-            #         to += 1
-                # what if the runner was doing two things?
-            # elif runner.waiting:  # should be waiting
-            #     runner.finish()
             if callback is not None and run_cb:
-                print("calling callback")
+                self._logd("calling callback")
                 callback()
             else:
-                print("not calling callback")
-        print("WTF")
+                self._logd("not calling callback")
+        if self._threads[self._task_thread_keys[task]].is_alive():
+            self._loge(f"Could not kill task {task}")
+        else:
+            self._logd(f"Finished task {task}")
         self._toggle_current_aborted()
+    # END: State Machine Helpers
+
+    # START: State Machine
+    def _allowed_transition(self, a, b):
+        return self._sm.allowed_transition(a, b)
 
     def _transition(self, _from, _to):
         """Transitions to the next state from the given state.
@@ -768,15 +761,12 @@ class Trainer:
         elif not self._allowed_transition(_from, _to):
             return False, self._loge(f"State transition {_from} -> {_to} is not allowed")
         self._logd(f"Trying to transition from {_from} to {_to}")
+
         # NOTE: Pre transition checks
-        #
-        # train/val/test point to self._epoch_runner, otherwise point to
-        # appropriate functions
-        # if a_run == "paused":
-        #     self._ensure_paused(a_step)
-        # if a_run == "finished":
-        #     self._ensure_finished(a_step)
-        if a_force == "normal" and b_force == "force":
+        # NOTE: Only for main loop
+        if a_force == "normal" == b_force:
+            self._sm.current_state = _to
+        elif a_force == "normal" and b_force == "force":
             # will have to ensure first is paused?
             self._ensure_paused(a_step)
             self._prev_normal_state = self.current_state
@@ -785,6 +775,8 @@ class Trainer:
             assert _to == self._prev_normal_state
             self._sm.current_state = _to
         elif a_force == "force" and b_force == "normal" and a_run == "finished":
+            self._sm.current_state = _to
+        elif a_force == "force" == b_force:
             self._sm.current_state = _to
 
         # NOTE: Actual state transition
@@ -796,7 +788,8 @@ class Trainer:
                     if "main" not in self._threads or not self._threads["main"].is_alive():
                         self._threads["main"] = Thread(target=self.train)
                         self._threads["main"].start()
-        elif b_step == "val":   # create new thread?
+        # FIXME: create (alt_loop) new thread for all below
+        elif b_step == "val":
             # TODO: Scenarios
             #       1. main thread died?
             #       2. main thread aborted and started main thread with val?
@@ -830,14 +823,13 @@ class Trainer:
             pass
 
         # NOTE: Post transition checks
-        if a_force == "normal" == b_force:
-            self._sm.current_state = _to
         if b_run == "running":
             self._ensure_unpaused(b_step)
         elif b_run == "paused":
             self._ensure_paused(b_step)
         elif b_run == "finished":
-            self._ensure_finished(b_step)
+            self._ensure_finished(b_step, **self._transition_flags)
+            self._transition_flags = {}
             self._threads["main"].join()
         if b_run in {"paused", "running"}:
             self._ensure_ready(b_step)
@@ -1807,19 +1799,23 @@ class Trainer:
         self._init_all()
 
     @control
+    def does_nothing(self):
+        pass
+
+    @control
     def pause(self):
-        return self._logi("Pausing")
         self._pause_if_running()
+        return self._logi("Pausing")
 
     @control
     def resume(self):
-        return self._logi("Resuming")
         self._run_if_paused()
+        return self._logi("Resuming")
 
     @control
     def start(self):
-        self._logi("Starting")
         self._transition("normal_paused_none", "normal_paused_train")
+        return self._logi("Starting")
 
     # # CHECK: Can we resume after stop?
     # @control
@@ -1904,8 +1900,25 @@ class Trainer:
         except Exception as e:
             return False, self._logi(f"Could not abort {self.current_state}. Error {e}")
         return True, self._logi(f"Aborted {self.current_state}")
+
+    @control
+    def abort_loop_with_callback(self):
+        """`abort_loop` aborts only the current loop stops with the aborted flag. Useful
+        for changing the parameters and starting again. Saves the current
+        metrics gathered.
+
+        :returns: None
+        :rtype: None
+
+        """
+        try:
+            self._abort_current_run_cb()
+        except Exception as e:
+            return False, self._logi(f"Could not abort {self.current_state}. Error {e}")
+        return True, self._logi(f"Aborted {self.current_state}")
     # END: Controls
 
+    # START: Flags
     def _toggle_running(self):
         if self._running_event.is_set():
             self._running_event.clear()
@@ -1933,6 +1946,38 @@ class Trainer:
         self._current_aborted_event.set()
         self._finish_if_paused_or_running(True)
         self._aborted.append(self.current_state.split("_")[-1])
+
+    def _abort_current_run_cb(self):
+        self._current_aborted_event.set()
+        self._finish_if_paused_or_running(True, True)
+        self._aborted.append(self.current_state.split("_")[-1])
+    # END: Flags
+
+    # START: Internal Controls Other
+    def _force_validate(self):
+        # Pauses main loop
+        pass
+
+    def _force_validate_parallel(self):
+        # Runs in alternate loop
+        pass
+    
+    def _force_test_parallel(self):
+        # Runs in alternate loop
+        pass
+
+    def _force_test(self):
+        # Pauses main loop
+        pass
+
+    def _run_user_func(self, user_func_name):
+        # pauses main loop, shouldn't update weights
+        pass
+
+    def _run_user_func_parallel(self, user_func_name):
+        # runs in alternate loop, if model is used will make a copy of model
+        pass
+    # END: Internal Controls Other
 
     # START: Properties
     @property

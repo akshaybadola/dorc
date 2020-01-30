@@ -14,11 +14,12 @@ class TrainerTest(unittest.TestCase):
         self.trainer = Trainer(**self.config)
         self.trainer._init_all()
 
-    def test_train_transitions(self):
+    def test_train_main_loop(self):
         # Should have subtest for a set of transitions I guess. I can generate
         # predicates and combinatorial states according to that
         # This link has a good post about it
         # https://www.caktusgroup.com/blog/2017/05/29/subtests-are-best/
+        # none -> running
         self.assertIsInstance(self.trainer.train_loader, torch.utils.data.DataLoader)
         self.trainer._transition(self.trainer.current_state, "normal_running_train")
         self.assertFalse(self.trainer.paused)
@@ -30,7 +31,8 @@ class TrainerTest(unittest.TestCase):
         self.assertTrue(self.trainer._epoch_runner.running)
         self.assertTrue(self.trainer._epoch_runner.waiting)
         time.sleep(1)
-        self.trainer._finish_if_paused_or_running(True)
+        # running -> aborted/finished without gathering results
+        self.trainer._abort_current()
         time.sleep(1)
         print(self.trainer._epoch_runner)
         self.assertFalse(self.trainer._epoch_runner.running)
@@ -38,38 +40,58 @@ class TrainerTest(unittest.TestCase):
         self.assertTrue([x for x in self.trainer._epoch_runner.batch_vars])
         self.assertFalse(self.trainer._threads["main"].is_alive())
         time.sleep(1)
+        self.assertFalse(self.trainer._metrics["train"]["loss"])
+        # aborted/finished -> running
         self.trainer._run_new_if_finished()
-        print(self.trainer._epoch_runner)
-        # self.assertEqual(self.trainer._epoch_runner.current_loop, "train")
+        self.assertFalse(self.trainer.paused)
+        time.sleep(1)
+        # running -> paused
         self.trainer.pause()
-        import ipdb; ipdb.set_trace()
-        # assert hooks were run?
+        self.assertTrue(self.trainer.paused)
+        # running -> finish AND gather results
+        self.trainer._abort_current_run_cb()
+        self.assertTrue(self.trainer._metrics["train"]["loss"])
+        self.assertFalse(self.trainer._threads["main"].is_alive())
+        # start again: finished -> running
+        self.trainer._run_new_if_finished()
+        time.sleep(2)
+        self.assertFalse(self.trainer.paused)
+
+    # def test_val_test_transitions(self):
+    #     # aborted calls callbacks? Nope
+    #     self.trainer._transition(self.trainer.current_state, "normal_paused_train")
+    #     self.trainer._transition(self.trainer.current_state, "normal_running_train")
+    #     self.trainer._abort_current_run_cb()
+    #     # log data should show the output train should not start again
+    #     import ipdb; ipdb.set_trace()
 
     def test_state_machine_transitions(self):
         results = [True, False, True, False, True, True, True, False, True, False, True,
-                   False, False, True, False, True, True, True, True]
+                   False, False, True, False, True, True, True, True, True, True]
         for i, x in enumerate([
-                self.trainer._allowed_transition("normal_paused_none", "normal_paused_train"),
-                self.trainer._allowed_transition("normal_paused_train", "normal_paused_train"),
-                self.trainer._allowed_transition("normal_paused_train", "normal_running_train"),
-                self.trainer._allowed_transition("normal_running_train", "normal_running_train"),
-                self.trainer._allowed_transition("normal_running_train", "normal_paused_train"),
-                self.trainer._allowed_transition("normal_paused_none", "normal_paused_train"),
-                self.trainer._allowed_transition("normal_paused_none", "normal_running_train"),
-                self.trainer._allowed_transition("normal_paused_train", "normal_paused_eval"),
-                self.trainer._allowed_transition("normal_finished_train", "normal_paused_eval"),
-                self.trainer._allowed_transition("normal_paused_train", "force_paused_eval"),
-                self.trainer._allowed_transition("normal_paused_train", "force_running_eval"),
-                self.trainer._allowed_transition("normal_running_train", "force_running_eval"),
-                self.trainer._allowed_transition("normal_running_train", "force_running_eval"),
-                self.trainer._allowed_transition("normal_paused_train", "force_running_eval"),
-                self.trainer._allowed_transition("force_running_eval", "normal_paused_train"),
-                self.trainer._allowed_transition("force_finished_eval", "normal_paused_train"),
-                self.trainer._allowed_transition("normal_paused_train", "normal_finished_train"),
-                self.trainer._allowed_transition("normal_paused_train", "force_finished_stop"),
-                self.trainer._allowed_transition("force_finished_stop", "normal_running_train")]):
-            with self.subTest(i=i):
-                self.assertEqual(x, results[i])
+                ("normal_paused_none", "normal_paused_train"),
+                ("normal_paused_train", "normal_paused_train"),
+                ("normal_paused_train", "normal_running_train"),
+                ("normal_running_train", "normal_running_train"),
+                ("normal_running_train", "normal_paused_train"),
+                ("normal_paused_none", "normal_paused_train"),
+                ("normal_paused_none", "normal_running_train"),
+                ("normal_paused_train", "normal_paused_eval"),
+                ("normal_finished_train", "normal_paused_eval"),
+                ("normal_paused_train", "force_paused_eval"),
+                ("normal_paused_train", "force_running_eval"),
+                ("normal_running_train", "force_running_eval"),
+                ("normal_running_train", "force_running_eval"),
+                ("normal_paused_train", "force_running_eval"),
+                ("force_running_eval", "normal_paused_train"),
+                ("force_finished_eval", "normal_paused_train"),
+                ("normal_paused_train", "normal_finished_train"),
+                ("normal_paused_train", "force_finished_stop"),
+                ("force_finished_stop", "normal_running_train"),
+                ("normal_running_train", "force_paused_train"),
+                ("force_paused_train", "force_finished_stop")]):
+            with self.subTest(i=str(x)):
+                self.assertEqual(self.trainer._sm.allowed_transition(*x), results[i])
 
 
 if __name__ == '__main__':

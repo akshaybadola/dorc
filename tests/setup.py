@@ -57,7 +57,7 @@ class ClassificationTestStep:
         model = models[self._model_name]
         inputs, labels = batch
         model.eval()
-        with torch.zero_grad():
+        with torch.no_grad():
             inputs = model.to_(inputs)
             labels = model.to_(labels)
             outputs = model(inputs)

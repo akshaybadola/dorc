@@ -54,8 +54,10 @@ class TrainerTest(unittest.TestCase):
         self.assertFalse(self.trainer._threads["main"].is_alive())
         # start again: finished -> running
         self.trainer._run_new_if_finished()
+        # maybe after val/test hooks are run?
         time.sleep(2)
         self.assertFalse(self.trainer.paused)
+        self.trainer._abort_current()
 
     # def test_val_test_transitions(self):
     #     # aborted calls callbacks? Nope

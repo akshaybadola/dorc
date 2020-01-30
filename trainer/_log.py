@@ -34,5 +34,5 @@ class Log:
         f = inspect.currentframe()
         prev_func = inspect.getframeinfo(f.f_back).function
         x = f"[{prev_func}()] " + x
-        self.logger.warn(x)
+        self.logger.warning(x)
         return x

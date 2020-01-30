@@ -1814,7 +1814,7 @@ class Trainer:
 
     @control
     def start(self):
-        self._transition("normal_paused_none", "normal_paused_train")
+        self._transition("normal_paused_none", "normal_running_train")
         return self._logi("Starting")
 
     # # CHECK: Can we resume after stop?

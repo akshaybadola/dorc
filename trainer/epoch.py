@@ -318,10 +318,14 @@ class Epoch:
             self._run_post_batch_hooks(**{"step": "train", **received})
         if loop_type == "iterations":
             for i in range(num_iterations):
+                batch_time = time.time()
                 batch = train_loader.__iter__().__next__()
+                print("batch_time", time.time() - batch_time)
                 if not batch:
                     break
+                train_time = time.time()
                 train_one_batch(batch)
+                print("train_time", time.time() - train_time)
                 if self.signals.aborted():  # has to be here else, break won't work
                     print("aborting from epoch runner")
                     if self.running:

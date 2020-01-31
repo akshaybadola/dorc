@@ -97,7 +97,17 @@ class Trainer:
     def __init__(self, uid, model_params, criteria, optimizer, model_defs, update_functions,
                  extra_metrics, trainer_params, data, dataloader_params):
         """Initializes the :class:`Trainer` object. This is supposed to be a catch all
-        trainer which is robust and easy to train and can generate graphs automatically etc.
+        trainer which is robust and easy to train and can generate graphs
+        automatically etc.
+
+        `model_params`, `criteria`, `trainer_params`, `dataloader_params` are
+        stateless parameters.
+
+        `model_defs`, `optimizers`, `update_functions` contain callables and as
+        such aren't part of config but model and training definitions.
+
+        `uid` simply identifies the trainer and should remain the same
+        throughout the trainer's life.
 
         :param model: model which is a :class:`torch.nn.Module`
         :param model_params: model params where (k, v) are (:class:`str` model_name,
@@ -221,6 +231,9 @@ class Trainer:
             if torch.cuda.device_count() >= len(self._gpus):
                 self._logi(f"{torch.cuda.device_count()} gpus are available")
                 if "parallel" in self._trainer_params:
+                    # I always get confused by this statement
+                    # It's somewhhat mirthful and one has to see the next line
+                    # to make sense of it.
                     self._logi(f"Parallel call be functional {self._trainer_params['parallel']}")
                     self._device = self._trainer_params["parallel"]
                 else:
@@ -425,12 +438,6 @@ class Trainer:
                                           models[model_name].parameters(),
                                           **self._optimizer_params[optim_name]["params"])}
         self._models = Models(models, optimizers, devices, self.gpus, self.logger)
-        # NOTE: Old optimizer initialization code
-        # for k, v in self._optimizer_params.items():
-        #     model_name = [x for x, y in self._model_defs.items()
-        #                   if y["optimizer"] == k][0]
-        #     self.optimizers[k] = v["function"](self._models[model_name].parameters(),
-        #                                        **v["params"])
 
     def _init_dataloaders(self):
         """Dataloaders can be initialized from a {step, data, params} in which the
@@ -1670,11 +1677,11 @@ class Trainer:
             save_state["not_saved"].append(keys)
         os.remove(tmp_path)
 
-    # CHECK: resume and update will change the attrs of the trainer
-    #        Perhaps some tests here.
-    # TODO: Unique Id check
-    # TODO: Check if {models, metrics, dataloaders, update_funcs} are resumed correctly as
+    # DONE: Unique Id check
+    #       - We only resume with same id
+    # DONE: Check if {models, metrics, dataloaders, update_funcs} are resumed correctly as
     #       there may be callables in the saved_state. trainer shouldn't allow callables
+    #       - Callables are not resumed
     # TODO: Right now, the list of saves and resume_path etc are given as full paths while
     #       they should be relative paths to .savedir/unique_id/"_".join(model_names)
     def _resume_from_path(self, resume_path):
@@ -1685,6 +1692,8 @@ class Trainer:
         self.iterations = saved_state["iterations"]
         self._model_params = saved_state["model_params"]
         self._criteria_params = saved_state["criteria_params"]
+
+        # NOTE: restore dataloader_params
         if any([("collate_fn" in y or callable(y))
                 for x, y in saved_state["dataloader_params"].items()]):
             self._logw("collate_fn will not be restored")
@@ -1699,28 +1708,38 @@ class Trainer:
                     else:
                         if isinstance(value, str) and not value.startswith("callable_"):
                             self._dataloader_params[k][a] = value
+
+        # NOTE: restore trainer_params
         for k, v in saved_state["trainer_params"].items():
             if isinstance(v, str) and v.startswith("callable_"):
                 self._logw(f"callable {k} not restored in trainer_params")
             else:
                 self._trainer_params[k] = saved_state["trainer_params"][k]
+
+        # NOTE: sanity check after param updates
         self._sanity_check()
-        # FIXME: Init again only if model or model parameters have changed
+        # FIXME: Init models again only if model or model parameters have changed
         self._init_models()
+        self._init_nvml()
         self._init_dataloaders()
+
         # Only if criteria and/or optimizer have changed.  In fact, there might
         # be a mismatch if criteria change suddenly as the model has changed,
         # but resume_weights should not really be concerned about that, at
         # least.
         # self._init_criteria_optimizers()
         # Only if new metrics are added and even then only update metrics
+        # NOTE: Other inits
         self._init_metrics()
         # Only if update_funcs are changed.
         # In fact, this is not in saved state
         self._init_update_funcs()
+        self._init_state_vars()
         self._init_epoch_runner()
+        self._init_modules()
 
         # NOTE: The model and optimizer checks are in Models
+        # NOTE: restore model
         default = [*self._optimizer_params.keys()][0]
         for k in saved_state["models"].keys():
             if "optimizer" in saved_state["models"][k]:
@@ -1741,6 +1760,8 @@ class Trainer:
                                                                       **optim["params"])
         self._models.load(saved_state["models"])
         diff = set(self._metrics.keys()).difference(saved_state["metrics"].keys())
+
+        # NOTE: setup metrics
         if diff:
             self._logw(f"Some metric _steps_ aren't there in saved state {diff}")
         for k in self._metrics.keys():
@@ -2364,6 +2385,7 @@ class Trainer:
     #       variablesthingies.
     # TODO: What if run has to be aborted in the middle?
     #       Ensure that run returns
+    # NOTE: train ONLY runs in main loop
     def train(self):
         """If `iterations` exists in self._trainer_params, then we do iterations only
         training and loop_type is set to iterations, else we do standard epoch
@@ -2436,20 +2458,6 @@ class Trainer:
                                       self._metrics[step], update_key, log_func)
             else:
                 self._logd(f"No dataloader for {step}")
-        # for step in self._metrics:
-        #     if getattr(self, step + "_loader"):
-        #         metric_names = self._metrics[step]
-        #         self._logd(f"Total datapoints processed for {step} step in {key_name}: {update_key}," +
-        #                    f" {self._metrics[step]['num_datapoints'][update_key]}")
-        #         for m in metric_names:
-        #             if update_key in self._metrics[step][m]:
-        #                 self._logd(f"Value of metric {m} for {step} step in {key_name} is:" +
-        #                            f" {self._metrics[step][m][update_key]}")
-        #             else:
-        #                 self._logd(f"No value recorded for {step}_step," +
-        #                            f" metric {m} and {key_name} {update_key}")
-        #     else:
-        #         self._logd(f"No dataloader for {step}")
 
     # FIXME: TRAINING_STEPS
     # NOTE: For this a sample function has to be defined

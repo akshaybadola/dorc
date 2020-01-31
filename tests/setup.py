@@ -74,7 +74,7 @@ config["criteria"] = {"criterion_ce_loss":
                       {"function": torch.nn.CrossEntropyLoss, "params": {}}}
 config["uid"] = "test_trainer"
 config["extra_metrics"] = None
-config["trainer_params"] = {"gpus": "0,1", "cuda": True, "seed": 1111,
+config["trainer_params"] = {"gpus": "", "cuda": False, "seed": 1111,
                             "resume": False, "resume_best": False,
                             "resume_weights": False, "init_weights": False,
                             "training_steps": ["train", "val", "test"],

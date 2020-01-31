@@ -218,15 +218,30 @@ class Trainer:
 
     # START: Init Funcs
     def _init_device(self):
-        self._gpus = list(map(int, self._trainer_params["gpus"].split(",")))
-        if self._trainer_params["cuda"] and not torch.cuda.is_available():
-            self._loge("cuda specified but not available. Will run on cpu")
+        gpus_str = [x for x in self._trainer_params["gpus"].split(",") if x]
+        if gpus_str:
+            self._gpus = list(map(int, gpus_str))
+        else:
+            self._gpus = [-1]
+        has_cuda = torch.cuda.is_available()
+        gpus_given = self._gpus and (not self._gpus == [-1])
+        cuda_given = self._trainer_params["cuda"]
+        if not gpus_given:
+            self._logd("No gpus given. Will run on cpu")
             self._device = torch.device("cpu")
             self._gpus = [-1]
-        elif len(self._gpus) == 1 and torch.cuda.is_available():
+        if cuda_given and not has_cuda:
+            self._logw("cuda specified but not available. Will run on cpu")
+            self._device = torch.device("cpu")
+            self._gpus = [-1]
+        elif gpus_given and not cuda_given:
+            self._logw("cuda not specified but gpus given. Will run on cpu")
+            self._device = torch.device("cpu")
+            self._gpus = [-1]
+        elif cuda_given and has_cuda and len(self._gpus) == 1:
             self._logi(f"GPU {self._gpus[0]} detected and specified")
             self._device = torch.device(f"cuda:{self._gpus[0]}")
-        elif len(self._gpus) > 1 and torch.cuda.is_available():
+        elif cuda_given and has_cuda and len(self._gpus) > 1:
             self._logi(f"Data parallel specified with gpus {self._gpus}")
             if torch.cuda.device_count() >= len(self._gpus):
                 self._logi(f"{torch.cuda.device_count()} gpus are available")

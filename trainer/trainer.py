@@ -278,11 +278,11 @@ class Trainer:
 
     def _init_static_vars(self):
         self.adhoc_error_dict = {"required_oneof_[function]": ["train", "val", "test", "user_func_name"],
-                                 "required_for_[function]": {"metrics": "[list[string]]_which_metrics",
-                                                             "epoch": "[int|string]_which_epoch",
+                                 "required_for_[function]": {"epoch": "[int|string]_which_epoch",
                                                              "data": "[string]_train_val_or_test",
                                                              "num_or_fraction":
-                                                             "[int|float]_number_of_points_or_fraction_of_dataset"}}
+                                                             "[int|float]_number_of_points_or_fraction_of_dataset",
+                                                             "callback": "[string]_name_of_callback_function"}}
 
     def _init_state_vars(self):
         """Initialize default state variables.
@@ -335,7 +335,11 @@ class Trainer:
         self._current_aborted_event = Event()  # current task was aborted
         self._session_aborted_event = Event()  # entire session was aborted
 
-        # FIXME: Threads should be accessible to check if they're alive or dead
+        self._adhoc_running_event = Event()  # adhoc task is running
+        self._adhoc_aborted_event = Event()  # adhoc task was aborted
+        self._userfunc_running_event = Event()  # userfunc is running
+        self._userfunc_aborted_event = Event()  # userfunc was aborted
+
         self._threads = {"main": Thread(target=self.train)}
 
         # NOTE: Default setting for tasks
@@ -481,9 +485,12 @@ class Trainer:
         def _check_raw(loader, name):
             if loader and not hasattr(loader, "dataset"):
                 self._logw(name + " loader doesn't have a dataset")
+            elif loader and not hasattr(loader.dataset, "_get_raw"):
+                self._logw(name + " dataset doesn't define \"_get_raw\"" +
+                           " Drawing samples from validation data will not be available.")
             elif loader and hasattr(loader.dataset, "_get_raw"):
-                self._logw(name + " dataset doesn't define \"_get_raw\".\
-                Drawing samples from validation data will not be available.")
+                self._logw(name + " dataset has \"_get_raw\"" +
+                           " Drawing samples from validation data is available!")
 
         for loader, params in self._dataloader_params.items():
             if loader == "train":
@@ -572,14 +579,22 @@ class Trainer:
             elif k == "test":
                 self._test_step_func = self._update_functions["test"]
 
-    def _init_epoch_runner(self):
-        # class Signals(object, metaclass=PropertyProxy):
-        #     trainer = self
+    def _task_runner_helper(self, which):
         device_monitor = DeviceMonitor(self._device_handles)
         signals = SimpleNamespace()
-        signals.paused = self._running_event
-        # NOTE: signals.aborted = self._current_aborted doesn't work
-        signals.aborted = lambda: self._current_aborted_event.is_set()
+        if which == "main":
+            signals.paused = self._running_event
+            signals.aborted = lambda: self._current_aborted_event.is_set()
+        elif which == "adhoc":
+            signals.paused = self._adhoc_running_event
+            signals.aborted = lambda: self._adhoc_aborted_event.is_set()
+        elif which == "user":
+            signals.paused = self._userfunc_running_event
+            signals.aborted = lambda: self._userfunc_aborted_event.is_set()
+        return device_monitor, signals
+
+    def _init_epoch_runner(self):
+        device_monitor, signals = self._task_runner_helper("main")
         self._logi("Initializing Epoch Runner")
         self._epoch_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
                                    signals, device_monitor, self.extra_report)
@@ -602,6 +617,19 @@ class Trainer:
                                  "train": self._run_post_epoch_hooks,
                                  "adhoc": None,
                                  "user": None}
+
+    # NOTE: Signals are created by the helper and recreated when another
+    #       task_runner is initialized
+    def _task_runner_initialize(self, which, metrics, extra_metrics, callback):
+        assert which in self._task_runners
+        device_monitor, signals = self._task_runner_helper(which)
+        self._task_runners[which] = Epoch({"metrics": metrics,
+                                           "extra_metrics": extra_metrics},
+                                          signals, device_monitor, self.extra_report)
+        self._task_runners[which].reset()
+        self._task_runners[which].logger = self.logger
+        self._tasks_callbacks[which] = callback
+
     # END: Init Funcs
 
     # START: Internal Controls
@@ -742,7 +770,7 @@ class Trainer:
     def _allowed_transition(self, a, b):
         return self._sm.allowed_transition(a, b)
 
-    def _transition(self, thread, _from, _to):
+    def _transition(self, _from, _to):
         """Transitions to the next state from the given state.
 
         State is a string triple joined by "_". Each state `s` is composed of
@@ -1057,9 +1085,9 @@ class Trainer:
                            **self.adhoc_error_dict}
         else:
             for x in data:
-                return self.check_adhoc_func_params(x, data[x])
+                return self.check_adhoc_eval_params(x, data[x])
 
-    def check_adhoc_func_params(self, func, params):
+    def check_adhoc_eval_params(self, func, params):
         """Call :meth:`call_adhoc_func_on_data` with params. Perhaps it can be lifted
         above though
 
@@ -1070,7 +1098,8 @@ class Trainer:
                          "num_or_fraction": 0 < x,
                          "device", "gpu" or "cpu",  # allocated automatically
                          "parallel", True or False,
-                         "data": "train_val_or_test"}
+                         "data": "train_val_or_test",
+                         "callback": "name_of_callback_function"}
 
         """
         # NOTE: Samples should be captured by default, model defines a sampling
@@ -1084,12 +1113,12 @@ class Trainer:
         except TypeError:
             return False, {"error": self._logi("Required Input. Incorrent format"),
                            **self.adhoc_error_dict}
-        if not all(x in params for x in ["metrics", "epoch", "num_or_fraction", "data"
-                                         "device", "parallel"]):
+        if not all(x in params for x in ["epoch", "num_or_fraction", "data", "device",
+                                         "callback"]):
             return False, {"error": self._logi("Required Input. Incorrent parameters"),
                            **self.adhoc_error_dict}
-        # From now on gather everything the step_func returns and wait for
-        # callback
+        # NOTE: From now on gather everything the step_func returns and wait for
+        #       callback. "metrics" is removed
         # elif not (params["metrics"] != "all") or\
         #      not all(x in self._metrics[params["data"]] for x in params["metrics"]):
         #     self._logd(f'metrics given {params["metrics"]}')
@@ -1111,7 +1140,11 @@ class Trainer:
             return False, self._loge(f"Incorrect device given {params['device']}")
         else:
             # NOTE: All this should be rewritten with guards
+
+            # call this in a separate thread and call the callback on the result
+            # then report it.
             self.call_adhoc_eval_on_data(params)
+
             # self.pause()
             # while not self.paused:
             #     time.sleep(10)
@@ -1124,56 +1157,44 @@ class Trainer:
             # else:
             #     return False, {"error": self._logi("Another adhoc function is still running")}
 
-    # FIXME: This should be user defined
-    def call_adhoc_func_on_data(self, params):
-        # have to call epoch runner with specific metrics (in case some are too expensive)
-        # For now call all metrics but it's fraction of the data anyway.
-        # Only used here
-        function_name = params["function_name"]
-        if function_name in self.user_funcs:
-            function = self._user_funcs[function_name]
-        else:
-            function = self._update_functions[function_name]
+    def call_adhoc_eval_on_data(self, params):
+        """Call adhoc evaluation on data and wait for result. Result is processed by the
+        callback given by the user.
+
+        :param params: Parameters specified for the function
+        :returns: None
+        :rtype: None
+
+        """
         step = params["data"]
+        function = self._update_functions[step]
         step_loader = getattr(self, step + "_loader")
         if "seed" in params:
             np.random.seed(params["seed"])
-        # FIXME: Below line is a big hack. Need to fix params here and below
-        params["ruotianlou"] = None
-        if "ruotianlou" in params:
-            _proxy_dataset = step_loader.sub_dataset(params["num_or_fraction"])
-            temp_loader = MyDataLoader(_proxy_dataset, batch_size=1, return_raw=True,
-                                       collate_fn=_proxy_dataset.collate_fn)
-            if hasattr(_proxy_dataset, "_get_raw"):
-                self._logi(f"{step} dataset has \"_get_raw\"\
-                Drawing samples from temp data is available!")
-            else:
-                self._logw(f"{step} dataset doesn't define \"_get_raw\".\
-                Drawing samples from temp data will not be available.")
+        if params["num_or_fraction"] > 1:
+            indices = np.random.choice(len(step_loader.dataset), params["num_or_fraction"])
         else:
-            if params["num_or_fraction"] > 1:
-                indices = np.random.choice(len(step_loader.dataset), params["num_or_fraction"])
-            else:
-                indices = np.random.choice(len(step_loader.dataset),
-                                           int(len(step_loader.dataset) * params["num_or_fraction"]))
-            _proxy_dataset = ProxyDataset(step_loader.dataset, indices)
-            temp_params = self._dataloader_params[step].copy()
-            temp_params.update({"batch_size": 1})  # stick to 1 right now
-            # MyDataLoader is to solve the problem of collation in data. So that
-            # there's a uniform interface to data. However there seem to be some
-            # problems.
-            if hasattr(step_loader.dataset, "_get_raw"):
-                _proxy_dataset._get_raw = lambda x: step_loader.dataset._get_raw(
-                    _proxy_dataset._indices[x])
-                temp_loader = MyDataLoader(_proxy_dataset, return_raw=True,
-                                           **temp_params)
-                self._logi(f"{step} dataset has \"_get_raw\"\
-                Drawing samples from temp data is available!")
-            else:
-                temp_loader = MyDataLoader(_proxy_dataset, **temp_params)
-                self._logw(f"{step} dataset doesn't define \"_get_raw\".\
-                Drawing samples from temp data will not be available.")
+            indices = np.random.choice(len(step_loader.dataset),
+                                       int(len(step_loader.dataset) * params["num_or_fraction"]))
+        _proxy_dataset = ProxyDataset(step_loader.dataset, indices)
+        temp_params = self._dataloader_params[step].copy()
+        temp_params.update({"batch_size": 1})  # stick to 1 right now
+        # NOTE: MyDataLoader is to solve the problem of collation in data. So
+        #       that there's a uniform interface to data. However there seem to
+        #       be some problems.
+        if hasattr(step_loader.dataset, "_get_raw"):
+            _proxy_dataset._get_raw = lambda x: step_loader.dataset._get_raw(
+                _proxy_dataset._indices[x])
+            temp_loader = MyDataLoader(_proxy_dataset, return_raw=True,
+                                       **temp_params)
+            self._logi(f"{step} dataset has \"_get_raw\"" +
+                       "Drawing samples from temp data is available!")
+        else:
+            temp_loader = MyDataLoader(_proxy_dataset, **temp_params)
+            self._logw(f"{step} dataset doesn't define \"_get_raw\"" +
+                       "Drawing samples from temp data will not be available.")
         if step == "train":
+            raise NotImplementedError
             models = {}
             optimizers = {}
             devices = {}
@@ -1181,8 +1202,8 @@ class Trainer:
                 models[model_name] = self._model_defs[model_name]["model"](**model_params)
                 optim_name = self._model_defs[model_name]["optimizer"]
                 optimizers[model_name] = {"name": optim_name,
-                                          "optimizer": self._optimizer_params[optim_name]["function"](
-                                              models[model_name].parameters(),
+                                          "optimizer": self._optimizer_params
+                                          [optim_name]["function"](models[model_name].parameters(),
                                               **self._optimizer_params[optim_name]["params"])}
                 devices[model_name] = self._device
                 # CHECK: This may not actually be needed
@@ -1196,29 +1217,20 @@ class Trainer:
                 temp_models.load(self._models.dump())  # replicate
         else:
             temp_models = self._models
-        # NOTE: Big change here
-        # step_func = partial(self._update_functions[step], temp_models, self.criteria)
         step_func = partial(function, temp_models, self.criteria)
+        # CHECK: Should any of this be done manually?
+        #        Shouldn't I leave all this up to user?
+        metrics = self._trainer_params["metrics"]
+        if hasattr(step_loader.dataset, "_get_raw"):
+            metrics.append("raw")
+        metrics.append("predictions")
+        metrics.append("labels")
 
-        class Signals:
-            paused = False
-            aborted = False
-        device_monitor = DeviceMonitor(self._device_handles)
-        self._logd(f"params:, {step}, {params}")
-        temp_runner = Epoch({"metrics": {step: params["metrics"]}, "extra_metrics": {}},
-                            Signals, device_monitor, self.extra_report)
-        temp_runner.reset()
-        temp_runner.metrics[step].append("raw")
-        temp_runner.metrics[step].append("predictions")
-        temp_runner.metrics[step].append("labels")
-        if "ruotianlou" in params:
-            temp_runner.metrics[step].append("alphas")
-        else:
-            temp_runner.metrics[step].append("lengths")
-        self._temp_runner = temp_runner
+        callback = self._user_funcs[params["callback"]]
+        self._task_runner_initialize("adhoc", {step: metrics}, {}, callback)
         self._logd(f"starting temp_runner for {step} step")
-        self._temp_runner.logger = self.logger
         # TODO: It should be temp_runner.run_temp instead of run_ + step
+        # TODO: Threads should only be handled by the transition function
         if hasattr(temp_loader.dataset, "_get_raw"):
             t = Thread(target=getattr(temp_runner, "run_" + step),
                        args=[step_func, temp_loader, True])
@@ -2253,7 +2265,7 @@ class Trainer:
         save_state["epoch"] = self.epoch
         save_state["iterations"] = self._iterations
         # save_state["models"] = dict((k, v.state_dict()) for k, v in self._models.items())
-        save_state["optimizers"] = dict((k, v.state_dict()) for k, v in self.optimizers.items())
+        # save_state["optimizers"] = dict((k, v.state_dict()) for k, v in self.optimizers.items())
         save_state["model_params"] = self._model_params
         save_state["criteria_params"] = self._criteria_params
         save_state["dataloader_params"] = self._dataloader_params

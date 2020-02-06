@@ -171,9 +171,17 @@ class Trainer:
             self._init_models()
             _check_resume_or_init_weights(self)
 
+    def init(self, force=False):
+        if self._have_resumed and not force:
+            self._logw("\"init\" cannot be called after resume. Use \"force\"")
+            self._init_all()
+        elif self._have_resumed and force:
+            self._logw("forcing \"init\" call after resume")
+            self._init_all()
+        else:
+            self._init_all()
+
     def _init_all(self):
-        if self._have_resumed:
-            self._logw("\"_init_all\" being called after resume!")
         self._logi("Initializing trainer")
         self._init_models()
         self._init_nvml()
@@ -576,13 +584,24 @@ class Trainer:
         self._epoch_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
                                    signals, device_monitor, self.extra_report)
         self._epoch_runner.name = "epoch_runner"
+        # NOTE: I'll envision the task_runners and threads to be a triple
+        #       There can be:
+        #         1. epoch_runner
+        #         2. adhoc_runner
+        #         3. user_func_runner
         self._task_runners = {"epoch": self._epoch_runner,
-                              "train": self._epoch_runner}
+                              "train": self._epoch_runner,
+                              "adhoc": None,
+                              "user": None}
         self._task_thread_keys = {"epoch": "main",
-                                  "train": "main"}
+                                  "train": "main",
+                                  "adhoc": "adhoc",
+                                  "user": "user"}
         # FIXME: For val and test maybe update in separate variables
         self._tasks_callbacks = {"epoch": self._run_post_epoch_hooks,
-                                 "train": self._run_post_epoch_hooks}
+                                 "train": self._run_post_epoch_hooks,
+                                 "adhoc": None,
+                                 "user": None}
     # END: Init Funcs
 
     # START: Internal Controls
@@ -723,7 +742,7 @@ class Trainer:
     def _allowed_transition(self, a, b):
         return self._sm.allowed_transition(a, b)
 
-    def _transition(self, _from, _to):
+    def _transition(self, thread, _from, _to):
         """Transitions to the next state from the given state.
 
         State is a string triple joined by "_". Each state `s` is composed of
@@ -938,7 +957,7 @@ class Trainer:
         """Call an arbitrary function. For now calls any of train/val/test or given
         update_funcs with a subset of the dataset.
 
-        This function is more generic than call_adhoc_run in the sense that any
+        This function is more generic than adhoc_eval in the sense that any
         adhoc function can be called on any attribute of the trainer (as of now).
 
         Later only specified variables will be exposed.
@@ -1006,26 +1025,24 @@ class Trainer:
     #       step_names but also dataset subsets. That may create confusion
     #
     # TODO: sphinx doctest setup
-    #       >>> call_adhoc_run(self, None)
+    #       >>> adhoc_eval(self, None)
     #           False, "Called with null data"
     #       should be converted to:
     #       .. doctest::
-    #          call_adhoc_run(self, None)
-    #          # or self.call_adhoc_run(None), not sure
+    #          adhoc_eval(self, None)
+    #          # or self.adhoc_eval(None), not sure
     #          False, "Called with null data"
     @POST
     @extras
-    def call_adhoc_run(self, data):
-        """Call an arbitrary function on any of train/val/test or given
-        training_steps with a subset of the dataset.
+    def adhoc_eval(self, data):
+        """Do an arbitrary evaluation on any or combination of train/val/test data for
+        any state in the model's stored history
 
-        1. If training, then pause trainer,
-        2. run the requested adhoc function in a thread
-        3. Result is stored in _adhoc_func_result
-        4. _adhoc_func_result is checked for uniqueness
-        5. Multiple funcs (upto 3) should be able to run, and they should be trackable
-        6. Auto resource allocation for funcs
-        7. If required, save state to disk before doing so
+        1. Create a new task runner
+        2. adhoc_eval is called on either or combination of train/val/test data
+        3. What to gather and callback can be specified beforehand
+        4. Result is stored in _adhoc_func_result
+        5. Callbacks can be called on the result multiple times.
 
         :param data: data
         :returns: status and response string
@@ -1034,7 +1051,7 @@ class Trainer:
         """
         if not data:
             return False, self._loge(f"Called with null data")
-        self._logi(f"Calling adhoc run with data: {data}")
+        self._logi(f"Calling adhoc_eval with data: {data}")
         if not any(x in data for x in self._trainer_params["training_steps"]):
             return False, {"error": self._logi("Required Input. Given unknown dataset"),
                            **self.adhoc_error_dict}
@@ -1043,61 +1060,69 @@ class Trainer:
                 return self.check_adhoc_func_params(x, data[x])
 
     def check_adhoc_func_params(self, func, params):
-        """Call :meth:`call_adhoc_func_on_data` with params. Perhaps it can be lifted above
-        though
+        """Call :meth:`call_adhoc_func_on_data` with params. Perhaps it can be lifted
+        above though
 
         :param func: Function name. Should be present in :meth:`Trainer.user_funcs`
                      or one of {"train", "val", "test"}
         :param params: `params` is a :class:`dict` of type
-                        {"metrics": [list_of_metrics] or "all",
-                         "epoch": :class:`int` num or "current",
+                        {"epoch": :class:`int` num or "current",
                          "num_or_fraction": 0 < x,
-                         "device", one_of_gpus,
+                         "device", "gpu" or "cpu",  # allocated automatically
+                         "parallel", True or False,
                          "data": "train_val_or_test"}
+
         """
         # NOTE: Samples should be captured by default, model defines a sampling
         #       mechanism or else simply output is captured
         self._logw("Ignoring \"epoch\" for now")
+        if params["epoch"] != "current" or self.epoch != params["epoch"]:
+            # Load the model if present in history
+            pass
         try:
             iter(params)
         except TypeError:
             return False, {"error": self._logi("Required Input. Incorrent format"),
                            **self.adhoc_error_dict}
-        if not all(x in params for x in ["metrics", "epoch", "num_or_fraction", "data"]):
+        if not all(x in params for x in ["metrics", "epoch", "num_or_fraction", "data"
+                                         "device", "parallel"]):
             return False, {"error": self._logi("Required Input. Incorrent parameters"),
                            **self.adhoc_error_dict}
-        # metrics have to be compatible
-        elif not (params["metrics"] != "all") or\
-             not all(x in self._metrics[params["data"]] for x in params["metrics"]):
-            self._logd(f'metrics given {params["metrics"]}')
-            return False, {"error": self._loge("Required Input. Given unknown metrics or incorrect format"),
-                           **self.adhoc_error_dict}
-        elif func not in (self.user_funcs + self._trainer_params["training_steps"]):
-            return False, {"error": self._loge(f"Unknown function \"{params['function']}\" given"),
-                           "available_functions": (self.user_funcs +
-                                                   self._trainer_params["training_steps"])}
+        # From now on gather everything the step_func returns and wait for
+        # callback
+        # elif not (params["metrics"] != "all") or\
+        #      not all(x in self._metrics[params["data"]] for x in params["metrics"]):
+        #     self._logd(f'metrics given {params["metrics"]}')
+        #     return False, {"error": self._loge("Required Input. Given unknown metrics or incorrect format"),
+        #                    **self.adhoc_error_dict}
+        # elif func not in (self.user_funcs + self._trainer_params["training_steps"]):
+        #     return False, {"error": self._loge(f"Unknown function \"{params['function']}\" given"),
+        #                    "available_functions": (self.user_funcs +
+        #                                            self._trainer_params["training_steps"])}
         # Making minimal assumptions on the function
-        elif func in self.user_funcs and\
-             not len(inspect.signature(self._user_funcs[func]).parameters) == 1:
-            return False, {"error": self._loge(f"Given function \"{params['function']}\"" +
-                                               " is not suited to process data")}
-        # FIXME: WTF is self.checkpoints anyway? It has to be a dict now
-        # elif not params["epoch"] in self.checkpoints:
-        #     return False, "Checkpoint for epoch doesn't exist"
+        # elif func in self.user_funcs and\
+        #      not len(inspect.signature(self._user_funcs[func]).parameters) == 1:
+        #     return False, {"error": self._loge(f"Given function \"{params['function']}\"" +
+        #                                        " is not suited to process data")}
         elif params["num_or_fraction"] <= 0:
-            return False, self._logi(f"Incorrect fraction or number of points {params['num_or_fraction']}")
+            return False, self._loge(f"Incorrect fraction or number of points" +
+                                     " {params['num_or_fraction']}")
+        elif params["device"] not in {"gpu", "cpu"}:
+            return False, self._loge(f"Incorrect device given {params['device']}")
         else:
-            self.pause()
-            while not self.paused:
-                time.sleep(10)
-            params["function_name"] = func
-            t = Thread(target=self.call_adhoc_func_on_data, args=[params])
-            if not self._flag_adhoc_func_running:
-                self._flag_adhoc_func_running = True
-                t.start()
-                return True, {"success": self._logi("Running the given adhoc function")}
-            else:
-                return False, {"error": self._logi("Another adhoc function is still running")}
+            # NOTE: All this should be rewritten with guards
+            self.call_adhoc_eval_on_data(params)
+            # self.pause()
+            # while not self.paused:
+            #     time.sleep(10)
+            # params["function_name"] = func
+            # t = Thread(target=self.call_adhoc_func_on_data, args=[params])
+            # if not self._flag_adhoc_func_running:
+            #     self._flag_adhoc_func_running = True
+            #     t.start()
+            #     return True, {"success": self._logi("Running the given adhoc function")}
+            # else:
+            #     return False, {"error": self._logi("Another adhoc function is still running")}
 
     # FIXME: This should be user defined
     def call_adhoc_func_on_data(self, params):
@@ -1709,6 +1734,7 @@ class Trainer:
         self._criteria_params = saved_state["criteria_params"]
 
         # NOTE: restore dataloader_params
+        self._logd("Restoring dataloader_params")
         if any([("collate_fn" in y or callable(y))
                 for x, y in saved_state["dataloader_params"].items()]):
             self._logw("collate_fn will not be restored")
@@ -1725,6 +1751,7 @@ class Trainer:
                             self._dataloader_params[k][a] = value
 
         # NOTE: restore trainer_params
+        self._logd("Restoring trainer_params")
         for k, v in saved_state["trainer_params"].items():
             if isinstance(v, str) and v.startswith("callable_"):
                 self._logw(f"callable {k} not restored in trainer_params")
@@ -1755,6 +1782,7 @@ class Trainer:
 
         # NOTE: The model and optimizer checks are in Models
         # NOTE: restore model
+        self._logd("Restoring models and optimizers")
         default = [*self._optimizer_params.keys()][0]
         for k in saved_state["models"].keys():
             if "optimizer" in saved_state["models"][k]:
@@ -1783,6 +1811,7 @@ class Trainer:
             diff = set(self._metrics[k].keys()).difference(saved_state["metrics"][k].keys())
             if diff:
                 self._logw(f"Some metrics {diff} in {k} aren't there in saved state")
+        self._logd("Restoring metrics")
         self._metrics = copy.deepcopy(saved_state["metrics"])
         self._logi("Resumed successfully")
 

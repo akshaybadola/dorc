@@ -38,6 +38,9 @@ class TrainerTest(unittest.TestCase):
         self.assertTrue(self.trainer.paused)
         self.assertTrue(hasattr(self.trainer, "_sm"))
 
+    def test_trainer_resume_force(self):
+        pass
+
     # NOTE: All of these tests should be run with various params
     # def test_trainer_save(self):
     #     pass
@@ -69,11 +72,14 @@ class TrainerTest(unittest.TestCase):
 
     def test_load_saves(self):
         data = {}
-        self.assertEqual(self.trainer.load_saves(data), (False, "[load_saves()] Missing params \"weights\""))
+        self.assertEqual(self.trainer.load_saves(data),
+                         (False, "[load_saves()] Missing params \"weights\""))
         data = {"weights": "meh"}
-        self.assertEqual(self.trainer.load_saves(data), (False, "[load_saves()] Invalid or no such method"))
+        self.assertEqual(self.trainer.load_saves(data),
+                         (False, "[load_saves()] Invalid or no such method"))
         data = {"weights": "meh", "method": "load"}
-        self.assertEqual(self.trainer.load_saves(data), (False, "[load_saves()] No such file"))
+        self.assertEqual(self.trainer.load_saves(data),
+                         (False, "[load_saves()] No such file"))
 
     # Need to test
     # trainer setup has to be tested separately

@@ -319,6 +319,7 @@ class Epoch:
         if loop_type == "iterations":
             for i in range(num_iterations):
                 batch_time = time.time()
+                # NOTE: This is a synchronous operation. Could be async
                 batch = train_loader.__iter__().__next__()
                 batch_time = time.time() - batch_time
                 if not batch:

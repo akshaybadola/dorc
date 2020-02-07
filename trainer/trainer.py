@@ -377,7 +377,8 @@ class Trainer:
             self._transition_steps = set(steps).union({"none"})
         # post_reset -> none
         # userfunc can be any func including adhoc_run
-        self._forced_states = {"save", "eval", "test", "stop", "reset", "userfunc"}
+        # NOTE: train forced state isn't supported yet
+        self._forced_states = {"save", "adhoc", "stop", "reset", "user"}
 
     # TODO: For each such variable i.e., static, property etc. add a decorator
     #       or a function such that they're added to that list e.g.,
@@ -655,7 +656,8 @@ class Trainer:
     # END: Init Funcs
 
     # START: Internal Controls
-    #        These functions interact with the SM
+    #        These functions interact with the SM.
+    #        NOTE: As of now this is only the main loop
     def _finish_if_paused_or_running(self, _force=False, gather=False):
         """Should not be called from `self._transition`
         Stops the current running main flow (or alternate flow?)
@@ -687,6 +689,23 @@ class Trainer:
         if run == "running":
             self._transition(self.current_state, "_".join([force, "paused", step]))
 
+    def _start_if_not_running(self, _force=False):
+        """Should not be called from `self._transition`
+
+        :returns: None
+        :rtype: None
+
+        """
+        force, run, step = self.current_state.split("_")
+        if step != "none":
+            return              # only if step == "none"
+        else:
+            step = "train"      # default
+        if _force:
+            force = "force"
+        if run == "paused":
+            self._transition(self.current_state, "_".join([force, "running", step]))
+
     def _run_if_paused(self, _force=False):
         """Should not be called from `self._transition`
 
@@ -715,9 +734,18 @@ class Trainer:
     #        Helper functions to enforce state machine commands
     def _ensure_paused(self, task):
         "Should not be called from anywhere but `self._transition`"
-        print("calling ensure paused")
-        if not self.paused:
-            self._running_event.clear()  # not running
+        self._logd(f"Calling ensure paused with {task}")
+        if task == "main":
+            if not self.paused:
+                self._running_event.clear()  # not running
+        elif task == "adhoc":
+            # CHECK: Is paused supported? If not then go back or wait for abort
+            # CHECK: How to force abort?
+            if not self.adhoc_paused:
+                self._adhoc_running_event.clear()
+        elif task == "user":
+            if not self.userfunc_paused:
+                self._userfunc_running_event.clear()
         runner = self._task_runners.get(task)  # say epoch
         if runner is not None and runner.running:
             while not runner.waiting:
@@ -790,6 +818,8 @@ class Trainer:
 
     # START: State Machine
     def _allowed_transition(self, a, b):
+        # NOTE: The states in the SM are for the main loop. For alternate loops
+        #       it should be simpler.
         return self._sm.allowed_transition(a, b)
 
     def _transition(self, _from, _to):
@@ -818,9 +848,9 @@ class Trainer:
         to be set after a task was finished but was aborted by the user. See
         `abort` for details.
 
-        The "step" refers to the current iteration of the :class:`Epoch` `step`:
-        is any of the possible steps (train, val, test, user_func).  See
-        :class:`Epoch` for the description of its states.
+        The "step" refers one of the possible steps: train, val, test, user,
+        adhoc. {train, val, test} are run under a single thread and {user},
+        {adhoc} under different ones. In all three threads.
 
         The valid states is managed by a separate module :class:`StateMachine`
         and the progress of "training", "validation" etc. are kept track of by
@@ -853,6 +883,11 @@ class Trainer:
             return False, self._loge(f"State transition {_from} -> {_to} is not allowed")
         self._logd(f"Trying to transition from {_from} to {_to}")
 
+
+        # FIXME: The design needs to split here. The fact that I have to modify
+        #        this component means that there's something wrong, but how do I
+        #        design a component like this even?
+
         # NOTE: Pre transition checks
         # NOTE: Only for main loop
         if a_force == "normal" == b_force:
@@ -871,47 +906,53 @@ class Trainer:
             self._sm.current_state = _to
 
         # NOTE: Actual state transition
-        if b_step in {"train", "val", "test"}:
-            # task exists but not running
-            if "train" in self._task_runners:
+        # NOTE: The Task runner should exist already if not, then some error
+        #        has occured and previous state should be resumed.
+        if b_step in {"train", "val", "test"} and b_force == "normal":
+            # NOTE: Check only for main
+            if "main" in self._task_runners:
                 # epoch_runner exists but "train" isn't running
-                if not self._task_runners["train"].running:
+                if not self._task_runners["main"].running:
                     if "main" not in self._threads or not self._threads["main"].is_alive():
                         self._threads["main"] = Thread(target=self.train)
                         self._threads["main"].start()
-        # FIXME: create (alt_loop) new thread for all below
-        elif b_step == "val":
+            else:
+                # TODO: Throw massive error or go back to force_paused_train, or
+                #       force_paused_none I suppose force_paused_none indicates
+                #       that some massive error indeed occurred and we're stuck here.
+                # NOTE: For now assume that it doesn't die
+                pass
+        # NOTE: b_force == normal for this case shouldn't be allowed. It could
+        #       be allowed but that would mean launching it on a separate device
+        #       etc. with separate models so that perhaps training is also
+        #       allowed, so that it doesn't really interfere with the main thread.
+        #       That is not really supported right now.
+        elif b_step == "adhoc" and b_force == "force":
             # TODO: Scenarios
             #       1. main thread died?
             #       2. main thread aborted and started main thread with val?
             #       3. alt thread create?
             #       4. alt thread reset?
-            # if "val" in self._task_runners:
-            #     # epoch_runner exists but "val" isn't running
-            #     if not self._task_runners["val"].running:
-            #         self._threads["val"] = Thread(target=self.val)
-            #         self._threads["val"].start()
-            # else:
-            #     import ipdb; ipdb.set_trace()
-            pass
-        elif b_step == "test":
-            # if "test" in self._task_runners:
-            #     # epoch_runner exists but "test" isn't running
-            #     if not self._task_runners["test"].running:
-            #         self._threads["test"] = Thread(target=self.test)
-            #         self._threads["test"].start()
-            # else:
-            #     import ipdb; ipdb.set_trace()
-            pass
-        elif b_step == "user_func":
-            # if "user_func" in self._task_runners:
-            #     # user_runner task exists but isn't running
-            #     # but which user_func?
-            #     import ipdb; ipdb.set_trace()
-            #     if not self._task_runners["val"].running:
-            #         self._threads["val"] = Thread(target=self.val)
-            #         self._threads["val"].start()
-            pass
+            # CHECK: Pause or run on CPU or something?
+            if "adhoc" in self._task_runners:
+                if not self._task_runners["adhoc"].running:
+                    if "adhoc" not in self._threads or not self._threads["adhoc"].is_alive():
+                        self._threads["adhoc"] = Thread(target=self._adhoc_func,
+                                                        args=[self._adhoc_func_params])
+                        self._threads["adhoc"].start()
+            else:
+                # Resume previous state
+                pass
+        elif b_step == "user":
+            # CHECK: What can a user func do?
+            if "user" in self._task_runners:
+                if not self._task_runners["user"].running:
+                    if "user" not in self._threads or not self._threads["main"].is_alive():
+                        self._threads["user"] = Thread(target=self.train)
+                        self._threads["user"].start()
+            else:
+                # Resume previous state
+                pass
 
         # NOTE: Post transition checks
         if b_run == "running":
@@ -1167,8 +1208,9 @@ class Trainer:
             # call this in a separate thread and call the callback on the result
             # then report it.
             # NOTE: New thread should only be started from _transition
-            self.call_adhoc_eval_on_data(params)
-
+            self._adhoc_func = self.call_adhoc_eval_on_data
+            self._adhoc_func_params = params
+            self._transition(self.current_state, "force_running_adhoc")
             # self.pause()
             # while not self.paused:
             #     time.sleep(10)
@@ -1915,7 +1957,7 @@ class Trainer:
 
     @control
     def start(self):
-        self._transition("normal_paused_none", "normal_running_train")
+        self._start_if_not_running()
         return self._logi("Starting")
 
     # # CHECK: Can we resume after stop?
@@ -2224,6 +2266,25 @@ class Trainer:
     @property
     def _session_aborted(self):
         return self._session_aborted_event.is_set()
+
+    @property
+    def adhoc_paused(self):
+        return not self._adhoc_aborted_event.is_set()
+
+    # Are adhoc_aborted and userfunc_aborted needed?
+    # If they can all be run together then there's no concept of a
+    # "current_loop". current_loop therefore only applies to [train, val, test]
+    @property
+    def adhoc_aborted(self):
+        return self._adhoc_aborted_event.is_set()
+
+    @property
+    def userfunc_paused(self):
+        return not self._userfunc_aborted_event.is_set()
+
+    @property
+    def userfunc_aborted(self):
+        return self._userfunc_aborted_event.is_set()
     # END: State props
 
     @property

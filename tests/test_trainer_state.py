@@ -14,63 +14,70 @@ class TrainerTest(unittest.TestCase):
         self.trainer = Trainer(**self.config)
         self.trainer._init_all()
 
-    def test_train_main_loop(self):
-        # Should have subtest for a set of transitions I guess. I can generate
-        # predicates and combinatorial states according to that
-        # This link has a good post about it
-        # https://www.caktusgroup.com/blog/2017/05/29/subtests-are-best/
-        # none -> running
-        self.assertIsInstance(self.trainer.train_loader, torch.utils.data.DataLoader)
-        self.trainer._transition(self.trainer.current_state, "normal_running_train")
-        self.assertFalse(self.trainer.paused)
-        time.sleep(3)
-        self.assertTrue("main" in self.trainer._threads)
-        self.trainer._transition(self.trainer.current_state, "normal_paused_train")
-        time.sleep(1)
-        self.assertTrue(self.trainer.paused)
-        self.assertTrue(self.trainer._epoch_runner.running)
-        self.assertTrue(self.trainer._epoch_runner.waiting)
-        time.sleep(1)
-        # running -> aborted/finished without gathering results
-        self.trainer._abort_current()
-        time.sleep(1)
-        print(self.trainer._epoch_runner)
-        self.assertFalse(self.trainer._epoch_runner.running)
-        self.assertFalse(self.trainer._epoch_runner.waiting)
-        self.assertTrue([x for x in self.trainer._epoch_runner.batch_vars])
-        self.assertFalse(self.trainer._threads["main"].is_alive())
-        time.sleep(1)
-        self.assertFalse(self.trainer._metrics["train"]["loss"])
-        # aborted/finished -> running
-        self.trainer._run_new_if_finished()
-        self.assertFalse(self.trainer.paused)
-        time.sleep(1)
-        # running -> paused
-        self.trainer.pause()
-        self.assertTrue(self.trainer.paused)
-        # running -> finish AND gather results
-        self.trainer._abort_current_run_cb()
-        self.assertTrue(self.trainer._metrics["train"]["loss"])
-        self.assertFalse(self.trainer._threads["main"].is_alive())
-        # start again: finished -> running
-        self.trainer._run_new_if_finished()
-        # maybe after val/test hooks are run?
-        time.sleep(2)
-        self.assertFalse(self.trainer.paused)
-        self.trainer._abort_current()
+    # def tearDown(self):
+    #     self.trainer._abort_current()
 
-    # def test_val_test_transitions(self):
-    #     # aborted calls callbacks? Nope
-    #     self.trainer._transition(self.trainer.current_state, "normal_paused_train")
+    # def test_train_main_loop(self):
+    #     # Should have subtest for a set of transitions I guess. I can generate
+    #     # predicates and combinatorial states according to that
+    #     # This link has a good post about it
+    #     # https://www.caktusgroup.com/blog/2017/05/29/subtests-are-best/
+    #     # none -> running
+    #     self.assertIsInstance(self.trainer.train_loader, torch.utils.data.DataLoader)
     #     self.trainer._transition(self.trainer.current_state, "normal_running_train")
+    #     self.assertFalse(self.trainer.paused)
+    #     time.sleep(3)
+    #     self.assertTrue("main" in self.trainer._threads)
+    #     self.trainer._transition(self.trainer.current_state, "normal_paused_train")
+    #     time.sleep(1)
+    #     self.assertTrue(self.trainer.paused)
+    #     self.assertTrue(self.trainer._epoch_runner.running)
+    #     self.assertTrue(self.trainer._epoch_runner.waiting)
+    #     time.sleep(1)
+    #     # running -> aborted/finished without gathering results
+    #     self.trainer._abort_current()
+    #     time.sleep(1)
+    #     print(self.trainer._epoch_runner)
+    #     self.assertFalse(self.trainer._epoch_runner.running)
+    #     self.assertFalse(self.trainer._epoch_runner.waiting)
+    #     self.assertTrue([x for x in self.trainer._epoch_runner.batch_vars])
+    #     self.assertFalse(self.trainer._threads["main"].is_alive())
+    #     time.sleep(1)
+    #     self.assertFalse(self.trainer._metrics["train"]["loss"])
+    #     # aborted/finished -> running
+    #     self.trainer._run_new_if_finished()
+    #     self.assertFalse(self.trainer.paused)
+    #     time.sleep(1)
+    #     # running -> paused
+    #     self.trainer.pause()
+    #     self.assertTrue(self.trainer.paused)
+    #     # running -> finish AND gather results
     #     self.trainer._abort_current_run_cb()
-    #     # log data should show the output train should not start again
-    #     import ipdb; ipdb.set_trace()
+    #     self.assertTrue(self.trainer._metrics["train"]["loss"])
+    #     self.assertFalse(self.trainer._threads["main"].is_alive())
+    #     # start again: finished -> running
+    #     self.trainer._run_new_if_finished()
+    #     # maybe after val/test hooks are run?
+    #     time.sleep(2)
+    #     self.assertFalse(self.trainer.paused)
+    #     self.trainer._abort_current()
+
+    def test_adhoc_funcs(self):
+        # adhoc_eval and adhoc_test
+        self.trainer._start_if_not_running()
+        self.assertFalse(self.trainer.paused)
+        self.assertEqual(self.trainer.current_state, "normal_running_train")
+        time.sleep(2)
+        self.assertTrue(self.trainer._epoch_runner.running)
+        self.assertTrue("main" in self.trainer._threads)
+        self.trainer._abort_current()
 
     def test_state_machine_transitions(self):
-        results = [True, False, True, False, True, True, True, False, True, False, True,
-                   False, False, True, False, True, True, True, True, True, True]
+        results = [False, True, False, True, False, True, True, True, False, True,
+                   False, True, False, False, True, False, True, True, True,
+                   True, True, True, True, False]
         for i, x in enumerate([
+                ("normal_paused_none", "normal_running_none"),
                 ("normal_paused_none", "normal_paused_train"),
                 ("normal_paused_train", "normal_paused_train"),
                 ("normal_paused_train", "normal_running_train"),
@@ -80,20 +87,22 @@ class TrainerTest(unittest.TestCase):
                 ("normal_paused_none", "normal_running_train"),
                 ("normal_paused_train", "normal_paused_eval"),
                 ("normal_finished_train", "normal_paused_eval"),
-                ("normal_paused_train", "force_paused_eval"),
-                ("normal_paused_train", "force_running_eval"),
-                ("normal_running_train", "force_running_eval"),
-                ("normal_running_train", "force_running_eval"),
-                ("normal_paused_train", "force_running_eval"),
-                ("force_running_eval", "normal_paused_train"),
-                ("force_finished_eval", "normal_paused_train"),
+                ("normal_paused_train", "force_paused_adhoc"),
+                ("normal_paused_train", "force_running_adhoc"),
+                ("normal_running_train", "force_running_adhoc"),
+                ("normal_running_train", "force_running_adhoc"),
+                ("normal_paused_train", "force_running_adhoc"),
+                ("force_running_adhoc", "normal_paused_train"),
+                ("force_finished_adhoc", "normal_paused_train"),
                 ("normal_paused_train", "normal_finished_train"),
                 ("normal_paused_train", "force_finished_stop"),
                 ("force_finished_stop", "normal_running_train"),
                 ("normal_running_train", "force_paused_train"),
-                ("force_paused_train", "force_finished_stop")]):
+                ("force_paused_train", "force_finished_stop"),
+                ("force_paused_train", "force_running_adhoc"),
+                ("normal_running_train", "normal_running_adhoc")]):
             with self.subTest(i=str(x)):
-                self.assertEqual(self.trainer._sm.allowed_transition(*x), results[i])
+                self.assertEqual(self.trainer._sm.allowed_transition(*x, True), results[i])
 
 
 if __name__ == '__main__':

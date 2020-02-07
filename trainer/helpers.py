@@ -64,13 +64,16 @@ class HookList:
     def append(self, item):
         self._list.append(item)
 
-    def remove(self, k):
-        if k not in self._permanent_items:
-            self._list.remove(k)
+    def remove(self, item):
+        if item not in self._permanent_items:
+            self._list.remove(item)
 
-    def insert(self, i, k):
-        if i > len(self._permanent_items):
-            self._list.insert(i, k)
+    def insert(self, i, item):
+        if i >= len(self._permanent_items):
+            self._list.insert(i, item)
+
+    def insert_top(self, item):
+        self._list.insert(len(self._permanent_items), item)
 
     def __getitem__(self, x):
         return self._list[x]

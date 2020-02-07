@@ -2321,10 +2321,20 @@ class Trainer:
         return dict((k, v) for k, v in self._metrics["val"].items()
                     if k[0] == "sample")
 
+    # NOTE: Not sure if I want to use dir(self)
     @property
     def all_post_epoch_hooks(self):
-        return dict((x, y) for (x, y) in self.__class__.__dict__.items()
-                    if x.endswith("post_epoch_hook"))
+        dict_a = dict((x, y) for (x, y) in self.__class__.__dict__.items()
+                      if x.endswith("post_epoch_hook") and
+                      callable(y) and
+                      x != "add_post_epoch_hook" and
+                      x != "remove_post_epoch_hook")
+        dict_b = dict((x, y) for (x, y) in self.__dict__.items()
+                      if x.endswith("post_epoch_hook") and
+                      callable(y) and
+                      x != "add_post_epoch_hook" and
+                      x != "remove_post_epoch_hook")
+        return {**dict_a, **dict_b}
 
     @property
     def post_epoch_hooks_to_run(self):
@@ -2565,7 +2575,7 @@ class Trainer:
 
         """
         self._logi("Running post epoch log hook")
-        # But these are certain transformation I'm doing to metrics
+        # But these are certain transformations I'm doing to metrics
         for k, v in self._items_to_log_dict.items():
             getattr(self, "_log_" + k)()
 
@@ -2600,7 +2610,28 @@ class Trainer:
         self._save(self._checkpoint_path)
         self.check_and_save()
 
-    # log_train has to run first of all
+    def add_post_epoch_hook(self, hook, name, position, overwrite=False):
+        if not hasattr(self, "_post_epoch_hooks_to_run"):
+            return False, "Cannot add hook without initializing"
+        if position not in {"first", "last"} and not isinstance(position, int):
+            return False, "Invalid position"
+        if hasattr(self, name):
+            if overwrite:
+                setattr(self, name, hook)
+            else:
+                return False, "Hook already exists. Use 'overwrite=True' to overwrite"
+        else:
+            setattr(self, name, hook)
+        hook_name = name.replace("_post_epoch_hook", "")
+        if hook_name in self.post_epoch_hooks_to_run:
+            self.post_epoch_hooks_to_run.remove(hook_name)
+        if position == "first":
+            self._post_epoch_hooks_to_run.insert_top(name.replace("_post_epoch_hook", ""))
+        elif position == "last":
+            self._post_epoch_hooks_to_run.append(name.replace("_post_epoch_hook", ""))
+        else:
+            self._post_epoch_hooks_to_run.insert(position, name.replace("_post_epoch_hook", ""))
+
     def _run_post_epoch_hooks(self):
         self._logd("Running post epoch hooks")
         all_hooks = self.all_post_epoch_hooks

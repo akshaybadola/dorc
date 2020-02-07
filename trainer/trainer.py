@@ -594,16 +594,25 @@ class Trainer:
         return device_monitor, signals
 
     def _init_epoch_runner(self):
+        """The task_runners and threads are a triple
+        As of now there are three kinds of task runners There can be:
+          1. epoch_runner
+          2. adhoc_runner
+          3. user_func_runner
+
+        Corresponding to each task runner there are threads and with the same
+        names and the references are further stored in `Trainer._task_thread_keys`,
+        `_tasks_callbacks`
+
+        :returns: None
+        :rtype: None
+
+        """
         device_monitor, signals = self._task_runner_helper("main")
         self._logi("Initializing Epoch Runner")
         self._epoch_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
                                    signals, device_monitor, self.extra_report)
         self._epoch_runner.name = "epoch_runner"
-        # NOTE: I'll envision the task_runners and threads to be a triple
-        #       There can be:
-        #         1. epoch_runner
-        #         2. adhoc_runner
-        #         3. user_func_runner
         self._task_runners = {"epoch": self._epoch_runner,
                               "train": self._epoch_runner,
                               "adhoc": None,
@@ -618,18 +627,31 @@ class Trainer:
                                  "adhoc": None,
                                  "user": None}
 
-    # NOTE: Signals are created by the helper and recreated when another
-    #       task_runner is initialized
-    def _task_runner_initialize(self, which, metrics, extra_metrics, callback):
-        assert which in self._task_runners
-        device_monitor, signals = self._task_runner_helper(which)
-        self._task_runners[which] = Epoch({"metrics": metrics,
-                                           "extra_metrics": extra_metrics},
-                                          signals, device_monitor, self.extra_report)
-        self._task_runners[which].reset()
-        self._task_runners[which].logger = self.logger
-        self._tasks_callbacks[which] = callback
+    def _task_runner_initialize(self, name, metrics, extra_metrics, callback):
+        """Initializes a task_runner. The quintessential task runner is the epoch
+        runner. Task runner coordinates with the trainer to ensure that nothing
+        gets jammed up.
 
+        Task runner needs signals to communicate with the trainer and those are
+        created by the helper as needed and recreated when another task_runner is
+        initialized.
+
+        :param name: Name :class:`str` of the task runner.
+        :param metrics: 
+        :param extra_metrics: 
+        :param callback: 
+        :returns: 
+        :rtype:
+
+        """
+        assert name in self._task_runners
+        device_monitor, signals = self._task_runner_helper(name)
+        self._task_runners[name] = Epoch({"metrics": metrics,
+                                          "extra_metrics": extra_metrics},
+                                         signals, device_monitor, self.extra_report)
+        self._task_runners[name].reset()
+        self._task_runners[name].logger = self.logger
+        self._tasks_callbacks[name] = callback
     # END: Init Funcs
 
     # START: Internal Controls
@@ -1011,6 +1033,7 @@ class Trainer:
             else:
                 params = {x: getattr(self, x) for x in inspect.signature(func).parameters}
             self._logi(f"Running the given user func {func_name}")
+            # FIXME: Switch to task runner
             pool = ThreadPool(processes=1)
             async_result = pool.apply_async(func, kwds=params)
             while not async_result.ready():
@@ -1143,6 +1166,7 @@ class Trainer:
 
             # call this in a separate thread and call the callback on the result
             # then report it.
+            # NOTE: New thread should only be started from _transition
             self.call_adhoc_eval_on_data(params)
 
             # self.pause()

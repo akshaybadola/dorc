@@ -62,15 +62,15 @@ class TrainerTest(unittest.TestCase):
     #     self.assertFalse(self.trainer.paused)
     #     self.trainer._abort_current()
 
-    def test_adhoc_funcs(self):
-        # adhoc_eval and adhoc_test
-        self.trainer._start_if_not_running()
-        self.assertFalse(self.trainer.paused)
-        self.assertEqual(self.trainer.current_state, "normal_running_train")
-        time.sleep(2)
-        self.assertTrue(self.trainer._epoch_runner.running)
-        self.assertTrue("main" in self.trainer._threads)
-        self.trainer._abort_current()
+    # def test_adhoc_funcs(self):
+    #     # adhoc_eval and adhoc_test
+    #     self.trainer._start_if_not_running()
+    #     self.assertFalse(self.trainer.paused)
+    #     self.assertEqual(self.trainer.current_state, "normal_running_train")
+    #     time.sleep(2)
+    #     self.assertTrue(self.trainer._epoch_runner.running)
+    #     self.assertTrue("main" in self.trainer._threads)
+    #     self.trainer._abort_current()
 
     def test_state_machine_transitions(self):
         results = [False, True, False, True, False, True, True, True, False, True,

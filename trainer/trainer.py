@@ -377,9 +377,10 @@ class Trainer:
                                       "adhoc": {"val", "test"},
                                       "user": None}
         else:
-            self._transition_steps = {"main": set(steps).union({"none"}),
+            self._transition_steps = {"main": set(steps),
                                       "adhoc": {"val", "test"},
                                       "user": None}
+
 
     # TODO: For each such variable i.e., static, property etc. add a decorator
     #       or a function such that they're added to that list e.g.,
@@ -412,7 +413,7 @@ class Trainer:
 
     def _init_modules(self):
         self._mods = Modules("trainer_modules", self._logd, self._loge, self._logi, self._logw)
-        self._sm = StateMachine(3, self._transition_steps, self._forced_states, logd=self._logd,
+        self._sm = StateMachine(3, self._transition_steps, logd=self._logd,
                                 loge=self._loge, logi=self._logi, logw=self._logw)
 
     @deprecated

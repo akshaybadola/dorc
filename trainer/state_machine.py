@@ -18,6 +18,15 @@ class StateMachine:
     def current_state(self, x):
         self._current_state = x
 
+    def legal_states(self, a, b):
+        a_force, a_run, a_step = a.split("_")
+        b_force, b_run, b_step = b.split("_")
+        return (a_force in {"force", "normal"} and b_force in {"force", "normal"}
+                and a_run in {"paused", "running", "finished"}
+                and b_run in {"paused", "running", "finished"}
+                and a_step in self._transition_steps.union(self._forced_states)
+                and b_step in self._transition_steps.union(self._forced_states))
+
     def _init_predicates(self):
         def normal_to_normal_same_step(a, b):
             a_force, a_run, a_step = a.split("_")
@@ -95,6 +104,8 @@ class StateMachine:
 
     def allowed_transition(self, a, b, debug=False):
         if not len(a.split("_")) == len(b.split("_")) == self._state_length:
+            return False
+        if not self.legal_states(a, b):
             return False
         if b == "normal_running_none":
             return False

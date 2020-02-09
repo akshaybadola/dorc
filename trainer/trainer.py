@@ -369,16 +369,17 @@ class Trainer:
         self._iterations = 0
         self._init_nvml()
         self._temp_runner = SimpleNamespace()
-        self._flag_adhoc_func_running = False
         steps = self._trainer_params["training_steps"]
         if "iterations" in steps:
-            self._transition_steps = {"train", "val", "test", "none"}
+            # NOTE: one loop but three possible things can be running
+            #       adhoc has two loops right now
+            self._transition_steps = {"main": {"train", "val", "test"},
+                                      "adhoc": {"val", "test"},
+                                      "user": None}
         else:
-            self._transition_steps = set(steps).union({"none"})
-        # post_reset -> none
-        # userfunc can be any func including adhoc_run
-        # NOTE: train forced state isn't supported yet
-        self._forced_states = {"save", "adhoc", "stop", "reset", "user"}
+            self._transition_steps = {"main": set(steps).union({"none"}),
+                                      "adhoc": {"val", "test"},
+                                      "user": None}
 
     # TODO: For each such variable i.e., static, property etc. add a decorator
     #       or a function such that they're added to that list e.g.,
@@ -862,14 +863,6 @@ class Trainer:
         :rtype: None
 
         """
-        a_force, a_run, a_step = _from.split("_")
-        b_force, b_run, b_step = _to.split("_")
-        if a_force not in {"force", "normal"} or b_force not in {"force", "normal"} or\
-           a_run not in {"paused", "running", "finished"} or\
-           b_run not in {"paused", "running", "finished"} or\
-           a_step not in self._transition_steps.union(self._forced_states) or\
-           b_step not in self._transition_steps.union(self._forced_states):
-            return False, self._loge(f"Some unknown transition given. Check name")
         if _from != self.current_state:
             return False, self._loge(f"from state != current state: " +
                                      f"{_from} != {self.current_state}")
@@ -883,6 +876,8 @@ class Trainer:
             return False, self._loge(f"State transition {_from} -> {_to} is not allowed")
         self._logd(f"Trying to transition from {_from} to {_to}")
 
+        a_force, a_run, a_step = _from.split("_")
+        b_force, b_run, b_step = _to.split("_")
 
         # FIXME: The design needs to split here. The fact that I have to modify
         #        this component means that there's something wrong, but how do I

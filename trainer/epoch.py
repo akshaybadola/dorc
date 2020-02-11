@@ -1,4 +1,6 @@
 import time
+import numpy as np
+from functools import partial
 from abc import ABC, abstractmethod
 from multiprocessing import Process, Queue
 from threading import Thread, Event
@@ -243,28 +245,14 @@ class LoopTask(Task):
 class LoopTaskWithHooks(LoopTask):
     def __init__(self, func, signals, data_iterator, hooks):
         super().__init__(func, signals, data_iterator)
-        self._all_hooks = hooks     # key, value pairs, values are functions
+        self._hooks = hooks     # key, value pairs, values are functions
 
     @property
-    def all_hooks(self):
-        return [h for h in self._hooks]
-
-    @property
-    def hooks_to_run(self):
-        return [h for h in self._hooks_to_run]
-
-    @hooks_to_run.setter
-    def hooks_to_run(self, x):
-        hooks_to_run = []
-        for _x in x:
-            if _x in self._all_hooks:
-                hooks_to_run.append(_x)
-            else:
-                self._loge(f"Hook {_x} not in available hooks")
-        self._hooks_to_run = hooks_to_run
+    def hooks(self):
+        return self._hooks
 
     def _run_hooks(self):
-        for h, hook in self._hooks_to_run:
+        for h, hook in self._hooks:
             hook(self)
 
     def run_task(self, **kwargs):
@@ -293,37 +281,43 @@ class LoopTaskWithHooks(LoopTask):
         self.finish()
 
 
-class NewEpoch(LoopTaskWithHooks):
-    def __init__(self, metrics, signals, device_poll, extra_reportables, **kwargs):
-        self.metrics = metrics["metrics"]
-        self.signals = signals
-        self.device_poll = device_poll
-        self._waiting = Event()
-        self._running = Event()
-        self.aborted = Event()
-        self.reset()
-        self._post_batch_hooks_to_run = {"train": ["log", "paused"],
-                                         "val": ["log"],
-                                         "test": ["log"]}
+def _log_post_batch_hook(epoch, **kwargs):
+    step = kwargs["step"]
+    metric_names = epoch.metrics[step]
+    for m in metric_names:
+        if m in kwargs:
+            epoch.batch_vars.append((step, epoch.batch_num[step], m, kwargs[m]))
+        elif step in epoch.extra_metrics and m in epoch.extra_metrics[step] and\
+                epoch.extra_metrics[step][m]["when"] == "batch":
+            em_func = epoch.extra_metrics[step][m]["function"]
+            em_inputs = epoch.extra_metrics[step][m]["inputs"]
+            f_inputs = dict((x, kwargs[x]) for x in em_inputs)
+            epoch.batch_vars.append((step, epoch.batch_num[step], m, em_func(**f_inputs)))
+    if hasattr(epoch, "keep_time") and epoch.keep_time[step]:
+        epoch.batch_vars.append((step, epoch.batch_num[step], "time", kwargs["time"]))
+    if "device_mon" in kwargs:
+        dm = kwargs["device_mon"]
+        if dm.gpu_util is not None:
+            epoch.batch_vars.append((step, epoch.batch_num[step], "gpu_util", np.mean(dm.gpu_util)))
+        epoch.batch_vars.append((step, epoch.batch_num[step], "cpu_util", np.mean(dm.cpu_util)))
+        epoch.batch_vars.append((step, epoch.batch_num[step], "mem_util", np.mean(dm.mem_util)))
+        epoch.batch_vars.append((step, epoch.batch_num[step], "time", dm.time))
+    if "batch_time" in kwargs:
+        epoch.batch_vars.append((step, epoch.batch_num[step], "batch_time", kwargs["batch_time"]))
+    if epoch.extra_reportables[step]:
+        for x in epoch.extra_reportables[step]:
+            epoch.batch_vars.append((step, epoch.batch_num[step], x, kwargs[x]))
+    epoch.total_samples[step] += kwargs["total"]  # always there
 
-    def reset(self):
-        self.total_samples = {"train": 0, "val": 0, "test": 0}
-        self.batch_num = {"train": 0, "val": 0, "test": 0}
-        self.finish()
-        self.batch_vars = BatchVars()
-        self.aborted.clear()
 
-    def finish(self):
-        """Finishes the current execution loop by resetting running and waiting flags
-        `self._waiting` and `self._running` are set to False
+class EpochLoop(LoopTaskWithHooks):
+    def __init__(self, func, signals, data_iterator, hooks, device_mon):
+        super().__init__(func, signals, data_iterator, hooks)
+        self.device_mon = device_mon
 
-        :returns: None
-        :rtype: None
-
-        """
-        self._waiting.clear()
-        self._running.clear()
-        self._current_loop = "idle"
+    def _run_hooks(self, **kwargs):
+        for hook in self._hooks:
+            hook(**kwargs)
 
     def run_task(self, **kwargs):
         self._init = False
@@ -332,10 +326,18 @@ class NewEpoch(LoopTaskWithHooks):
         self.signals.paused.wait()  # wait if paused
         self._toggle_waiting()
         try:
-            for i, x in enumerate(self.data_iterator):
-                with self.device_poll.monitor():
-                    self.result[i] = self.func(x, **kwargs)
-                self._run_hooks()
+            for i in range(len(self.data_iterator)):
+                start = time.time()
+                x = self.data_iterator.__iter__().__next__()
+                batch_time = time.time() - start
+                if not x:
+                    print("not x")
+                    break
+                else:
+                    with self.device_mon.monitor():
+                        result = self.func(x, **kwargs)
+                    result["batch_time"] = batch_time
+                    self._run_hooks(**{"device_mon": self.device_mon, **result})
                 if hasattr(self.signals, "aborted") and self.signals.aborted():
                     if self.running:
                         self._toggle_running()
@@ -352,7 +354,154 @@ class NewEpoch(LoopTaskWithHooks):
         self.finish()
 
 
-class Epoch:
+class NewEpoch:
+    """Epoch is a class which manages the loop (train, val etc.) spawning, runs
+    hooks and gathers the results
+
+    """
+    def __init__(self, metrics, signals, device_poll, extra_reportables, **kwargs):
+        self.metrics = metrics["metrics"]
+        self.extra_metrics = metrics["extra_metrics"]
+        self.signals = signals
+        self.device_mon = device_poll
+        self.device_poll = self.device_mon
+        self.aborted = Event()
+        self.reset()
+        self.extra_reportables = {}
+        for step in ["train", "val", "test"]:
+            self.extra_reportables[step] = {}
+            if step in extra_reportables:
+                self.extra_reportables[step] = extra_reportables[step].copy()
+        self._log_train_post_batch_hook = partial(_log_post_batch_hook, self, **{"step": "train"})
+        self._log_val_post_batch_hook = partial(_log_post_batch_hook, self, **{"step": "val"})
+        self._log_test_post_batch_hook = partial(_log_post_batch_hook, self, **{"step": "test"})
+        self._post_batch_hooks = {"train": {"log": self._log_train_post_batch_hook},
+                                  "val": {"log": self._log_val_post_batch_hook},
+                                  "test": {"log": self._log_test_post_batch_hook}}
+        for x in ["logi", "logd", "loge", "logw"]:
+            setattr(self, "_" + x, kwargs[x])
+
+    @property
+    def init_or_finished(self):
+        return (not self.running) and (not self.waiting)
+
+    @property
+    def current_loop(self):
+        if self._current_loop is not None:
+            return self._current_loop.name
+        else:
+            return "idle"
+
+    @property
+    def waiting(self):
+        return self._current_loop.waiting
+
+    @property
+    def running(self):
+        return self._current_loop.running
+
+    @property
+    def info(self):
+        return {"total_samples": self.total_samples,
+                "batch_nums": self.batch_num,
+                "batch_vars": self.batch_vars}
+
+    @property
+    def post_batch_hooks(self):
+        return {{k: v.keys()} for k, v in self._post_batch_hooks.items()}
+
+    def add_post_batch_hook(self, step, name, hook):
+        if step in {"train", "val", "test"} and callable(hook):
+            try:
+                self._all_post_batch_hooks[step][name] = partial(hook, self)
+                return True
+            except Exception as e:
+                return False, f"Error occurred {e}"
+        else:
+            return False, "Wrong step or not callable hook"
+
+    def remove_post_batch_hook(self, step, name, hook):
+        assert step in {"train", "val", "test"}
+        if name in self._all_post_batch_hooks[step]:
+            self._all_post_batch_hooks[step].pop(name)
+            return True
+        else:
+            return False, self._loge(f"Hook {name} not in {step} hooks")
+
+    def reset(self):
+        self._current_loop = None
+        self.total_samples = {"train": 0, "val": 0, "test": 0}
+        self.batch_num = {"train": 0, "val": 0, "test": 0}
+        self.batch_vars = BatchVars()
+        self.aborted.clear()
+
+    def run_train(self, train_step, train_loader, loop_type, num_iterations=0, get_raw=False):
+        def train_one_batch(self, batch):
+            if get_raw:
+                raw, batch = batch[0], batch[1]
+            received = train_step(batch)
+            if get_raw:
+                received["raw"] = raw
+            self.batch_num["train"] += 1
+            return received
+        if loop_type == "iterations":
+            assert num_iterations, "num_iterations cannot be zero with loop_type iterations"
+        assert iter(train_loader), "train_loader has no iterator"
+        assert train_loader.batch_size, "train_loader has no batch_size"
+        self._logd("Starting run_train")
+        self._logd(f"Train Loader properties: {len(train_loader)}")
+        if loop_type == "iterations":
+            train_loader.__len__ = lambda: num_iterations
+        hooks = [*self._post_batch_hooks["train"].values()]
+        self.train_loop = EpochLoop(train_one_batch, self.signals, train_loader,
+                                    hooks, self.device_mon)
+        self.train_loop.name = "train"
+        self._current_loop = self.train_loop
+        self.train_loop.run_task()
+
+    def run_val(self, val_step, val_loader, get_raw=False):
+        def val_one_batch(batch):
+            if get_raw:
+                raw, batch = batch[0], batch[1]
+            received = val_step(batch)
+            if get_raw:
+                received["raw"] = raw
+            self.batch_num["val"] += 1
+            return received
+        assert iter(val_loader), "val_loader has no iterator"
+        assert val_loader.batch_size, "val_loader has no batch_size"
+        self._logd("Starting run_val")
+        self._logd(f"Val Loader properties: {len(val_loader)}")
+        hooks = [*self._post_batch_hooks["val"].values()]
+        self.val_loop = EpochLoop(val_one_batch, self.signals, val_loader,
+                                  hooks, self.device_mon)
+        self.val_loop.name = "val"
+        self._current_loop = self.val_loop
+        self.val_loop.run_task()
+
+    def run_test(self, test_step, test_loader, get_raw=False):
+        def test_one_batch(batch):
+            if get_raw:
+                raw, batch = batch[0], batch[1]
+            received = test_step(batch)
+            if get_raw:
+                received["raw"] = raw
+            self.batch_num["test"] += 1
+            return received
+        assert iter(test_loader), "test_loader has no iterator"
+        assert test_loader.batch_size, "test_loader has no batch_size"
+        self._logd("Starting run_test")
+        self._logd(f"Test Loader properties: {len(test_loader)}")
+        hooks = [*self._post_batch_hooks["test"].values()]
+        self.test_loop = EpochLoop(test_one_batch, self.signals, test_loader,
+                                   hooks, self.device_mon)
+        self.test_loop.name = "test"
+        self._current_loop = self.test_loop
+        self.test_loop.run_task()
+
+
+Epoch = NewEpoch
+class Epoch_:
     """Epoch is an abstraction of epoch and in fact can not be a cyclical train/val
     type but can be iterations or arbitrary training procedure. It's simply a
     wrapper to hold the metrics and other variables collected while training.
@@ -382,7 +531,7 @@ class Epoch:
     simply refers to whichever task it has been assigned right now.
 
     """
-    def __init__(self, metrics, signals, device_poll, extra_reportables):
+    def __init__(self, metrics, signals, device_poll, extra_reportables, **kwargs):
         self.name = "no_name"
         self.metrics = metrics["metrics"]
         self.extra_metrics = metrics["extra_metrics"]
@@ -407,6 +556,9 @@ class Epoch:
         self._post_batch_hooks_to_run = {"train": ["log", "paused"],
                                          "val": ["log"],
                                          "test": ["log"]}
+
+    def _log_post_batch_hook(self, **kwargs):
+        _log_post_batch_hook(self, **kwargs)
 
     def reset(self):
         self.total_samples = {"train": 0, "val": 0, "test": 0}
@@ -743,31 +895,3 @@ class Epoch:
     # def _abort_post_batch_hook(self, **kwargs):
     #     if self.signals.aborted():
     #         pass
-
-    # TODO: log GPU, CPU, Memory per batch
-    #       GPU, CPU usage is a problem as they'll be idle when
-    #       being reported. They have to be collected while running.
-    # FIXME: This thingy is making an assumption that the other thingy will be
-    #        in kwargs, which isn't quite right. How do I fix this? There will
-    #        have to be checks that "x" value is not reportable.
-    def _log_post_batch_hook(self, **kwargs):
-        step = kwargs["step"]
-        metric_names = self.metrics[step]
-        # if hasattr(self, "logger"):
-        #     self.logger.debug(f"runner extra metrics {self.extra_metrics}")
-        for m in metric_names:
-            if m in kwargs:
-                self.batch_vars.append((step, self.batch_num[step], m, kwargs[m]))
-            elif step in self.extra_metrics and m in self.extra_metrics[step] and\
-                    self.extra_metrics[step][m]["when"] == "batch":
-                em_func = self.extra_metrics[step][m]["function"]
-                em_inputs = self.extra_metrics[step][m]["inputs"]
-                f_inputs = dict((x, kwargs[x]) for x in em_inputs)
-                self.batch_vars.append((step, self.batch_num[step], m, em_func(**f_inputs)))
-        if self.keep_time[step]:
-            self.batch_vars.append((step, self.batch_num[step], "time", kwargs["time"]))
-        if self.extra_reportables[step]:
-            for x in self.extra_reportables[step]:
-                self.batch_vars.append((step, self.batch_num[step], x, kwargs[x]))
-        # CHECK: Is total here total samples or total batches?
-        self.total_samples[step] += kwargs["total"]  # always there

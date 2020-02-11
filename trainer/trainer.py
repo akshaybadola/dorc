@@ -614,7 +614,9 @@ class Trainer:
         device_monitor, signals = self._task_runner_helper("main")
         self._logi("Initializing Epoch Runner")
         self._epoch_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
-                                   signals, device_monitor, self.extra_report)
+                                   signals, device_monitor, self.extra_report,
+                                   **{"logd": self._logd, "loge": self._loge,
+                                      "logi": self._logi, "logw": self._logw})
         self._epoch_runner.name = "epoch_runner"
         self._task_runners = {"epoch": self._epoch_runner,
                               "train": self._epoch_runner,

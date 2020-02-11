@@ -105,15 +105,6 @@ class Tag:
         return self._members
 
     def __call__(self, f):
-        # if self.tag not in f.__dict__:
-        #     f.__dict__[self.tag] = True
-        #     self._funcs.append(f)
-        # if callable(f):
-        #     if f not in self._members:
-        #         self._members.append(f)
-        #     return f
-        # else:
-        #     self._members.append(f)
         if f not in self._members:
             self._members.append(f)
         return f
@@ -180,21 +171,3 @@ def get_proxy_dataloader(dataset, params, fraction_or_number, logger=None):
             logger.warn(f"Dataset dataset doesn't define \"_get_raw\".\
             Drawing samples from test data will not be available.")
     return temp_loader
-
-
-# class Dummy:
-#     pass
-
-
-# def get_dummy_runner(trainer):
-#     dummy = Dummy()
-#     dummy._device_handles = trainer._device_handles
-#     dummy._train_step = trainer._train_step
-#     dummy._val_step = trainer._val_step
-#     dummy._test_step = trainer._test_step
-#     dummy.aborted = False
-#     dummy.paused = False
-#     dummy._metrics = None
-#     dummy._extra_metrics = None
-#     temp_runner = Epoch(dummy, {})
-#     return temp_runner

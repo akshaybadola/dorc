@@ -45,6 +45,7 @@ class StateMachine:
                          or (a_step == "none" and a_run == "paused"  # if none -> any
                              and b_run in {"running", "paused"})))
 
+        # CHECK: Can this happen? 
         def normal_to_force_same_step(a, b):
             a_force, a_run, a_step = a.split("_")
             b_force, b_run, b_step = b.split("_")

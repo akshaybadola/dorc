@@ -368,19 +368,19 @@ class Trainer:
         self._epoch = 0
         self._iterations = 0
         self._init_nvml()
-        self._temp_runner = SimpleNamespace()
         steps = self._trainer_params["training_steps"]
+        # CHECK: What to do with steps then?
         if "iterations" in steps:
             # NOTE: one loop but three possible things can be running
             #       adhoc has two loops right now
-            self._transition_steps = {"main": {"train", "val", "test"},
+            # "val", "test" are hooks and may not be part of the flow
+            self._transition_steps = {"main": {"train"},
                                       "adhoc": {"val", "test"},
                                       "user": None}
         else:
-            self._transition_steps = {"main": set(steps),
+            self._transition_steps = {"main": {"main"},
                                       "adhoc": {"val", "test"},
                                       "user": None}
-
 
     # TODO: For each such variable i.e., static, property etc. add a decorator
     #       or a function such that they're added to that list e.g.,
@@ -2245,6 +2245,7 @@ class Trainer:
         return self._running_event.is_set()
 
     @property
+    @deprecated
     def current_run(self):
         if "_epoch_runner" not in self.__dict__:
             return "None"

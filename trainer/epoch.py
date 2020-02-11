@@ -240,9 +240,118 @@ class LoopTask(Task):
         self.finish()
 
 
-# DONE: Why's epoch not reporting even standard losses?
-# Perhaps decouple the Epoch entirely from the wrapper
-# with a tcp socket like thingy
+class LoopTaskWithHooks(LoopTask):
+    def __init__(self, func, signals, data_iterator, hooks):
+        super().__init__(func, signals, data_iterator)
+        self._all_hooks = hooks     # key, value pairs, values are functions
+
+    @property
+    def all_hooks(self):
+        return [h for h in self._hooks]
+
+    @property
+    def hooks_to_run(self):
+        return [h for h in self._hooks_to_run]
+
+    @hooks_to_run.setter
+    def hooks_to_run(self, x):
+        hooks_to_run = []
+        for _x in x:
+            if _x in self._all_hooks:
+                hooks_to_run.append(_x)
+            else:
+                self._loge(f"Hook {_x} not in available hooks")
+        self._hooks_to_run = hooks_to_run
+
+    def _run_hooks(self):
+        for h, hook in self._hooks_to_run:
+            hook(self)
+
+    def run_task(self, **kwargs):
+        self._init = False
+        self._running.set()
+        self._toggle_waiting()
+        self.signals.paused.wait()  # wait if paused
+        self._toggle_waiting()
+        try:
+            for i, x in enumerate(self.data_iterator):
+                self.result[i] = self.func(x, **kwargs)
+                self._run_hooks()
+                if hasattr(self.signals, "aborted") and self.signals.aborted():
+                    if self.running:
+                        self._toggle_running()
+                    self.status = False, "Terminated"
+                    self.finish()
+                    self.aborted = True
+                    break
+                else:               # wait after each iteration
+                    self._toggle_waiting()
+                    self.signals.paused.wait()
+                    self._toggle_waiting()
+        except Exception as e:
+            self.status = False, e
+        self.finish()
+
+
+class NewEpoch(LoopTaskWithHooks):
+    def __init__(self, metrics, signals, device_poll, extra_reportables, **kwargs):
+        self.metrics = metrics["metrics"]
+        self.signals = signals
+        self.device_poll = device_poll
+        self._waiting = Event()
+        self._running = Event()
+        self.aborted = Event()
+        self.reset()
+        self._post_batch_hooks_to_run = {"train": ["log", "paused"],
+                                         "val": ["log"],
+                                         "test": ["log"]}
+
+    def reset(self):
+        self.total_samples = {"train": 0, "val": 0, "test": 0}
+        self.batch_num = {"train": 0, "val": 0, "test": 0}
+        self.finish()
+        self.batch_vars = BatchVars()
+        self.aborted.clear()
+
+    def finish(self):
+        """Finishes the current execution loop by resetting running and waiting flags
+        `self._waiting` and `self._running` are set to False
+
+        :returns: None
+        :rtype: None
+
+        """
+        self._waiting.clear()
+        self._running.clear()
+        self._current_loop = "idle"
+
+    def run_task(self, **kwargs):
+        self._init = False
+        self._running.set()
+        self._toggle_waiting()
+        self.signals.paused.wait()  # wait if paused
+        self._toggle_waiting()
+        try:
+            for i, x in enumerate(self.data_iterator):
+                with self.device_poll.monitor():
+                    self.result[i] = self.func(x, **kwargs)
+                self._run_hooks()
+                if hasattr(self.signals, "aborted") and self.signals.aborted():
+                    if self.running:
+                        self._toggle_running()
+                    self.status = False, "Terminated"
+                    self.finish()
+                    self.aborted = True
+                    break
+                else:               # wait after each iteration
+                    self._toggle_waiting()
+                    self.signals.paused.wait()
+                    self._toggle_waiting()
+        except Exception as e:
+            self.status = False, e
+        self.finish()
+
+
 class Epoch:
     """Epoch is an abstraction of epoch and in fact can not be a cyclical train/val
     type but can be iterations or arbitrary training procedure. It's simply a
@@ -404,23 +513,14 @@ class Epoch:
         self._log(f"Train Loader properties: {len(train_loader)}")
 
         def train_one_batch(batch):
-            start = time.time()
-            self.device_poll.start()
-            if get_raw:
-                raw, batch = batch[0], batch[1]
-            received = train_step(batch)
-            self.device_poll.end()
-            end = time.time()
+            with self.device_poll.monitor():
+                if get_raw:
+                    raw, batch = batch[0], batch[1]
+                received = train_step(batch)
             if self.keep_time["train"]:
-                received["time"] = end - start
+                received["time"] = self.device_poll._data
             if get_raw:
                 received["raw"] = raw
-            received["gpu_util"] = self.device_poll.gpu_util
-            received["gpu_max_mem"] = self.device_poll.gpu_max_mem
-            received["gpu_min_mem"] = self.device_poll.gpu_min_mem
-            received["cpu_util"] = self.device_poll.cpu_util
-            received["cpu_max_mem"] = self.device_poll.cpu_max_mem
-            received["cpu_min_mem"] = self.device_poll.cpu_min_mem
             self.batch_num["train"] += 1
             self._run_post_batch_hooks(**{"step": "train", **received})
         if loop_type == "iterations":

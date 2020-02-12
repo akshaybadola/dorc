@@ -8,6 +8,7 @@ class StateMachine:
         self._logi = kwargs["logi"]
         self._logw = kwargs["logw"]
         self._init_predicates()
+        self._current_state = "normal_paused_none"
 
     @property
     def current_state(self):

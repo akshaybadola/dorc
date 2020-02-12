@@ -24,7 +24,7 @@ from .overrides import MyDataLoader
 from .components import Models
 from .functions import _log_metrics_for_step
 from ._log import Log
-from .checks import Checks
+# from .checks import Checks
 from ._checks import (_check_model_params, _check_trainer_params, _check_data_params,
                       _check_resume_or_init_weights)
 from .helpers import (control, prop, extras, helpers, ProxyDataset, get_proxy_dataloader,
@@ -165,7 +165,6 @@ class Trainer:
         self._sanity_check()
         self._init_static_vars()
         self._init_property_vars()
-        # self._init_external_vars()
         self._check_exports()
         if trainer_params["resume"] or "init_weights" in trainer_params:
             self._init_models()
@@ -369,18 +368,14 @@ class Trainer:
         self._iterations = 0
         self._init_nvml()
         steps = self._trainer_params["training_steps"]
-        # CHECK: What to do with steps then?
         if "iterations" in steps:
-            # NOTE: one loop but three possible things can be running
-            #       adhoc has two loops right now
-            # "val", "test" are hooks and may not be part of the flow
-            self._transition_steps = {"main": {"train"},
-                                      "adhoc": {"val", "test"},
-                                      "user": None}
+            self._transition_steps = {"main": {"train", "val", "test", "none"},
+                                      "adhoc": {"val", "test", "none"},
+                                      "user": {"func", "none"}}
         else:
-            self._transition_steps = {"main": {"main"},
-                                      "adhoc": {"val", "test"},
-                                      "user": None}
+            self._transition_steps = {"main": set(steps).union("none"),
+                                      "adhoc": {"val", "test", "none"},
+                                      "user": {"func", "none"}}
 
     # TODO: For each such variable i.e., static, property etc. add a decorator
     #       or a function such that they're added to that list e.g.,
@@ -415,18 +410,6 @@ class Trainer:
         self._mods = Modules("trainer_modules", self._logd, self._loge, self._logi, self._logw)
         self._sm = StateMachine(3, self._transition_steps, logd=self._logd,
                                 loge=self._loge, logi=self._logi, logw=self._logw)
-
-    @deprecated
-    def _init_external_vars(self):
-        """Initialize some variables which will be attached to it later. Right now a
-        hack but it could be more principled later.
-
-        :returns: None
-        :rtype: None
-
-        """
-        if not hasattr(self, "report_function"):
-            self.report_function = None
 
     def _init_nvml(self):
         """Initializes the Nvidia monitoring library. It's called by _init_state_vars so
@@ -531,8 +514,8 @@ class Trainer:
         default metric and is logged.
 
         Other metrics are specified in `extra_metrics` have to conform to the format
-        {\"step\": step_name, \"function\": `callable`,
-        \"inputs\": input_variables_to_function, \"when\": batch_or_epoch}
+        {"step": step_name, "function": `callable`,
+        "inputs": input_variables_to_function, "when": batch_or_epoch}
 
         :returns: None
         :rtype: None
@@ -618,16 +601,16 @@ class Trainer:
                                    **{"logd": self._logd, "loge": self._loge,
                                       "logi": self._logi, "logw": self._logw})
         self._epoch_runner.name = "epoch_runner"
-        self._task_runners = {"epoch": self._epoch_runner,
+        self._task_runners = {"main": self._epoch_runner,
                               "train": self._epoch_runner,
                               "adhoc": None,
                               "user": None}
-        self._task_thread_keys = {"epoch": "main",
+        self._task_thread_keys = {"main": "main",
                                   "train": "main",
                                   "adhoc": "adhoc",
                                   "user": "user"}
         # FIXME: For val and test maybe update in separate variables
-        self._tasks_callbacks = {"epoch": self._run_post_epoch_hooks,
+        self._tasks_callbacks = {"main": self._run_post_epoch_hooks,
                                  "train": self._run_post_epoch_hooks,
                                  "adhoc": None,
                                  "user": None}
@@ -662,7 +645,7 @@ class Trainer:
     # START: Internal Controls
     #        These functions interact with the SM.
     #        NOTE: As of now this is only the main loop
-    def _finish_if_paused_or_running(self, _force=False, gather=False):
+    def _finish_if_paused_or_running(self, gather=False):
         """Should not be called from `self._transition`
         Stops the current running main flow (or alternate flow?)
 
@@ -673,65 +656,57 @@ class Trainer:
         self._transition_flags = {}
         if gather:
             self._transition_flags["run_cb"] = True
-        force, run, step = self.current_state.split("_")
-        if _force:
-            force = "force"
+        loop, run, step = self.current_state.split("_")
         if run == "running":
-            self._transition(self.current_state, "_".join([force, "paused", step]))
-        self._transition(self.current_state, "_".join([force, "finished", step]))
+            self._transition(self.current_state, "_".join([loop, "paused", step]))
+        # print("done with paused", self.current_state)
+        self._transition(self.current_state, "_".join([loop, "finished", step]))
 
-    def _pause_if_running(self, _force=False):
+    def _pause_if_running(self):
         """Should not be called from `self._transition`
 
         :returns: None
         :rtype: None
 
         """
-        force, run, step = self.current_state.split("_")
-        if _force:
-            force = "force"
+        loop, run, step = self.current_state.split("_")
         if run == "running":
-            self._transition(self.current_state, "_".join([force, "paused", step]))
+            self._transition(self.current_state, "_".join([loop, "paused", step]))
 
-    def _start_if_not_running(self, _force=False):
+    def _start_if_not_running(self):
         """Should not be called from `self._transition`
 
         :returns: None
         :rtype: None
 
         """
-        force, run, step = self.current_state.split("_")
+        loop, run, step = self.current_state.split("_")
         if step != "none":
             return              # only if step == "none"
         else:
             step = "train"      # default
-        if _force:
-            force = "force"
         if run == "paused":
-            self._transition(self.current_state, "_".join([force, "running", step]))
+            self._transition(self.current_state, "_".join([loop, "running", step]))
 
-    def _run_if_paused(self, _force=False):
+    def _run_if_paused(self):
         """Should not be called from `self._transition`
 
         :returns: None
         :rtype: None
 
         """
-        force, run, step = self.current_state.split("_")
-        if _force:
-            force = "force"
+        loop, run, step = self.current_state.split("_")
         if run == "paused":
-            self._transition(self.current_state, "_".join([force, "running", step]))
+            self._transition(self.current_state, "_".join([loop, "running", step]))
 
-    def _run_new_if_finished(self, _force=False):
-        force, run, step = self.current_state.split("_")
-        # if _force:
-        #     force = "force"
-        if run == "finished":
-            if _force:
-                self._transition(self.current_state, "_".join(["force", "running", step]))
-            else:
-                self._transition(self.current_state, "_".join(["normal", "running", step]))
+    def _run_new_if_finished(self):
+        loop, run, step = self.current_state.split("_")
+        self._transition(self.current_state, "_".join([loop, "running", step]))
+        # if run == "finished":
+        #     if _force:
+        #         self._transition(self.current_state, "_".join(["force", "running", step]))
+        #     else:
+        #         self._transition(self.current_state, "_".join(["normal", "running", step]))
     # END: Internal Controls
 
     # START: State Machine Helpers
@@ -739,7 +714,7 @@ class Trainer:
     def _ensure_paused(self, task):
         "Should not be called from anywhere but `self._transition`"
         self._logd(f"Calling ensure paused with {task}")
-        if task == "main":
+        if task in {"main", "train"}:
             if not self.paused:
                 self._running_event.clear()  # not running
         elif task == "adhoc":
@@ -752,9 +727,11 @@ class Trainer:
                 self._userfunc_running_event.clear()
         runner = self._task_runners.get(task)  # say epoch
         if runner is not None and runner.running:
-            while not runner.waiting:
+            j = 0
+            while not runner.waiting and j < 5:
                 time.sleep(1)
                 self._logd(f"Waiting for {task} runner")
+                j += 1
 
     def _ensure_unpaused(self, task):
         "Should not be called from anywhere but `self._transition`"
@@ -801,10 +778,13 @@ class Trainer:
             self._toggle_current_aborted()
         runner = self._task_runners.get(task)
         callback = self._tasks_callbacks.get(task)
+        print("runner is", runner)
         if runner is not None:
             if self.paused:
+                print("was paused")
                 self._toggle_running()  # unpause for abort
                 runner.aborted.wait()
+                print("Now maybe")
                 self._toggle_running()
             else:
                 runner.aborted.wait()
@@ -830,16 +810,15 @@ class Trainer:
         """Transitions to the next state from the given state.
 
         State is a string triple joined by "_". Each state `s` is composed of
-        `force_run_step`, where:
-                `force` can be in {"normal", "force"}
+        `loop_run_step`, where:
+                `loop` can be in {"main", "adhoc", "user"}
                 `run` can be in {"running", "paused", "finished"}
-                `step` can be any of the `self._trainer_params["training_steps"]
-                    or `{"train", "val", "test", "none"}
+                `step` can be any of the `self._trainer_params["training_steps"]` + "none"
+                    or `{"train", "val", "test", "none"}`
 
         For a :class:`Trainer` instance the regular flow is `train_step ->
         post_epoch_hooks` or equivalent steps. However, all those can be paused
-        to run auxiliary tasks to check how trainer is doing. As such, anything
-        that breaks the regular flow is a forced state.
+        to run auxiliary tasks to check how trainer is doing.
 
         `run` is the state of the trainer in the sense that if some active task
         is going on which has reserved some of the resourcese, whether that be
@@ -869,49 +848,53 @@ class Trainer:
         if _from != self.current_state:
             return False, self._loge(f"from state != current state: " +
                                      f"{_from} != {self.current_state}")
-        if _from == "force_finished_train":
-            if not self._allowed_transition("force_finished_stop", _to):
-                return False, self._loge(f"State transition {_from} -> {_to} is not allowed")
-        elif _to == "force_finished_train":
-            if not self._allowed_transition(_from, "force_finished_stop"):
-                return False, self._loge(f"State transition {_from} -> {_to} is not allowed")
-        elif not self._allowed_transition(_from, _to):
+        # NOTE: These were two hackey predicates to allow matching between
+        #       "train" and "stop"
+        #
+        # if _from == "force_finished_train":
+        #     if not self._allowed_transition("force_finished_stop", _to):
+        #         return False, self._loge(f"State transition {_from} -> {_to} is not allowed")
+        # if _to == "force_finished_train":
+        #     if not self._allowed_transition(_from, "force_finished_stop"):
+        #         return False, self._loge(f"State transition {_from} -> {_to} is not allowed")
+        #
+        if not self._allowed_transition(_from, _to):
             return False, self._loge(f"State transition {_from} -> {_to} is not allowed")
         self._logd(f"Trying to transition from {_from} to {_to}")
 
-        a_force, a_run, a_step = _from.split("_")
-        b_force, b_run, b_step = _to.split("_")
+        a_loop, a_run, a_step = _from.split("_")
+        b_loop, b_run, b_step = _to.split("_")
 
         # FIXME: The design needs to split here. The fact that I have to modify
         #        this component means that there's something wrong, but how do I
         #        design a component like this even?
 
-        # NOTE: Pre transition checks
-        # NOTE: Only for main loop
-        if a_force == "normal" == b_force:
+        # NOTE: Pre transition checks only for main loop
+        if a_loop == "main" == b_loop:
             self._sm.current_state = _to
-        elif a_force == "normal" and b_force == "force":
+        elif a_loop == "normal" and b_loop == "force":
             # will have to ensure first is paused?
             self._ensure_paused(a_step)
             self._prev_normal_state = self.current_state
             self._sm.current_state = _to
-        elif a_force == "force" and b_force == "normal" and not a_run == "finished":
+        elif a_loop == "force" and b_loop == "normal" and not a_run == "finished":
             assert _to == self._prev_normal_state
             self._sm.current_state = _to
-        elif a_force == "force" and b_force == "normal" and a_run == "finished":
+        elif a_loop == "force" and b_loop == "normal" and a_run == "finished":
             self._sm.current_state = _to
-        elif a_force == "force" == b_force:
+        elif a_loop == "force" == b_loop:
             self._sm.current_state = _to
 
         # NOTE: Actual state transition
         # NOTE: The Task runner should exist already if not, then some error
         #        has occured and previous state should be resumed.
-        if b_step in {"train", "val", "test"} and b_force == "normal":
+        if b_step in {"train", "val", "test"} and b_loop == "normal":
             # NOTE: Check only for main
             if "main" in self._task_runners:
                 # epoch_runner exists but "train" isn't running
                 if not self._task_runners["main"].running:
                     if "main" not in self._threads or not self._threads["main"].is_alive():
+                        print("starting main")
                         self._threads["main"] = Thread(target=self.train)
                         self._threads["main"].start()
             else:
@@ -920,12 +903,12 @@ class Trainer:
                 #       that some massive error indeed occurred and we're stuck here.
                 # NOTE: For now assume that it doesn't die
                 pass
-        # NOTE: b_force == normal for this case shouldn't be allowed. It could
+        # NOTE: b_loop == normal for this case shouldn't be allowed. It could
         #       be allowed but that would mean launching it on a separate device
         #       etc. with separate models so that perhaps training is also
         #       allowed, so that it doesn't really interfere with the main thread.
         #       That is not really supported right now.
-        elif b_step == "adhoc" and b_force == "force":
+        elif b_step == "adhoc" and b_loop == "force":
             # TODO: Scenarios
             #       1. main thread died?
             #       2. main thread aborted and started main thread with val?
@@ -951,7 +934,7 @@ class Trainer:
             else:
                 # Resume previous state
                 pass
-
+ 
         # NOTE: Post transition checks
         if b_run == "running":
             self._ensure_unpaused(b_step)
@@ -1815,16 +1798,19 @@ class Trainer:
                 for x, y in saved_state["dataloader_params"].items()]):
             self._logw("collate_fn will not be restored")
         for k, v in saved_state["dataloader_params"].items():
-            for a, b in v.items():
-                if a != "collate_fn":
-                    value = saved_state["dataloader_params"][k][a]
-                    if isinstance(value, dict):
-                        for x, y in value.items():
-                            if isinstance(y, str) and not y.startswith("callable_"):
-                                self._dataloader_params[k][a][x] = y
-                    else:
-                        if isinstance(value, str) and not value.startswith("callable_"):
-                            self._dataloader_params[k][a] = value
+            if set(v.keys()) != set(self._dataloader_params[k].keys()):
+                self._logw(f"Dataloader params for {k} differ. Not restoring")
+            else:
+                for a, b in v.items():
+                    if a != "collate_fn":
+                        value = saved_state["dataloader_params"][k][a]
+                        if isinstance(value, dict):
+                            for x, y in value.items():
+                                if isinstance(y, str) and not y.startswith("callable_"):
+                                    self._dataloader_params[k][a][x] = y
+                        else:
+                            if isinstance(value, str) and not value.startswith("callable_"):
+                                self._dataloader_params[k][a] = value
 
         # NOTE: restore trainer_params
         self._logd("Restoring trainer_params")
@@ -2085,12 +2071,12 @@ class Trainer:
 
     def _abort_current(self):
         self._current_aborted_event.set()
-        self._finish_if_paused_or_running(True)
+        self._finish_if_paused_or_running()
         self._aborted.append(self.current_state.split("_")[-1])
 
     def _abort_current_run_cb(self):
         self._current_aborted_event.set()
-        self._finish_if_paused_or_running(True, True)
+        self._finish_if_paused_or_running(True)
         self._aborted.append(self.current_state.split("_")[-1])
     # END: Flags
 

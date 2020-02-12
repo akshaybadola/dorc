@@ -47,13 +47,48 @@ class EpochTest(unittest.TestCase):
         time.sleep(.5)
         self.assertTrue(epoch_runner.running)
         self.assertTrue(epoch_runner.waiting)
-        self.assertTrue(epoch_runner.batch_vars.get(1, "loss"))
-        self.assertTrue(epoch_runner.batch_vars.get(1, "cpu_util"))
-        self.assertTrue(epoch_runner.batch_vars.get(1, "mem_util"))
-        self.assertTrue(epoch_runner.batch_vars.get(1, "time"))
-        self.assertTrue(epoch_runner.batch_vars.get(1, "batch_time"))
+        self.assertTrue(epoch_runner.batch_vars.get("train", 1, "loss"))
+        self.assertTrue(epoch_runner.batch_vars.get("train", 1, "cpu_util"))
+        self.assertTrue(epoch_runner.batch_vars.get("train", 1, "mem_util"))
+        self.assertTrue(epoch_runner.batch_vars.get("train", 1, "time"))
+        self.assertTrue(epoch_runner.batch_vars.get("train", 1, "batch_time"))
         if epoch_runner.device_mon.gpu_util is not None:
-            self.assertTrue(epoch_runner.batch_vars.get(1, "gpu_util"))
+            self.assertTrue(epoch_runner.batch_vars.get("train", 1, "gpu_util"))
+        self.assertEqual(len(epoch_runner.batch_vars[0]), 4)
+        self.trainer._current_aborted_event.set()
+        self.trainer._running_event.set()
+        time.sleep(.5)
+        self.assertFalse(epoch_runner.running)
+        self.assertFalse(epoch_runner.waiting)
+
+    def test_epoch_test(self):
+        def _debug():
+            print(epoch_runner.test_loop.running)
+            print(epoch_runner.test_loop.waiting)
+            print(epoch_runner.test_loop.finished)
+
+        def _batch_vars():
+            print([x for x in epoch_runner.batch_vars])
+
+        epoch_runner = self.trainer._epoch_runner
+        t = Thread(target=epoch_runner.run_test,
+                   args=[self.trainer.test_step_func, self.trainer.test_loader])
+        t.start()
+        self.trainer._running_event.set()
+        time.sleep(2)
+        self.assertTrue(epoch_runner.running)
+        self.assertFalse(epoch_runner.waiting)
+        self.trainer._running_event.clear()
+        time.sleep(.5)
+        self.assertTrue(epoch_runner.running)
+        self.assertTrue(epoch_runner.waiting)
+        self.assertTrue(epoch_runner.batch_vars.get("test", 1, "loss"))
+        self.assertTrue(epoch_runner.batch_vars.get("test", 1, "cpu_util"))
+        self.assertTrue(epoch_runner.batch_vars.get("test", 1, "mem_util"))
+        self.assertTrue(epoch_runner.batch_vars.get("test", 1, "time"))
+        self.assertTrue(epoch_runner.batch_vars.get("test", 1, "batch_time"))
+        if epoch_runner.device_mon.gpu_util is not None:
+            self.assertTrue(epoch_runner.batch_vars.get("test", 1, "gpu_util"))
         self.assertEqual(len(epoch_runner.batch_vars[0]), 4)
         self.trainer._current_aborted_event.set()
         self.trainer._running_event.set()

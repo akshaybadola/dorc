@@ -127,6 +127,7 @@ class DiscreteTask(Task):
         self._states = {"running", "finished"}
         self._queue = Queue()
         self.result = None
+        self.aborted = None
 
     def _check_p(self):
         while self._p.is_alive():
@@ -431,6 +432,10 @@ class NewEpoch:
                 "batch_nums": self.batch_num,
                 "batch_vars": self.batch_vars}
 
+    def toggle_waiting(self):
+        if hasattr(self._current_loop, "_toggle_waiting"):
+            self._current_loop._toggle_waiting()
+
     @property
     def post_batch_hooks(self):
         return {{k: v.keys()} for k, v in self._post_batch_hooks.items()}
@@ -507,6 +512,7 @@ class NewEpoch:
         def test_one_batch(batch):
             if get_raw:
                 raw, batch = batch[0], batch[1]
+            print("TEST ONE", test_step, type(batch))
             received = test_step(batch)
             if get_raw:
                 received["raw"] = raw

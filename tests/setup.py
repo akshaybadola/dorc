@@ -13,6 +13,8 @@ class Net(torch.nn.Module):
         self.fc2 = torch.nn.Linear(128, 10)
 
     def forward(self, x):
+        if len(x.shape) == 3:
+            x = x.unsqueeze(0)
         x = self.conv1(x)
         x = torch.nn.functional.relu(x)
         x = self.conv2(x)

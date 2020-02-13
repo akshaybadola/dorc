@@ -7,7 +7,7 @@ sys.path.append("../")
 from trainer.trainer import Trainer
 
 
-class TrainerTest(unittest.TestCase):
+class StateTest(unittest.TestCase):
     def setUp(self):
         """Setup a simple trainer with MNIST dataset."""
         self.config = config
@@ -17,18 +17,18 @@ class TrainerTest(unittest.TestCase):
     # def tearDown(self):
     #     self.trainer._abort_current()
 
-    def test_train_main_loop(self):
+    def test_main_loop(self):
         # Should have subtest for a set of transitions I guess. I can generate
         # predicates and combinatorial states according to that
         # This link has a good post about it
         # https://www.caktusgroup.com/blog/2017/05/29/subtests-are-best/
         # none -> running
         self.assertIsInstance(self.trainer.train_loader, torch.utils.data.DataLoader)
-        self.trainer._transition(self.trainer.current_state, "normal_running_train")
+        self.trainer._transition(self.trainer.current_state, "main_running_train")
         self.assertFalse(self.trainer.paused)
         time.sleep(2)
         self.assertTrue("main" in self.trainer._threads)
-        self.trainer._transition(self.trainer.current_state, "normal_paused_train")
+        self.trainer.pause()
         time.sleep(1)
         self.assertTrue(self.trainer.paused)
         self.assertTrue(self.trainer._epoch_runner.running)
@@ -61,47 +61,68 @@ class TrainerTest(unittest.TestCase):
         self.assertFalse(self.trainer.paused)
         self.trainer._abort_current()
 
-    # def test_adhoc_funcs(self):
-    #     # adhoc_eval and adhoc_test
-    #     self.trainer._start_if_not_running()
-    #     self.assertFalse(self.trainer.paused)
-    #     self.assertEqual(self.trainer.current_state, "normal_running_train")
-    #     time.sleep(2)
-    #     self.assertTrue(self.trainer._epoch_runner.running)
-    #     self.assertTrue("main" in self.trainer._threads)
-    #     self.trainer._abort_current()
+    def test_main_adhoc_back(self):
+        print(self.trainer._task_runners)
+        self.trainer._start_if_not_running()
+        time.sleep(.5)
+        self.assertFalse(self.trainer.paused)
+        self.assertEqual(self.trainer.current_state, "main_running_train")
+        print(self.trainer._task_runners)
+        time.sleep(1)
+        self.assertTrue(self.trainer._epoch_runner.running)
+        self.assertTrue("main" in self.trainer._threads)
+        self.trainer._user_funcs["test_func"] = lambda x: None
+        time.sleep(1)
+        self.trainer.adhoc_eval({"test": {"epoch": "current",
+                                          "num_or_fraction": 100,
+                                          "device": "cpu",
+                                          "data": "test",
+                                          "callback": "test_func"}})
+        time.sleep(1)
+        self.assertTrue("adhoc" in self.trainer._task_runners)
+        self.assertIsNotNone(self.trainer._task_runners["adhoc"])
+        # self.assertTrue(self.trainer._task_runners["adhoc"].batch_vars)
+        # time.sleep(.5)
+        ar = self.trainer._task_runners["adhoc"]
+        import ipdb; ipdb.set_trace()
+        self.assertFalse(self.trainer._task_runners["adhoc"].running)
+        self.trainer._abort_current_run_cb()
+        import ipdb; ipdb.set_trace()
 
-    def test_state_machine_transitions(self):
-        results = [False, True, False, True, False, True, True, True, False, True,
-                   False, True, False, False, True, False, True, True, True,
-                   True, True, True, True, False]
-        for i, x in enumerate([
-                ("normal_paused_none", "normal_running_none"),
-                ("normal_paused_none", "normal_paused_train"),
-                ("normal_paused_train", "normal_paused_train"),
-                ("normal_paused_train", "normal_running_train"),
-                ("normal_running_train", "normal_running_train"),
-                ("normal_running_train", "normal_paused_train"),
-                ("normal_paused_none", "normal_paused_train"),
-                ("normal_paused_none", "normal_running_train"),
-                ("normal_paused_train", "normal_paused_eval"),
-                ("normal_finished_train", "normal_paused_eval"),
-                ("normal_paused_train", "force_paused_adhoc"),
-                ("normal_paused_train", "force_running_adhoc"),
-                ("normal_running_train", "force_running_adhoc"),
-                ("normal_running_train", "force_running_adhoc"),
-                ("normal_paused_train", "force_running_adhoc"),
-                ("force_running_adhoc", "normal_paused_train"),
-                ("force_finished_adhoc", "normal_paused_train"),
-                ("normal_paused_train", "normal_finished_train"),
-                ("normal_paused_train", "force_finished_stop"),
-                ("force_finished_stop", "normal_running_train"),
-                ("normal_running_train", "force_paused_train"),
-                ("force_paused_train", "force_finished_stop"),
-                ("force_paused_train", "force_running_adhoc"),
-                ("normal_running_train", "normal_running_adhoc")]):
-            with self.subTest(i=str(x)):
-                self.assertEqual(self.trainer._sm.allowed_transition(*x, True), results[i])
+    def test_main_not_in_task_runner(self):
+        pass
+
+    # def test_illegal_states(self):
+    #     results = [False, True, False, True, False, True, True, True, False, True,
+    #                False, True, False, False, True, False, True, True, True,
+    #                True, True, True, True, False]
+    #     for i, x in enumerate([
+    #             ("normal_paused_none", "normal_running_none"),
+    #             ("normal_paused_none", "normal_paused_train"),
+    #             ("normal_paused_train", "normal_paused_train"),
+    #             ("normal_paused_train", "normal_running_train"),
+    #             ("normal_running_train", "normal_running_train"),
+    #             ("normal_running_train", "normal_paused_train"),
+    #             ("normal_paused_none", "normal_paused_train"),
+    #             ("normal_paused_none", "normal_running_train"),
+    #             ("normal_paused_train", "normal_paused_eval"),
+    #             ("normal_finished_train", "normal_paused_eval"),
+    #             ("normal_paused_train", "force_paused_adhoc"),
+    #             ("normal_paused_train", "force_running_adhoc"),
+    #             ("normal_running_train", "force_running_adhoc"),
+    #             ("normal_running_train", "force_running_adhoc"),
+    #             ("normal_paused_train", "force_running_adhoc"),
+    #             ("force_running_adhoc", "normal_paused_train"),
+    #             ("force_finished_adhoc", "normal_paused_train"),
+    #             ("normal_paused_train", "normal_finished_train"),
+    #             ("normal_paused_train", "force_finished_stop"),
+    #             ("force_finished_stop", "normal_running_train"),
+    #             ("normal_running_train", "force_paused_train"),
+    #             ("force_paused_train", "force_finished_stop"),
+    #             ("force_paused_train", "force_running_adhoc"),
+    #             ("normal_running_train", "normal_running_adhoc")]):
+    #         with self.subTest(i=str(x)):
+    #             self.assertEqual(self.trainer._sm.allowed_transition(*x, True), results[i])
 
 
 if __name__ == '__main__':

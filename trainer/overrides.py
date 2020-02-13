@@ -14,7 +14,23 @@ def default_collate_fn(batch):
 def default_tensorify(batch):
     """Converts each item of batch to tensor and stacks them"""
     batch = default_collate_fn(batch)
-    return [torch.stack(torch.Tensor(x)) for x in batch]
+    new_batch = []
+    if len(batch[0]) == 1:
+        if isinstance(batch[0], torch.Tensor):
+            new_batch.append(batch[0])
+        elif isinstance(batch[0][0], torch.Tensor):
+            new_batch.append(batch[0][0])
+        elif isinstance(batch[0], list):
+            new_batch.append(torch.tensor(batch[0]))
+        if isinstance(batch[1], list):
+            new_batch.append(torch.tensor(batch[1]))
+        elif isinstance(batch[1], torch.Tensor):
+            new_batch.append(batch[1])
+        elif isinstance(batch[1], int):
+            new_batch.append(torch.tensor([batch[1]]))
+        return new_batch
+    else:
+        return [torch.stack(torch.tensor(x)) for x in batch]
 
 
 class MyDataLoader:

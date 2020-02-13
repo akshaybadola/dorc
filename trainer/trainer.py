@@ -19,8 +19,8 @@ from .device import init_nvml, gpu_util, cpu_info, memory_info, DeviceMonitor
 from .util import get_backup_num, gen_file_and_stream_logger, deprecated
 from .epoch import Epoch
 from .mods import Modules as Modules
-from .state_machine import StateMachine
-from .overrides import MyDataLoader
+# from .state_machine import StateMachine
+from .overrides import MyDataLoader, default_tensorify
 from .components import Models
 from .functions import _log_metrics_for_step
 from ._log import Log
@@ -373,9 +373,19 @@ class Trainer:
                                       "adhoc": {"val", "test", "none"},
                                       "user": {"func", "none"}}
         else:
-            self._transition_steps = {"main": set(steps).union("none"),
+            self._transition_steps = {"main": set(steps).union({"none"}),
                                       "adhoc": {"val", "test", "none"},
                                       "user": {"func", "none"}}
+        self._loop_states = {"main": {"paused", "running", "finished"},
+                             "adhoc": {"paused", "running", "finished"},
+                             "user": {"paused", "finished"}}
+        self._task_args = {"main": [],
+                           "adhoc": [],
+                           "user": []}
+        self._task_kargs = {"main": [],
+                            "adhoc": [],
+                            "user": []}
+        self._current_state = "main_paused_none"
 
     # TODO: For each such variable i.e., static, property etc. add a decorator
     #       or a function such that they're added to that list e.g.,
@@ -408,8 +418,10 @@ class Trainer:
 
     def _init_modules(self):
         self._mods = Modules("trainer_modules", self._logd, self._loge, self._logi, self._logw)
-        self._sm = StateMachine(3, self._transition_steps, logd=self._logd,
-                                loge=self._loge, logi=self._logi, logw=self._logw)
+        # NOTE: Data is always available
+        self._user_func_env_params = {"train_loader": self.train_loader,
+                                      "val_loader": self.val_loader,
+                                      "test_loader": self.test_loader}
 
     def _init_nvml(self):
         """Initializes the Nvidia monitoring library. It's called by _init_state_vars so
@@ -565,6 +577,39 @@ class Trainer:
             elif k == "test":
                 self._test_step_func = self._update_functions["test"]
 
+    def _init_epoch_runner(self):
+        """The task_runners and threads are a triple
+        As of now there are three kinds of task runners There can be:
+          1. epoch_runner
+          2. adhoc_runner
+          3. user_func_runner
+
+        Corresponding to each task runner there are threads and with the same
+        names and the references are further stored in `Trainer._task_thread_keys`,
+        `_task_callbacks`
+
+        :returns: None
+        :rtype: None
+
+        """
+        device_monitor, signals = self._task_runner_helper("main")
+        self._logi("Initializing Epoch Runner")
+        self._epoch_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
+                                   signals, device_monitor, self.extra_report,
+                                   **{"logd": self._logd, "loge": self._loge,
+                                      "logi": self._logi, "logw": self._logw})
+        self._epoch_runner.name = "epoch_runner"
+        self._task_runners = {"main": self._epoch_runner,
+                              "adhoc": None,
+                              "user": None}
+        self._task_thread_keys = {"main": "main",
+                                  "adhoc": "adhoc",
+                                  "user": "user"}
+        # FIXME: For val and test maybe update in separate variables
+        self._task_callbacks = {"main": self._run_post_epoch_hooks,
+                                 "adhoc": None,
+                                 "user": None}
+
     def _task_runner_helper(self, which):
         device_monitor = DeviceMonitor(self._device_handles)
         signals = SimpleNamespace()
@@ -579,42 +624,6 @@ class Trainer:
             signals.aborted = lambda: self._userfunc_aborted_event.is_set()
         return device_monitor, signals
 
-    def _init_epoch_runner(self):
-        """The task_runners and threads are a triple
-        As of now there are three kinds of task runners There can be:
-          1. epoch_runner
-          2. adhoc_runner
-          3. user_func_runner
-
-        Corresponding to each task runner there are threads and with the same
-        names and the references are further stored in `Trainer._task_thread_keys`,
-        `_tasks_callbacks`
-
-        :returns: None
-        :rtype: None
-
-        """
-        device_monitor, signals = self._task_runner_helper("main")
-        self._logi("Initializing Epoch Runner")
-        self._epoch_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
-                                   signals, device_monitor, self.extra_report,
-                                   **{"logd": self._logd, "loge": self._loge,
-                                      "logi": self._logi, "logw": self._logw})
-        self._epoch_runner.name = "epoch_runner"
-        self._task_runners = {"main": self._epoch_runner,
-                              "train": self._epoch_runner,
-                              "adhoc": None,
-                              "user": None}
-        self._task_thread_keys = {"main": "main",
-                                  "train": "main",
-                                  "adhoc": "adhoc",
-                                  "user": "user"}
-        # FIXME: For val and test maybe update in separate variables
-        self._tasks_callbacks = {"main": self._run_post_epoch_hooks,
-                                 "train": self._run_post_epoch_hooks,
-                                 "adhoc": None,
-                                 "user": None}
-
     def _task_runner_initialize(self, name, metrics, extra_metrics, callback):
         """Initializes a task_runner. The quintessential task runner is the epoch
         runner. Task runner coordinates with the trainer to ensure that nothing
@@ -625,21 +634,27 @@ class Trainer:
         initialized.
 
         :param name: Name :class:`str` of the task runner.
-        :param metrics: 
-        :param extra_metrics: 
-        :param callback: 
-        :returns: 
-        :rtype:
+        :param metrics: :class:`dict` of metrics to be given to the task runner
+        :param extra_metrics: :class:`dict` of extra metrics to be given to the task runner
+        :param callback: :class:`function` callback to be called when the execution finishes
+        :returns: None
+        :rtype: None
 
         """
-        assert name in self._task_runners
-        device_monitor, signals = self._task_runner_helper(name)
-        self._task_runners[name] = Epoch({"metrics": metrics,
-                                          "extra_metrics": extra_metrics},
-                                         signals, device_monitor, self.extra_report)
-        self._task_runners[name].reset()
-        self._task_runners[name].logger = self.logger
-        self._tasks_callbacks[name] = callback
+        if name not in self._task_runners:
+            return False, self._loge(f"Unknown task runner {name}")
+        else:
+            device_monitor, signals = self._task_runner_helper(name)
+            kwargs = {"logd": self._logd, "loge": self._loge,
+                      "logi": self._logi, "logw": self._logw}
+            self._task_runners[name] = Epoch({"metrics": metrics,
+                                              "extra_metrics": extra_metrics},
+                                             signals, device_monitor, self.extra_report,
+                                             **kwargs)
+            self._task_runners[name].reset()
+            self._task_runners[name].logger = self.logger
+            self._task_callbacks[name] = callback
+            return True
     # END: Init Funcs
 
     # START: Internal Controls
@@ -658,9 +673,9 @@ class Trainer:
             self._transition_flags["run_cb"] = True
         loop, run, step = self.current_state.split("_")
         if run == "running":
-            self._transition(self.current_state, "_".join([loop, "paused", step]))
+            status, message = self._transition(self.current_state, "_".join([loop, "paused", step]))
         # print("done with paused", self.current_state)
-        self._transition(self.current_state, "_".join([loop, "finished", step]))
+        status, message = self._transition(self.current_state, "_".join([loop, "finished", step]))
 
     def _pause_if_running(self):
         """Should not be called from `self._transition`
@@ -671,7 +686,7 @@ class Trainer:
         """
         loop, run, step = self.current_state.split("_")
         if run == "running":
-            self._transition(self.current_state, "_".join([loop, "paused", step]))
+            status, message = self._transition(self.current_state, "_".join([loop, "paused", step]))
 
     def _start_if_not_running(self):
         """Should not be called from `self._transition`
@@ -686,7 +701,7 @@ class Trainer:
         else:
             step = "train"      # default
         if run == "paused":
-            self._transition(self.current_state, "_".join([loop, "running", step]))
+            status, message = self._transition(self.current_state, "_".join([loop, "running", step]))
 
     def _run_if_paused(self):
         """Should not be called from `self._transition`
@@ -697,11 +712,11 @@ class Trainer:
         """
         loop, run, step = self.current_state.split("_")
         if run == "paused":
-            self._transition(self.current_state, "_".join([loop, "running", step]))
+            status, message = self._transition(self.current_state, "_".join([loop, "running", step]))
 
     def _run_new_if_finished(self):
         loop, run, step = self.current_state.split("_")
-        self._transition(self.current_state, "_".join([loop, "running", step]))
+        status, message = self._transition(self.current_state, "_".join([loop, "running", step]))
         # if run == "finished":
         #     if _force:
         #         self._transition(self.current_state, "_".join(["force", "running", step]))
@@ -711,45 +726,77 @@ class Trainer:
 
     # START: State Machine Helpers
     #        Helper functions to enforce state machine commands
-    def _ensure_paused(self, task):
+    def _ensure_thread(self, loop, target, args=None, kwargs=None):
+        if loop not in self._threads or not self._threads[loop].is_alive():
+            self._logd(f"Creating thread for {loop}")
+            if args is not None and kwargs is not None:
+                self._threads[loop] = Thread(target=target, args=args, kwargs=kwargs)
+            elif args is None and kwargs is not None:
+                self._threads[loop] = Thread(target=target, kwargs=kwargs)
+            elif args is not None and kwargs is None:
+                self._threads[loop] = Thread(target=target, args=args)
+            else:
+                self._threads[loop] = Thread(target=target)
+            self._threads[loop].start()
+
+    def _ensure_paused(self, loop, step):
         "Should not be called from anywhere but `self._transition`"
-        self._logd(f"Calling ensure paused with {task}")
-        if task in {"main", "train"}:
+        self._logd(f"Calling ensure paused with {loop}")
+        runner = self._task_runners.get(loop)
+        if loop == "main":
             if not self.paused:
                 self._running_event.clear()  # not running
-        elif task == "adhoc":
-            # CHECK: Is paused supported? If not then go back or wait for abort
-            # CHECK: How to force abort?
+        elif loop == "adhoc":
             if not self.adhoc_paused:
                 self._adhoc_running_event.clear()
-        elif task == "user":
-            if not self.userfunc_paused:
+        elif loop == "user":
+            if hasattr(runner, "paused") and not self.userfunc_paused:
                 self._userfunc_running_event.clear()
-        runner = self._task_runners.get(task)  # say epoch
+            else:
+                self._logd(f"User function cannot be paused")
         if runner is not None and runner.running:
-            j = 0
-            while not runner.waiting and j < 5:
+            # j = 0
+            # while not runner.waiting and j < 5:
+            #     time.sleep(1)
+            #     self._logd(f"Waiting for {loop} runner")
+            #     j += 1
+            while runner.waiting:
                 time.sleep(1)
-                self._logd(f"Waiting for {task} runner")
-                j += 1
+                self._logd(f"{loop} runner should not be waiting")
 
-    def _ensure_unpaused(self, task):
+    def _ensure_unpaused(self, loop):
         "Should not be called from anywhere but `self._transition`"
-        if self.paused:
-            self._running_event.set()
-        runner = self._task_runners.get(task)  # say epoch
+        self._logd(f"Loop is {loop}")
+        runner = self._task_runners.get(loop)  # say epoch
+        if loop == "main":
+            if self.paused:
+                self._running_event.set()  # not running
+        elif loop == "adhoc":
+            if self.adhoc_paused:
+                self._adhoc_running_event.set()
+        elif loop == "user":
+            if hasattr(runner, "paused") and self.userfunc_paused:
+                self._userfunc_running_event.set()
+            else:
+                self._logd(f"User function cannot be unpaused")
         if runner is not None and runner.waiting:
-            self._logd(f"{task} runner is waiting. Should not be waiting")
+            self._logd(f"{loop} runner is waiting. Should not be waiting")
 
-    def _ensure_ready(self, task):
-        "Should not be called from anywhere but `self._transition`"
+    def _ensure_ready(self, loop, step):
+        "Only toggles runner's waiting. Should not be called from anywhere but `self._transition`"
+        runner = self._task_runners.get(loop)  # say epoch
         print("calling ensure ready")
-        if self.paused:
-            self._logd(f"No need to ensure ready while paused for {task}")
-        else:
-            runner = self._task_runners.get(task)  # say epoch
-            if runner is not None and runner.waiting:
-                runner.toggle_waiting()
+        if loop == "main":
+            if self.paused:
+                self._logd(f"No need to ensure ready while paused for {loop}")
+        elif loop == "adhoc":
+            if self.adhoc_paused:
+                self._logd(f"No need to ensure ready while paused for {loop}")
+        elif loop == "user":
+            if hasattr(runner, "paused") and self.userfunc_paused:
+                self._logd(f"No need to ensure ready while paused for {loop}")
+        if runner is not None and runner.waiting:
+            runner.toggle_waiting()
 
     # CHECK: If finished or reset is called, then what should happen to the
     #        thread?  Does the epoch runner die?
@@ -757,7 +804,7 @@ class Trainer:
     #        Actually, since the epoch_runner etc. are reset after each epoch
     #        anyway, so it doesn't really matter. They can be killed and
     #        respawned if they get stuck.
-    def _ensure_finished(self, task, timeout=5, run_cb=False):
+    def _ensure_finished(self, loop, step, timeout=5, run_cb=False):
         """`self._ensure_paused` should be called before calling _ensure_finished
         :meth:`Epoch.finish` doesn't actually reset the metrics and variables
         stored in the batch.
@@ -773,12 +820,11 @@ class Trainer:
 
         """
         # This is like a guard
-        self._logd("Calling _ensure_finished")
+        self._logd(f"Calling _ensure_finished for {loop}, {step}")
+        runner = self._task_runners.get(loop)
+        callback = self._task_callbacks.get(loop)
         if not self._current_aborted:
             self._toggle_current_aborted()
-        runner = self._task_runners.get(task)
-        callback = self._tasks_callbacks.get(task)
-        print("runner is", runner)
         if runner is not None:
             if self.paused:
                 print("was paused")
@@ -793,19 +839,16 @@ class Trainer:
                 callback()
             else:
                 self._logd("not calling callback")
-        if self._threads[self._task_thread_keys[task]].is_alive():
-            self._loge(f"Could not kill task {task}")
+        if self._threads[loop].is_alive():
+            self._threads[loop].join(2)
+            if self._threads[loop].is_alive():
+                self._loge(f"Could not kill task {loop}")
         else:
-            self._logd(f"Finished task {task}")
+            self._logd(f"Finished task {loop}")
         self._toggle_current_aborted()
     # END: State Machine Helpers
 
     # START: State Machine
-    def _allowed_transition(self, a, b):
-        # NOTE: The states in the SM are for the main loop. For alternate loops
-        #       it should be simpler.
-        return self._sm.allowed_transition(a, b)
-
     def _transition(self, _from, _to):
         """Transitions to the next state from the given state.
 
@@ -813,7 +856,8 @@ class Trainer:
         `loop_run_step`, where:
                 `loop` can be in {"main", "adhoc", "user"}
                 `run` can be in {"running", "paused", "finished"}
-                `step` can be any of the `self._trainer_params["training_steps"]` + "none"
+                `step` for the main loop can be any of the
+                    `self._trainer_params["training_steps"]` + "none"
                     or `{"train", "val", "test", "none"}`
 
         For a :class:`Trainer` instance the regular flow is `train_step ->
@@ -845,107 +889,161 @@ class Trainer:
         :rtype: None
 
         """
-        if _from != self.current_state:
-            return False, self._loge(f"from state != current state: " +
-                                     f"{_from} != {self.current_state}")
-        # NOTE: These were two hackey predicates to allow matching between
-        #       "train" and "stop"
-        #
-        # if _from == "force_finished_train":
-        #     if not self._allowed_transition("force_finished_stop", _to):
-        #         return False, self._loge(f"State transition {_from} -> {_to} is not allowed")
-        # if _to == "force_finished_train":
-        #     if not self._allowed_transition(_from, "force_finished_stop"):
-        #         return False, self._loge(f"State transition {_from} -> {_to} is not allowed")
-        #
-        if not self._allowed_transition(_from, _to):
-            return False, self._loge(f"State transition {_from} -> {_to} is not allowed")
-        self._logd(f"Trying to transition from {_from} to {_to}")
-
         a_loop, a_run, a_step = _from.split("_")
         b_loop, b_run, b_step = _to.split("_")
 
-        # FIXME: The design needs to split here. The fact that I have to modify
-        #        this component means that there's something wrong, but how do I
-        #        design a component like this even?
+        def legal_state(a, b, c):
+            return (a in {"main", "adhoc", "user"} and b in self._loop_states[a]
+                    and c in self._transition_steps[a])
 
-        # NOTE: Pre transition checks only for main loop
-        if a_loop == "main" == b_loop:
-            self._sm.current_state = _to
-        elif a_loop == "normal" and b_loop == "force":
-            # will have to ensure first is paused?
-            self._ensure_paused(a_step)
-            self._prev_normal_state = self.current_state
-            self._sm.current_state = _to
-        elif a_loop == "force" and b_loop == "normal" and not a_run == "finished":
-            assert _to == self._prev_normal_state
-            self._sm.current_state = _to
-        elif a_loop == "force" and b_loop == "normal" and a_run == "finished":
-            self._sm.current_state = _to
-        elif a_loop == "force" == b_loop:
-            self._sm.current_state = _to
+        if _from != self.current_state:
+            return False, self._loge(f"from state != current state: " +
+                                     f"{_from} != {self.current_state}")
+        if not legal_state(b_loop, b_run, b_step):
+            return False, self._loge(f"Illegal states {_from}")
+        if not legal_state(b_loop, b_run, b_step):
+            return False, self._loge(f"Illegal states {_to}")
+        self._logd(f"Trying to transition from {_from} to {_to}")
 
+        def main_same_step():
+            return (a_loop == "main" == b_loop
+                    and a_step == b_step  # in the same step
+                    and ((a_run != b_run and a_run in {"running", "paused"}
+                          and b_run in {"running", "paused"})  # running <-> paused
+                         # only paused -> finished
+                         or (a_run == "paused" and b_run == "finished")))
+
+        def main_different_step():
+            return (a_loop == "main" == b_loop
+                    and ((a_step != b_step
+                          and a_run == "finished"  # finished -> {running, paused}
+                          and b_run in {"running", "paused"})
+                         or (a_step == "none" and a_run == "paused"  # if none -> any
+                             and b_run in {"running", "paused"})))
+
+        def new_main():
+            return (a_loop == "main" == b_loop
+                    and ((a_run == "finished"  # finished -> {running, paused}
+                          and b_run in {"running", "paused"})
+                         or (a_step == "none" and a_run == "paused"  # if none -> any
+                             and b_run in {"running", "paused"})))
+
+        def main_to_other():
+            return (a_loop == "main" != b_loop  # main -> {adhoc, user}
+                    and ((a_run in {"paused", "running", "finished"}
+                          and b_run in {"paused", "running"})))  # paused <-> running
+
+        def other_to_main():
+            return (a_loop in {"adhoc", "user"} and b_loop == "main"
+                    and a_run == "finished" and b_run in {"paused", "running"})
+
+        def other_to_same():
+            return (a_loop in {"adhoc", "user"} and a_loop == b_loop
+                    and a_step == b_step
+                    and a_run in {"paused", "running"} and b_run in {"paused", "running"})
+
+        def other_to_different():
+            return (a_loop in {"adhoc", "user"} and b_loop in {"adhoc", "user"}
+                    and a_run == "finished" and b_run in {"paused", "running"})
+
+        # CHECK: To force or not to force. That is the question
+        if main_same_step():
+            self._ensure_thread(a_loop, self.train)
+        elif main_different_step():
+            self._ensure_thread(b_loop, self.train)
+        elif new_main():
+            self._ensure_thread(b_loop, self.train)
+        elif main_to_other():
+            # adhoc for adhoc, else user
+            if b_loop == "adhoc":
+                target = getattr(self._task_runners[b_loop], "run_" + b_step)
+            elif b_loop == "user":
+                target = getattr(self._task_runners[b_loop], "run_task")
+            args = self._task_args[b_loop]
+            self._ensure_thread(b_loop, target, args)
+            self._prev_paused_state = self.current_state
+        elif other_to_main():
+            if _to != self._prev_paused_state:
+                return False, self._loge(f"to state {_to} has to be previous paused state" +
+                                         f"{self._prev_paused_state}")
+            self._ensure_thread(b_loop, self.train)
+        elif other_to_same():
+            pass
+        elif other_to_different():
+            self._ensure_thread(b_loop, target)
+        else:
+            return False, self._loge(f"Not allowed transition {_from} -> {_to}")
+
+        if a_run == "running":
+            self._ensure_paused(a_loop, a_step)
+        self._current_state = _to
+        if b_run == {"paused"}:
+            self._ensure_paused(b_loop, b_step)
+        if b_run == "running":
+            self._ensure_ready(b_loop, b_step)
+            self._ensure_unpaused(b_loop)
+        if b_run == "finished":
+            self._ensure_finished(b_loop, b_step, **self._transition_flags)
+            self._transition_flags = {}
+            self._threads["main"].join()
+        # TODO: Other Scenarios
+        #       1. main thread died?
+        #       2. main thread aborted and started main thread with val?
+        #       3. alt thread create?
+        #       4. alt thread reset?
         # NOTE: Actual state transition
         # NOTE: The Task runner should exist already if not, then some error
         #        has occured and previous state should be resumed.
-        if b_step in {"train", "val", "test"} and b_loop == "normal":
-            # NOTE: Check only for main
-            if "main" in self._task_runners:
-                # epoch_runner exists but "train" isn't running
-                if not self._task_runners["main"].running:
-                    if "main" not in self._threads or not self._threads["main"].is_alive():
-                        print("starting main")
-                        self._threads["main"] = Thread(target=self.train)
-                        self._threads["main"].start()
-            else:
-                # TODO: Throw massive error or go back to force_paused_train, or
-                #       force_paused_none I suppose force_paused_none indicates
-                #       that some massive error indeed occurred and we're stuck here.
-                # NOTE: For now assume that it doesn't die
-                pass
-        # NOTE: b_loop == normal for this case shouldn't be allowed. It could
-        #       be allowed but that would mean launching it on a separate device
-        #       etc. with separate models so that perhaps training is also
-        #       allowed, so that it doesn't really interfere with the main thread.
-        #       That is not really supported right now.
-        elif b_step == "adhoc" and b_loop == "force":
-            # TODO: Scenarios
-            #       1. main thread died?
-            #       2. main thread aborted and started main thread with val?
-            #       3. alt thread create?
-            #       4. alt thread reset?
-            # CHECK: Pause or run on CPU or something?
-            if "adhoc" in self._task_runners:
-                if not self._task_runners["adhoc"].running:
-                    if "adhoc" not in self._threads or not self._threads["adhoc"].is_alive():
-                        self._threads["adhoc"] = Thread(target=self._adhoc_func,
-                                                        args=[self._adhoc_func_params])
-                        self._threads["adhoc"].start()
-            else:
-                # Resume previous state
-                pass
-        elif b_step == "user":
-            # CHECK: What can a user func do?
-            if "user" in self._task_runners:
-                if not self._task_runners["user"].running:
-                    if "user" not in self._threads or not self._threads["main"].is_alive():
-                        self._threads["user"] = Thread(target=self.train)
-                        self._threads["user"].start()
-            else:
-                # Resume previous state
-                pass
- 
-        # NOTE: Post transition checks
-        if b_run == "running":
-            self._ensure_unpaused(b_step)
-        elif b_run == "paused":
-            self._ensure_paused(b_step)
-        elif b_run == "finished":
-            self._ensure_finished(b_step, **self._transition_flags)
-            self._transition_flags = {}
-            self._threads["main"].join()
-        if b_run in {"paused", "running"}:
-            self._ensure_ready(b_step)
+        # if a_loop == b_loop == "main" and b_step in {"train", "val", "test"}:
+        #     if "main" in self._task_runners:
+        #         if not self._task_runners["main"].running:
+        #             if "main" not in self._threads or not self._threads["main"].is_alive():
+        #                 print("starting main")
+        #                 self._threads["main"] = Thread(target=self.train)
+        #                 self._threads["main"].start()
+        #     else:
+        #         # TODO: Throw massive error or go back to force_paused_train, or
+        #         #       force_paused_none I suppose force_paused_none indicates
+        #         #       that some massive error indeed occurred and we're stuck here.
+        #         # NOTE: For now assume that it doesn't die
+        #         pass
+        # elif a_loop == "main" and b_loop in {"adhoc", "user"}:
+        #     # CHECK: Pause or run on CPU or something?
+        #     if "adhoc" in self._task_runners:
+        #         if not self._task_runners["adhoc"].running:
+        #             if "adhoc" not in self._threads or not self._threads["adhoc"].is_alive():
+        #                 self._threads["adhoc"] = Thread(target=self._adhoc_func,
+        #                                                 args=[self._adhoc_func_params])
+        #                 self._threads["adhoc"].start()
+        #     else:
+        #         # Resume previous state
+        #         pass
+        # elif a_loop in {"adhoc", "user"} and b_loop == "main":
+        #     # CHECK: What can a user func do?
+        #     if "user" in self._task_runners:
+        #         if not self._task_runners["user"].running:
+        #             if "user" not in self._threads or not self._threads["main"].is_alive():
+        #                 self._threads["user"] = Thread(target=self.train)
+        #                 self._threads["user"].start()
+        #     else:
+        #         # Resume previous state
+        #         pass
+        # elif a_loop in {"adhoc", "user"} and b_loop in {"adhoc", "user"} and a_loop != b_loop:
+        #     pass
+        # elif a_loop in {"adhoc", "user"} and b_loop in {"adhoc", "user"} and a_loop == b_loop:
+        #     pass
+
+        # # NOTE: Post transition checks
+        # if b_run == "running":
+        #     self._ensure_unpaused(b_step)
+        # elif b_run == "paused":
+        #     self._ensure_paused(b_step)
+        # elif b_run == "finished":
+        #     self._ensure_finished(b_step, **self._transition_flags)
+        #     self._transition_flags = {}
+        #     self._threads["main"].join()
+        # if b_run in {"paused", "running"}:
+        #     self._ensure_ready(b_step)
         return True, self._logd(f"Transitioned from {_from} to {_to}")
     # END: State Machine
 
@@ -1183,6 +1281,11 @@ class Trainer:
                                      " {params['num_or_fraction']}")
         elif params["device"] not in {"gpu", "cpu"}:
             return False, self._loge(f"Incorrect device given {params['device']}")
+        elif params["data"] not in {"train", "val", "test"}:
+            return False, self._loge(f"Wrong data given {params['data']}")
+        elif params["data"] in {"train", "val", "test"} and not\
+             getattr(self, params["data"] + "_loader"):
+            return False, self._loge(f"Given dataset not available given {params['data']}")
         else:
             # NOTE: All this should be rewritten with guards
 
@@ -1191,7 +1294,7 @@ class Trainer:
             # NOTE: New thread should only be started from _transition
             self._adhoc_func = self.call_adhoc_eval_on_data
             self._adhoc_func_params = params
-            self._transition(self.current_state, "force_running_adhoc")
+            self.call_adhoc_eval_on_data(params)
             # self.pause()
             # while not self.paused:
             #     time.sleep(10)
@@ -1226,20 +1329,47 @@ class Trainer:
         _proxy_dataset = ProxyDataset(step_loader.dataset, indices)
         temp_params = self._dataloader_params[step].copy()
         temp_params.update({"batch_size": 1})  # stick to 1 right now
+
         # NOTE: MyDataLoader is to solve the problem of collation in data. So
         #       that there's a uniform interface to data. However there seem to
         #       be some problems.
-        if hasattr(step_loader.dataset, "_get_raw"):
-            _proxy_dataset._get_raw = lambda x: step_loader.dataset._get_raw(
-                _proxy_dataset._indices[x])
-            temp_loader = MyDataLoader(_proxy_dataset, return_raw=True,
-                                       **temp_params)
-            self._logi(f"{step} dataset has \"_get_raw\"" +
-                       "Drawing samples from temp data is available!")
-        else:
-            temp_loader = MyDataLoader(_proxy_dataset, **temp_params)
-            self._logw(f"{step} dataset doesn't define \"_get_raw\"" +
-                       "Drawing samples from temp data will not be available.")
+        def get_temp_loader(tensorify=False):
+            if hasattr(step_loader.dataset, "_get_raw"):
+                _proxy_dataset._get_raw = lambda x: step_loader.dataset._get_raw(
+                    _proxy_dataset._indices[x])
+                if tensorify:
+                    temp_params["collate_fn"] = default_tensorify
+                    temp_loader = MyDataLoader(_proxy_dataset, return_raw=True,
+                                               **temp_params)
+                else:
+                    temp_loader = MyDataLoader(_proxy_dataset, return_raw=True,
+                                               **temp_params)
+                self._logi(f"{step} dataset has \"_get_raw\"" +
+                           " Drawing samples from temp data is available!")
+            else:
+                if tensorify:
+                    temp_params["collate_fn"] = default_tensorify
+                    temp_loader = MyDataLoader(_proxy_dataset, return_raw=False, **temp_params)
+                else:
+                    temp_loader = MyDataLoader(_proxy_dataset, return_raw=False, **temp_params)
+                self._logw(f"{step} dataset doesn't define \"_get_raw\"" +
+                           " Drawing samples from temp data will not be available.")
+            return temp_loader
+        temp_loader = get_temp_loader()
+        x = step_loader.__iter__().__next__()
+        y = temp_loader.__iter__().__next__()
+        tensorify = False
+        if not (isinstance(x[0], type(y[0])) and isinstance(x[1], type(y[1]))):
+            print("CHECKING with tensorify", type(x[0]), type(x[1]), type(y[0]), type(y[1]))
+            temp_loader = get_temp_loader(True)
+            tensorify = True
+            y = temp_loader.__iter__().__next__()
+            print("Y", y)
+        if not (isinstance(x[0], type(y[0])) and isinstance(x[1], type(y[1]))):
+            print("TYPES", type(x[0]), type(y[0]), type(x[1]), type(y[1]))
+            print("NOPE returning")
+            return False, f"Dataloader error"
+        temp_loader = get_temp_loader(tensorify)
         if step == "train":
             raise NotImplementedError
             models = {}
@@ -1267,46 +1397,26 @@ class Trainer:
         step_func = partial(function, temp_models, self.criteria)
         # CHECK: Should any of this be done manually?
         #        Shouldn't I leave all this up to user?
-        metrics = self._trainer_params["metrics"]
+        metrics = [*self._metrics[step].keys()]
         if hasattr(step_loader.dataset, "_get_raw"):
             metrics.append("raw")
         metrics.append("predictions")
         metrics.append("labels")
 
         callback = self._user_funcs[params["callback"]]
+        # NOTE: The callback should be called when the function finishes
         self._task_runner_initialize("adhoc", {step: metrics}, {}, callback)
-        self._logd(f"starting temp_runner for {step} step")
-        # TODO: It should be temp_runner.run_temp instead of run_ + step
-        # TODO: Threads should only be handled by the transition function
         if hasattr(temp_loader.dataset, "_get_raw"):
-            t = Thread(target=getattr(temp_runner, "run_" + step),
-                       args=[step_func, temp_loader, True])
+            self._task_args["adhoc"] = [step_func, temp_loader, True]
         else:
-            t = Thread(target=getattr(temp_runner, "run_" + step),
-                       args=[step_func, temp_loader])
-        # report function only takes in targets and predictions
-        t.start()
-        Thread(target=self._check_adhoc_run).start()
+            self._task_args["adhoc"] = [step_func, temp_loader]
+        self._transition(self.current_state, "adhoc_running_" + step)
 
-    def _check_adhoc_run(self):
-        while self._temp_runner.running:
-            time.sleep(1)
-        self._flag_adhoc_func_running = False
-        self.resume()
-
-    # NOTE: Actually report_function should be user defined and should be
-    #       uploaded as a python module so that along with the adhoc_func, it
-    #       can be processed and reported according to how the _get_raw is
-    #       implemented and how adhoc_function actually operates.
     @POST
     @extras
-    @Exposes("ix_to_word", "batch_vars")
     def report_adhoc_run(self, data):
-        # TODO: These generic checks should be in the POST or GET pre_call
-        #+FROM_HERE
-        # ix_to_word may be used by user_func later
-        ix_to_word = self.train_loader.loader._ix_to_word
-        batch_vars = self._temp_runner.batch_vars
+        runner = self._task_runners["adhoc"]
+        batch_vars = runner.batch_vars
         if data is None:
             return False, self._loge("Called with null data.")
         elif "report_function" not in data:
@@ -1316,39 +1426,30 @@ class Trainer:
             return False, self._loge(f"Unknown report function {report_function}.")
         else:
             report_function = self._user_funcs[data["report_function"]]
-        # NOTE: Should I just call the report func all the time? and it should
-        #       be the report func's responsibility to check the data and
-        #       respond? Make the report func a generic class?  Although the
-        #       whole point was to avoid boilerplate.
-        #       - One way could be to wrap the function in a class and replace the
-        #         call method with the function. But then the function will never
-        #         access "self" and in any case has no idea what the instance may
-        #         have as its remote and opaque.
-        #       - And of course, the whole point of "Exposes" is to make sure that
-        #         the function's attributes are declared alongside the function to
-        #         enhance readability. I can declare it somewhere in the class but...
-        #       - I can make a self._exposes attribute which contains the func_name
-        #         list
-
-        # TODO: "check" would be better.  In fact these checks should be done
-        #       before the func is called
-        if not all(x in self.report_adhoc_run.exposes
+        if not all(x in self._user_func_env_params
                    for x in inspect.signature(report_function).parameters):
-            return False, f"Given function {data['report_function']}" +\
-                " is not compatible with report_adhoc_run"
-        #+TO_HERE
-        if not hasattr(self._temp_runner, "running"):
-            return False, self._logd("Adhoc function was never initialized")
-        elif self._temp_runner.running:
-            return True, self._logd("Adhoc function is still running")
+            return False, self._loge(f"Some parameters required to run function" +
+                                     f" {data['report_function']} are not available")
+        if not hasattr(runner, "batch_vars"):
+            return False, self._logd("Adhoc runner was never initialized")
+        elif runner.running:
+            return True, self._logd("Adhoc runner is still running")
         else:
-            param_names = list(inspect.signature(report_function).parameters.keys())
-            params = {}
-            # CHECK: Here. Can this be changed?
-            for x in param_names:
-                params[x] = locals()[x]
-            output = report_function(**params)
-            return True, {"success": output}
+            self._user_func_env(report_function, batch_vars=batch_vars)
+
+    def _user_func_env(self, func, **kwargs):
+        # TODO: check task completion
+        param_names = list(inspect.signature(func).parameters.keys())
+        params = {}
+        # CHECK: Here. Can this be changed?
+        for x in param_names:
+            if x in self._user_func_env_params:
+                params[x] = self._user_func_env_params[x]
+            elif x in kwargs:
+                params[x] = kwargs[x]
+        output = func(**params)
+        return True, {"success": output}
+
     # END: Extras
 
     # START: Helpers
@@ -1426,7 +1527,7 @@ class Trainer:
                     probs, indices = torch.topk(torch.nn.functional.softmax(batch_preds, 1), 5)
                     probs = probs.cpu().numpy()
                     indices = indices.cpu().numpy()
-                    vocab = self.report_function.__getattribute__("keywords")["vocab"]
+                    vocab = getattr(self.report_function, "keywords")["vocab"]
                     preds = [vocab.idx2word[int(x[0])] for x in indices]
                     topk = [[vocab.idx2word[int(x)] for x in y] for y in indices]
                     targets = [vocab.idx2word[int(x)] for x in batch_targets]
@@ -1975,7 +2076,7 @@ class Trainer:
             status = False
             message = f"Could not save to {self._save_path_with_epoch}" + "_force" +\
                 f" error {e}"
-        self._transition(self.current_state, self._prev_normal_state)
+        self._transition(self.current_state, self._prev_paused_state)
         return status, message
 
     @control
@@ -1985,7 +2086,7 @@ class Trainer:
         # with a _temp_epoch_runner
         # self.validate()
         # Save everything to a temp_run_metrics
-        self._transition(self.current_state, self._prev_normal_state)
+        self._transition(self.current_state, self._prev_paused_state)
 
     @control
     def force_test(self):
@@ -1993,7 +2094,7 @@ class Trainer:
         self._transition(self.current_state, "force_running_test")
         # with a _temp_epoch_runner
         # self.test()
-        self._transition(self.current_state, self._prev_normal_state)
+        self._transition(self.current_state, self._prev_paused_state)
 
     @control
     def abort_session(self):
@@ -2117,7 +2218,7 @@ class Trainer:
 
     @property
     def current_state(self):
-        return self._sm.current_state
+        return self._current_state
 
     @property
     def loop_type(self):

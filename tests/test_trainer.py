@@ -36,7 +36,6 @@ class TrainerTest(unittest.TestCase):
         self.trainer._init_all()
         self.assertFalse(self.trainer._have_resumed)
         self.assertTrue(self.trainer.paused)
-        self.assertTrue(hasattr(self.trainer, "_sm"))
 
     def test_trainer_resume_force(self):
         pass

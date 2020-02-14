@@ -19,7 +19,6 @@ from .device import init_nvml, gpu_util, cpu_info, memory_info, DeviceMonitor
 from .util import get_backup_num, gen_file_and_stream_logger, deprecated
 from .epoch import Epoch
 from .mods import Modules as Modules
-# from .state_machine import StateMachine
 from .overrides import MyDataLoader, default_tensorify
 from .components import Models
 from .functions import _log_metrics_for_step
@@ -95,7 +94,7 @@ class Trainer:
     __version__ = __version__
 
     def __init__(self, uid, model_params, criteria, optimizer, model_defs, update_functions,
-                 extra_metrics, trainer_params, data, dataloader_params):
+                 extra_metrics, trainer_params, data, dataloader_params, data_dir):
         """Initializes the :class:`Trainer` object. This is supposed to be a catch all
         trainer which is robust and easy to train and can generate graphs
         automatically etc.
@@ -145,8 +144,10 @@ class Trainer:
         self._extra_metrics = extra_metrics
         self._update_functions = update_functions
         # static attributes
-        self._savedir = ".savedir"
-        self._logdir = ".logs"
+        self._data_dir = data_dir
+        self._savedir = os.path.join(self._data_dir, "savedir")
+        self._logdir = os.path.join(self._data_dir, "logs")
+        self._modules_dir = os.path.join(self._data_dir, "modules")
         if not os.path.exists(self._savedir):
             os.mkdir(self._savedir)
         if not os.path.exists(self._logdir):
@@ -417,11 +418,13 @@ class Trainer:
         self.load_image.__dict__["content_type"] = "form"
 
     def _init_modules(self):
-        self._mods = Modules("trainer_modules", self._logd, self._loge, self._logi, self._logw)
+        self._mods = Modules(self._modules_dir, self._logd, self._loge, self._logi, self._logw)
         # NOTE: Data is always available
+        #       Other things can be nvml, device and stuff.
         self._user_func_env_params = {"train_loader": self.train_loader,
                                       "val_loader": self.val_loader,
-                                      "test_loader": self.test_loader}
+                                      "test_loader": self.test_loader,
+                                      "torch": torch}
 
     def _init_nvml(self):
         """Initializes the Nvidia monitoring library. It's called by _init_state_vars so
@@ -672,9 +675,9 @@ class Trainer:
         if gather:
             self._transition_flags["run_cb"] = True
         loop, run, step = self.current_state.split("_")
-        if run == "running":
-            status, message = self._transition(self.current_state, "_".join([loop, "paused", step]))
-        # print("done with paused", self.current_state)
+        # if run == "running":
+        #     status, message = self._transition(self.current_state, "_".join([loop, "paused", step]))
+        # print("DONE with paused", self.current_state)
         status, message = self._transition(self.current_state, "_".join([loop, "finished", step]))
 
     def _finish_and_resume_main(self, gather=False):
@@ -689,8 +692,8 @@ class Trainer:
         if gather:
             self._transition_flags["run_cb"] = True
         loop, run, step = self.current_state.split("_")
-        if run == "running":
-            status, message = self._transition(self.current_state, "_".join([loop, "paused", step]))
+        # if run == "running":
+        #     status, message = self._transition(self.current_state, "_".join([loop, "paused", step]))
         # print("done with paused", self.current_state)
         if loop in {"adhoc", "user"}:
             status, message = self._transition(self.current_state, "_".join([loop, "finished", step]))
@@ -736,6 +739,7 @@ class Trainer:
             status, message = self._transition(self.current_state, "_".join([loop, "running", step]))
 
     def _run_new_if_finished(self):
+        print("RUNNING NEW aborted flag", self._current_aborted)
         loop, run, step = self.current_state.split("_")
         status, message = self._transition(self.current_state, "_".join([loop, "running", step]))
         # if run == "finished":
@@ -775,10 +779,14 @@ class Trainer:
                 self._userfunc_running_event.clear()
             else:
                 self._logd(f"User function cannot be paused")
+        # print("LOOP ENTER WHILE running waiting", runner.train_loop.running, runner.train_loop.waiting)
         if runner is not None and runner.running:
             j = 0
             while not runner.waiting and j < 5:
                 time.sleep(1)
+                print(self.current_state)
+                print(loop, self._running_event.is_set())
+                # print("LOOP running waiting", runner.train_loop.running, runner.train_loop.waiting)
                 self._logd(f"Waiting for {loop} runner")
                 j += 1
             # while runner.waiting:
@@ -847,6 +855,7 @@ class Trainer:
         callback = self._task_callbacks.get(loop)
         if not self._current_aborted:
             self._toggle_current_aborted()
+        print("TOGGLED current_aborted")
         if runner is not None:
             if self.paused:
                 print("was paused")
@@ -970,8 +979,10 @@ class Trainer:
 
         # CHECK: To force or not to force. That is the question
         if main_same_step():
+            print("MAIN same step")
             self._ensure_thread(a_loop, self.train)
         elif main_different_step():
+            print("MAIN different step")
             self._ensure_thread(b_loop, self.train)
         elif new_main():
             self._ensure_thread(b_loop, self.train)
@@ -988,12 +999,11 @@ class Trainer:
             tl = self._task_runners["adhoc"].test_loop
             print("TEST LOOP INIT", tl.running, tl.waiting, tl.signals.paused.is_set())
         elif other_to_main():
-            if _to != self._prev_paused_state:
+            if self._prev_paused_state and _to != self._prev_paused_state:
                 return False, self._loge(f"to state {_to} has to be previous paused state" +
                                          f"{self._prev_paused_state}")
             self._ensure_thread(b_loop, self.train)
         elif other_to_same():
-            
             pass
         elif other_to_different():
             self._ensure_thread(b_loop, target)
@@ -1011,7 +1021,11 @@ class Trainer:
         if b_run == "finished":
             self._ensure_finished(b_loop, b_step, **self._transition_flags)
             self._transition_flags = {}
-            self._threads["main"].join()
+            self._threads[b_loop].join()
+            if b_loop != "main" and self._prev_paused_state:
+                self._transition(self.current_state, self._prev_paused_state)
+                self._prev_paused_state = None
+
         # TODO: Other Scenarios
         #       1. main thread died?
         #       2. main thread aborted and started main thread with val?
@@ -2103,6 +2117,7 @@ class Trainer:
             message = f"Could not save to {self._save_path_with_epoch}" + "_force" +\
                 f" error {e}"
         self._transition(self.current_state, self._prev_paused_state)
+        self._prev_paused_state = None
         return status, message
 
     @control
@@ -2113,6 +2128,7 @@ class Trainer:
         # self.validate()
         # Save everything to a temp_run_metrics
         self._transition(self.current_state, self._prev_paused_state)
+        self._prev_paused_state = None
 
     @control
     def force_test(self):
@@ -2121,6 +2137,7 @@ class Trainer:
         # with a _temp_epoch_runner
         # self.test()
         self._transition(self.current_state, self._prev_paused_state)
+        self._prev_paused_state = None
 
     @control
     def abort_session(self):
@@ -2174,16 +2191,40 @@ class Trainer:
 
     # START: Flags
     def _toggle_running(self):
-        if self._running_event.is_set():
-            self._running_event.clear()
-        else:
-            self._running_event.set()
+        loop = self.current_state.split("_")[0]
+        if loop == "main":
+            if self._running_event.is_set():
+                self._running_event.clear()
+            else:
+                self._running_event.set()
+        elif loop == "adhoc":
+            if self._adhoc_running_event.is_set():
+                self._adhoc_running_event.clear()
+            else:
+                self._adhoc_running_event.set()
+        elif loop == "user":
+            if self._userfunc_running_event.is_set():
+                self._userfunc_running_event.clear()
+            else:
+                self._userfunc_running_event.set()
 
     def _toggle_current_aborted(self):
-        if self._current_aborted_event.is_set():
-            self._current_aborted_event.clear()
-        else:
-            self._current_aborted_event.set()
+        loop = self.current_state.split("_")[0]
+        if loop == "main":
+            if self._current_aborted_event.is_set():
+                self._current_aborted_event.clear()
+            else:
+                self._current_aborted_event.set()
+        elif loop == "adhoc":
+            if self._adhoc_aborted_event.is_set():
+                self._adhoc_aborted_event.clear()
+            else:
+                self._adhoc_aborted_event.set()
+        elif loop == "user":
+            if self._userfunc_aborted_event.is_set():
+                self._userfunc_aborted_event.clear()
+            else:
+                self._userfunc_aborted_event.set()
 
     def _toggle_session_aborted(self):
         if self._session_aborted_event.is_set():
@@ -2193,17 +2234,21 @@ class Trainer:
 
     def _abort_session(self):
         # any -> force_finished_none with aborted_session True
-        self._session_aborted_event.set()
+        self._toggle_session_aborted()
         self._transition(self.current_state, "force_finshed_none")
 
     def _abort_current(self):
-        self._current_aborted_event.set()
+        self._toggle_current_aborted()
         self._finish_if_paused_or_running()
+        # self._toggle_current_aborted()
+        print("ABORTED flag", self._current_aborted)
         self._aborted.append(self.current_state.split("_")[-1])
 
     def _abort_current_run_cb(self):
-        self._current_aborted_event.set()
+        self._toggle_current_aborted()
         self._finish_if_paused_or_running(True)
+        # self._toggle_current_aborted()
+        print("ABORTED flag", self._current_aborted)
         self._aborted.append(self.current_state.split("_")[-1])
     # END: Flags
 
@@ -2369,11 +2414,23 @@ class Trainer:
 
     @property
     def paused(self):
-        return not self._running_event.is_set()
+        loop = self.current_state.split("_")[0]
+        if loop == "main":
+            return not self._running_event.is_set()
+        elif loop == "adhoc":
+            return not self._adhoc_running_event.is_set()
+        elif loop == "user":
+            return not self._userfunc_running_event.is_set()
 
     @property
     def _current_aborted(self):
-        return self._current_aborted_event.is_set()
+        loop = self.current_state.split("_")[0]
+        if loop == "main":
+            return self._current_aborted_event.is_set()
+        elif loop == "adhoc":
+            return self._adhoc_aborted_event.is_set()
+        elif loop == "user":
+            return self._userfunc_aborted_event.is_set()
 
     @property
     def _session_aborted(self):

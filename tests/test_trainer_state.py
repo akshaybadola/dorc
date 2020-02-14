@@ -59,6 +59,7 @@ class StateTest(unittest.TestCase):
         # maybe after val/test hooks are run?
         time.sleep(2)
         self.assertFalse(self.trainer.paused)
+        print("HERE in TEST CASE")
         self.trainer._abort_current()
 
     def test_main_adhoc_back(self):
@@ -71,7 +72,7 @@ class StateTest(unittest.TestCase):
         time.sleep(1)
         self.assertTrue(self.trainer._epoch_runner.running)
         self.assertTrue("main" in self.trainer._threads)
-        self.trainer._user_funcs["test_func"] = lambda x: None
+        self.trainer._user_funcs["test_func"] = lambda: None
         time.sleep(1)
         self.trainer.adhoc_eval({"test": {"epoch": "current",
                                           "num_or_fraction": 100,
@@ -85,17 +86,18 @@ class StateTest(unittest.TestCase):
         self.trainer.pause()
         time.sleep(.5)
         self.assertTrue(self.trainer._task_runners["adhoc"].test_loop.paused)
+        self.trainer._abort_current_run_cb()
+        # self.trainer.pause()
+        # time.sleep(.5)
         # er = self.trainer._task_runners["main"]
         # ar = self.trainer._task_runners["adhoc"]
-        # ar.test_loop.signals.paused.clear()
         # import ipdb; ipdb.set_trace()
-        self.trainer._abort_current_run_cb()
-        time.sleep(.5)
         self.assertFalse(self.trainer._task_runners["adhoc"].running)
+        self.assertTrue(self.trainer._task_runners["main"].running)
+        self.assertEqual(self.trainer.current_state, "main_running_train")
+        self.trainer._abort_current()
 
-        # import ipdb; ipdb.set_trace()
-
-    def test_main_not_in_task_runner(self):
+    def test_user_adhoc_main(self):
         pass
 
     # def test_illegal_states(self):

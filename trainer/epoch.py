@@ -393,6 +393,23 @@ class NewEpoch:
         return (not self.running) and (not self.waiting)
 
     @property
+    def finished(self):
+        if self._current_loop is None:
+            return None
+        else:
+            return self._current_loop.finished
+
+    @property
+    def status(self):
+        if self._current_loop is None:
+            return False, "idle"
+        else:
+            if len(self._current_loop.status) == 1:
+                return self._current_loop.status, "Alive"
+            else:
+                return self._current_loop.status
+
+    @property
     def current_loop(self):
         if self._current_loop is not None:
             return self._current_loop.name

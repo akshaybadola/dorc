@@ -677,6 +677,27 @@ class Trainer:
         # print("done with paused", self.current_state)
         status, message = self._transition(self.current_state, "_".join([loop, "finished", step]))
 
+    def _finish_and_resume_main(self, gather=False):
+        """Should not be called from `self._transition`
+        Stops the current running main flow (or alternate flow?)
+
+        :returns: None
+        :rtype: None
+
+        """
+        self._transition_flags = {}
+        if gather:
+            self._transition_flags["run_cb"] = True
+        loop, run, step = self.current_state.split("_")
+        if run == "running":
+            status, message = self._transition(self.current_state, "_".join([loop, "paused", step]))
+        # print("done with paused", self.current_state)
+        if loop in {"adhoc", "user"}:
+            status, message = self._transition(self.current_state, "_".join([loop, "finished", step]))
+            status, message = self._transition(self.current_state, self._prev_paused_state)
+        else:
+            status, message = self._transition(self.current_state, "_".join([loop, "finished", step]))
+
     def _pause_if_running(self):
         """Should not be called from `self._transition`
 
@@ -755,14 +776,14 @@ class Trainer:
             else:
                 self._logd(f"User function cannot be paused")
         if runner is not None and runner.running:
-            # j = 0
-            # while not runner.waiting and j < 5:
-            #     time.sleep(1)
-            #     self._logd(f"Waiting for {loop} runner")
-            #     j += 1
-            while runner.waiting:
+            j = 0
+            while not runner.waiting and j < 5:
                 time.sleep(1)
-                self._logd(f"{loop} runner should not be waiting")
+                self._logd(f"Waiting for {loop} runner")
+                j += 1
+            # while runner.waiting:
+            #     time.sleep(1)
+            #     self._logd(f"{loop} runner should not be waiting")
 
     def _ensure_unpaused(self, loop):
         "Should not be called from anywhere but `self._transition`"
@@ -796,7 +817,8 @@ class Trainer:
             if hasattr(runner, "paused") and self.userfunc_paused:
                 self._logd(f"No need to ensure ready while paused for {loop}")
         if runner is not None and runner.waiting:
-            runner.toggle_waiting()
+            # runner.toggle_waiting()
+            print("NOT GOING to toggle waiting")
 
     # CHECK: If finished or reset is called, then what should happen to the
     #        thread?  Does the epoch runner die?
@@ -940,7 +962,7 @@ class Trainer:
         def other_to_same():
             return (a_loop in {"adhoc", "user"} and a_loop == b_loop
                     and a_step == b_step
-                    and a_run in {"paused", "running"} and b_run in {"paused", "running"})
+                    and a_run in {"paused", "running"} and b_run in {"paused", "running", "finished"})
 
         def other_to_different():
             return (a_loop in {"adhoc", "user"} and b_loop in {"adhoc", "user"}
@@ -962,12 +984,16 @@ class Trainer:
             args = self._task_args[b_loop]
             self._ensure_thread(b_loop, target, args)
             self._prev_paused_state = self.current_state
+            time.sleep(.1)
+            tl = self._task_runners["adhoc"].test_loop
+            print("TEST LOOP INIT", tl.running, tl.waiting, tl.signals.paused.is_set())
         elif other_to_main():
             if _to != self._prev_paused_state:
                 return False, self._loge(f"to state {_to} has to be previous paused state" +
                                          f"{self._prev_paused_state}")
             self._ensure_thread(b_loop, self.train)
         elif other_to_same():
+            
             pass
         elif other_to_different():
             self._ensure_thread(b_loop, target)
@@ -1364,7 +1390,7 @@ class Trainer:
             temp_loader = get_temp_loader(True)
             tensorify = True
             y = temp_loader.__iter__().__next__()
-            print("Y", y)
+            # print("Y", y)
         if not (isinstance(x[0], type(y[0])) and isinstance(x[1], type(y[1]))):
             print("TYPES", type(x[0]), type(y[0]), type(x[1]), type(y[1]))
             print("NOPE returning")
@@ -2355,7 +2381,7 @@ class Trainer:
 
     @property
     def adhoc_paused(self):
-        return not self._adhoc_aborted_event.is_set()
+        return not self._adhoc_running_event.is_set()
 
     # Are adhoc_aborted and userfunc_aborted needed?
     # If they can all be run together then there's no concept of a
@@ -2366,7 +2392,7 @@ class Trainer:
 
     @property
     def userfunc_paused(self):
-        return not self._userfunc_aborted_event.is_set()
+        return not self._userfunc_running_event.is_set()
 
     @property
     def userfunc_aborted(self):

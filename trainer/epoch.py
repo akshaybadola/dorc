@@ -333,6 +333,7 @@ class EpochLoop(LoopTaskWithHooks):
         self._toggle_waiting()
         try:
             for i in range(len(self.data_iterator)):
+                print("RUNNING", self.running, self.waiting, self.signals.paused.is_set())
                 start = time.time()
                 x = self.data_iterator.__iter__().__next__()
                 batch_time = time.time() - start
@@ -512,7 +513,7 @@ class NewEpoch:
         def test_one_batch(batch):
             if get_raw:
                 raw, batch = batch[0], batch[1]
-            print("TEST ONE", test_step, type(batch))
+            # print("TEST ONE", test_step, type(batch))
             received = test_step(batch)
             if get_raw:
                 received["raw"] = raw

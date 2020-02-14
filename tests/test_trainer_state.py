@@ -81,13 +81,19 @@ class StateTest(unittest.TestCase):
         time.sleep(1)
         self.assertTrue("adhoc" in self.trainer._task_runners)
         self.assertIsNotNone(self.trainer._task_runners["adhoc"])
-        # self.assertTrue(self.trainer._task_runners["adhoc"].batch_vars)
-        # time.sleep(.5)
-        ar = self.trainer._task_runners["adhoc"]
-        import ipdb; ipdb.set_trace()
-        self.assertFalse(self.trainer._task_runners["adhoc"].running)
+        self.assertTrue(len(self.trainer._task_runners["adhoc"].batch_vars) > 0)
+        self.trainer.pause()
+        time.sleep(.5)
+        self.assertTrue(self.trainer._task_runners["adhoc"].test_loop.paused)
+        # er = self.trainer._task_runners["main"]
+        # ar = self.trainer._task_runners["adhoc"]
+        # ar.test_loop.signals.paused.clear()
+        # import ipdb; ipdb.set_trace()
         self.trainer._abort_current_run_cb()
-        import ipdb; ipdb.set_trace()
+        time.sleep(.5)
+        self.assertFalse(self.trainer._task_runners["adhoc"].running)
+
+        # import ipdb; ipdb.set_trace()
 
     def test_main_not_in_task_runner(self):
         pass

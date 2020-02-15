@@ -5,11 +5,14 @@ import json
 import argparse
 import datetime
 import configparser
+from queue import Queue
 from threading import Thread
+from multiprocessing import Process
 from flask import Flask, render_template, request, Response
 from flask_cors import CORS
 from werkzeug import serving
 
+from .mods import Modules
 from .trainer import Trainer
 from .interfaces import FlaskInterface
 from .util import _dump
@@ -26,8 +29,15 @@ class Daemon:
         self.app.config['TEMPLATES_AUTO_RELOAD'] = True
         self.use_https = False
         self.verify_user = True
+        self._task_q = Queue()
         self._sessions = {}
         self._init_context()
+
+        # FIXME: all the log functions should be created here
+        def print_func(x):
+            print(x)
+        self._modules = Modules(self.data_dir, print_func, print_func,
+                                print_func, print_func)
 
     def _init_context(self):
         self.api_crt = "res/server.crt"
@@ -46,6 +56,34 @@ class Daemon:
         else:
             self.context = None
 
+    def _update_results(self):
+        while not self._task_q.empty():
+            self._results.append(self._task_q.get())
+
+    def _check_config(self, config):
+        # Need python file or module, that's it
+        return True
+
+    def _find_open_port(self):
+        pass
+
+    def _create_id(self):
+        return 0
+
+    def _get_task_id_launch_func(self, func, *args):
+        task_id = self._create_id()
+        self._threads[task_id] = Thread(target=func, args=[task_id, *args])
+        self._threads[task_id].start()
+        return task_id
+
+    def _check_result(self, task_id):
+        self._update_results()
+        for x in self._results:
+            if task_id == x[0]:
+                return x
+        else:
+            return None
+
     # CHECK: How's the state decided? State will be updated by the Trainer
     #        * One way can be for trainer to write to both to ".pth" files
     #          and to the session_state file (with a backup)
@@ -59,57 +97,44 @@ class Daemon:
             self._sessions[s]["sessions"] = {}
             for d in os.listdir(self._sessions[s]["session_dir"]):
                 try:
-                    self._sessions[s]["sessions"][d] =\
+                    sess_path = os.path.join(self._sessions[s]["session_dir"], d)
+                    if sess_path not in sys.path:
+                        sys.path.append(sess_path)
+                    from config import config
+                    self._sessions[s]["sessions"][d]["config"] = config
+                    self._sessions[s]["sessions"][d]["state"] =\
                         json.load(open(os.path.join(d, "session_state")))
                 except Exception as e:
                     self._sessions[s]["sessions"][d] = "Error " + str(e)
 
-    def _check_params(self, params):
-        # FIXME
-        pass
-
-    def _find_open_port(self):
-        pass
-
-    def _create_id(self):
-        return 0
-
-    def _get_task_id(self, func, *args):
-        task_id = self._create_id()
-        self._threads[task_id] = Thread(target=func, args=[task_id, *args])
-        self._threads[task_id].start()
-        return task_id
-
-    def _check_result(self, task_id):
-        if task_id in self._results:
-            return self._results[task_id]
-        else:
-            return None
-
     def create_session(self, task_id, data):
-        # TODO: Put the result in the queue with the task_id
-        name = data["name"]
-        if name not in self._sessions:
-            self._sessions[name] = {}
+        session_name = data["name"]
+        if session_name not in self._sessions:
+            self._sessions[session_name] = {}
         time_str = datetime.datetime.now().isoformat()
-        os.mkdir(os.path.join(self._sessions[name]["session_dir"], time_str))
-        session_name = name + "_" + time_str
-        if self._check_params(data["params"]):
-            # TODO: load modules
-            data_dir = os.path.join(self._sessions[name]["session_dir"],
-                                    time_str)
-            trainer = Trainer({"data_dir": data_dir, **data["params"]})
-            port = self._find_open_port()
-            iface = FlaskInterface(self.hostname, port, trainer)
-            self._sessions[name]["sessions"][session_name]["trainer"] = trainer
-            self._sessions[name]["sessions"][session_name]["port"] = port
-            self._sessions[name]["sessions"][session_name]["iface"] = iface
-            self._sessions[name]["sessions"][session_name]["data_dir"] = data_dir
-            # CHECK: Should it be a separate process? Probably yes.
-            Thread(target=iface.start).start()
-            return True
+        os.mkdir(os.path.join(self._sessions[session_name]["session_dir"], time_str))
+        session_name = session_name + "_" + time_str
+        if self._check_config(data["config"]):
+            try:
+                data_dir = os.path.join(self._sessions[session_name]["session_dir"],
+                                        time_str)
+                # TODO: load modules
+                config = __load(config)
+                trainer = Trainer({"data_dir": data_dir, **config})
+                port = self._find_open_port()
+                iface = FlaskInterface(self.hostname, port, trainer)
+                self._sessions[session_name]["sessions"][session_name]["trainer"] = trainer
+                self._sessions[session_name]["sessions"][session_name]["port"] = port
+                self._sessions[session_name]["sessions"][session_name]["iface"] = iface
+                self._sessions[session_name]["sessions"][session_name]["data_dir"] = data_dir
+                p = Process(target=iface.start)
+                self._sessions[session_name]["sessions"][session_name]["process"] = p
+                p.start()
+                self._task_q.put((task_id, True))
+            except Exception as e:
+                self._task_q.put((task_id, False, f"e"))
         else:
-            return False
+            self._task_q.put((task_id, False, "Check failed on config"))
 
     def load_unfinished_sessions(self):
         for name, session in self._sessions:
@@ -127,11 +152,21 @@ class Daemon:
 
         @self.app.route("/new_session", methods=["POST"])
         def __new_session():
-            # Creates a new session with given data
-            # Displays config editor
+            # TODO:
+            # - Creates a new session with given data
+            # - Displays config editor for the user
+            # - Or the client should display?
             data = request.data
-            task_id = self._get_task_id(self.create_session, data)
-            return _dump({task_id, "Creating session with whatever data given"})
+            if "name" not in data:
+                return False, "Name not in data"
+            else:
+                try:
+                    file_bytes = request.files["file"].read()
+                except Exception as e:
+                    return False, f"{e}"
+            data = {"name", data["name"], "config", file_bytes.decode()}
+            task_id = self._get_task_id_launch_func(self.create_session, data)
+            return True, _dump([task_id, "Creating session with whatever data given"])
 
         @self.app.route("/unload_session", methods=["POST"])
         def __unload_session():
@@ -159,14 +194,19 @@ class Daemon:
             #    simple timer with the client so that it keeps checking back with the server.
 
             # the client can check for the task if it's completed or not.
-            task_id = self._get_task_id(self._load_session)
-            return _dump({task_id, "Loading session with whatever data given"})
+            data = request.data
+            task_id = self._get_task_id_launch_func(self._load_session, data)
+            return _dump((task_id, "Loading session with whatever data given"))
 
         @self.app.route("/check_task", methods=["GET"])
         def __check_task():
             data = request.data
             # FIXME: data should be parsed correctly
-            return self._check_result(data)
+            result = self._check_result(data["task_id"])
+            if result is None:
+                return _dump((data["task_id"], "Not yet processed"))
+            else:
+                return _dump(result)
 
         # NOTE: This should be disabled for now. Only if the number of sessions
         #       gets too large should I use this, as otherwise all the session

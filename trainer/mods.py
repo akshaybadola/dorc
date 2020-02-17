@@ -167,19 +167,19 @@ class Modules:
                     retval = [str(x[1]) + " added, " if x[0] else " failed, " for x in statuses]
                     return False, self._logd(f"{retval}")
 
-    def add_config(self, config_path, module_file):
+    def add_config(self, config_dir, module_file):
         test_py_file = self._check_file_magic(module_file, "python")
         return_key = "config"
         checks = []
-        if config_path not in sys.path:
-            sys.path.append(config_path)
+        if config_dir not in sys.path:
+            sys.path.append(config_dir)
         if test_py_file:
             tmp_name = "session_config"
-            tmp_file = os.path.join(os.path.abspath(config_path), tmp_name + ".py")
+            tmp_file = os.path.join(os.path.abspath(config_dir), tmp_name + ".py")
             exec_cmd = f"from {tmp_name} import config"
             return self._load_python_file(module_file, checks, tmp_file, exec_cmd, return_key)
         else:
             tmp_dir = "session_config"
-            tmp_path = os.mkdir(os.path.join(os.path.abspath(config_path), tmp_dir))
+            tmp_path = os.mkdir(os.path.join(os.path.abspath(config_dir), tmp_dir))
             exec_cmd = f"from {tmp_dir} import config"
             return self._load_zip_file(module_file, checks, tmp_path, exec_cmd, return_key)

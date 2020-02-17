@@ -2,6 +2,7 @@ import os
 import sys
 import ssl
 import json
+import socket
 import argparse
 import datetime
 import configparser
@@ -29,9 +30,13 @@ class Daemon:
         self.app.config['TEMPLATES_AUTO_RELOAD'] = True
         self.use_https = False
         self.verify_user = True
+        self._last_free_port = self.port
+        self._threads = {}
         self._task_q = Queue()
         self._sessions = {}
         self._init_context()
+        self._task_id = 0
+        self._results = []
 
         # FIXME: all the log functions should be created here
         def print_func(x):
@@ -52,7 +57,7 @@ class Daemon:
                 self.context.load_cert_chain(self.api_crt, self.api_key)
             except Exception as e:
                 sys.exit("Error starting flask server. " +
-                         "Missing cert or key. Details: {}".format(e))
+                         f"Missing cert or key. Details: {e}")
         else:
             self.context = None
 
@@ -65,10 +70,19 @@ class Daemon:
         return True
 
     def _find_open_port(self):
-        pass
+        if not self._last_free_port:
+            self._last_free_port = 1
+        flag = True
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        while flag:
+            self._last_free_port = (self._last_free_port + 1) % 65532
+            flag = s.connect_ex(('localhost', self._last_free_port)) == 0
+        s.close()
+        return self._last_free_port
 
     def _create_id(self):
-        return 0
+        self._task_id += 1
+        return self._task_id
 
     def _get_task_id_launch_func(self, func, *args):
         task_id = self._create_id()
@@ -93,11 +107,11 @@ class Daemon:
                          os.path.isdir(os.path.join(self.data_dir, x))]
         for s in session_names:
             self._sessions[s] = {}
-            self._sessions[s]["session_dir"] = os.path.join(self.data_dir, s)
+            self._sessions[s]["path"] = os.path.join(self.data_dir, s)
             self._sessions[s]["sessions"] = {}
-            for d in os.listdir(self._sessions[s]["session_dir"]):
+            for d in os.listdir(self._sessions[s]["path"]):
                 try:
-                    sess_path = os.path.join(self._sessions[s]["session_dir"], d)
+                    sess_path = os.path.join(self._sessions[s]["path"], d)
                     if sess_path not in sys.path:
                         sys.path.append(sess_path)
                     from config import config
@@ -108,31 +122,39 @@ class Daemon:
                     self._sessions[s]["sessions"][d] = "Error " + str(e)
 
     def create_session(self, task_id, data):
+        """Creates a new training session from given data"""
         session_name = data["name"]
         if session_name not in self._sessions:
             self._sessions[session_name] = {}
+            self._sessions[session_name]["path"] = os.path.join(self.data_dir, session_name)
+            self._sessions[session_name]["sessions"] = {}
+            if not os.path.exists(self._sessions[session_name]["path"]):
+                os.mkdir(self._sessions[session_name]["path"])  # /sessions/funky_session
         time_str = datetime.datetime.now().isoformat()
-        os.mkdir(os.path.join(self._sessions[session_name]["session_dir"], time_str))
-        session_name = session_name + "_" + time_str
+        data_dir = os.path.join(self._sessions[session_name]["path"], time_str)
+        os.mkdir(data_dir)
         if self._check_config(data["config"]):
             try:
-                data_dir = os.path.join(self._sessions[session_name]["session_dir"],
-                                        time_str)
-                # TODO: load modules
-                config = __load(config)
-                trainer = Trainer({"data_dir": data_dir, **config})
+                status, result = self._modules.add_config(data_dir, data["config"])
+                if status:
+                    trainer = Trainer(**{"data_dir": data_dir, **result})
+                else:
+                    self._task_q.put((task_id, False, f"Could not read config. {result}"))
+                    return
                 port = self._find_open_port()
+                self._trainer = trainer
                 iface = FlaskInterface(self.hostname, port, trainer)
-                self._sessions[session_name]["sessions"][session_name]["trainer"] = trainer
-                self._sessions[session_name]["sessions"][session_name]["port"] = port
-                self._sessions[session_name]["sessions"][session_name]["iface"] = iface
-                self._sessions[session_name]["sessions"][session_name]["data_dir"] = data_dir
+                self._sessions[session_name]["sessions"][time_str] = {}                
+                self._sessions[session_name]["sessions"][time_str]["trainer"] = trainer
+                self._sessions[session_name]["sessions"][time_str]["port"] = port
+                self._sessions[session_name]["sessions"][time_str]["iface"] = iface
+                self._sessions[session_name]["sessions"][time_str]["data_dir"] = data_dir
                 p = Process(target=iface.start)
-                self._sessions[session_name]["sessions"][session_name]["process"] = p
+                self._sessions[session_name]["sessions"][time_str]["process"] = p
                 p.start()
                 self._task_q.put((task_id, True))
             except Exception as e:
-                self._task_q.put((task_id, False, f"e"))
+                self._task_q.put((task_id, False, f"{e}"))
         else:
             self._task_q.put((task_id, False, "Check failed on config"))
 
@@ -140,6 +162,18 @@ class Daemon:
         for name, session in self._sessions:
             if session:
                 pass
+        pass
+
+    def load_session(self, task_id, data):
+        """Loads a training session into memory"""
+        pass
+
+    def unload_session(self, task_id, data):
+        """Unloads a training session from memory"""
+        pass
+
+    def purge_session(self, task_id, data):
+        """Unloads the session and removes it from disk"""
         pass
 
     def start(self):
@@ -164,24 +198,9 @@ class Daemon:
                     file_bytes = request.files["file"].read()
                 except Exception as e:
                     return False, f"{e}"
-            data = {"name", data["name"], "config", file_bytes.decode()}
+            data = {"name", data["name"], "config", file_bytes}
             task_id = self._get_task_id_launch_func(self.create_session, data)
             return True, _dump([task_id, "Creating session with whatever data given"])
-
-        @self.app.route("/unload_session", methods=["POST"])
-        def __unload_session():
-            pass
-
-        # FIXME
-        @self.app.route("/purge_session", methods=["POST"])
-        def __purge_session():
-            data = request.data
-            try:
-                self.unload_session(data)
-                self.purge_session(data)
-            except Exception as e:
-                return False, _dump(e)
-            return True, f"Purged session {data}"
 
         @self.app.route("/load_session", methods=["POST"])
         def __load_session():
@@ -195,8 +214,23 @@ class Daemon:
 
             # the client can check for the task if it's completed or not.
             data = request.data
-            task_id = self._get_task_id_launch_func(self._load_session, data)
+            task_id = self._get_task_id_launch_func(self.load_session, data)
             return _dump((task_id, "Loading session with whatever data given"))
+
+        @self.app.route("/unload_session", methods=["POST"])
+        def __unload_session():
+            return "Does nothing for now"
+
+        # FIXME
+        @self.app.route("/purge_session", methods=["POST"])
+        def __purge_session():
+            data = request.data
+            try:
+                self.unload_session(data)
+                self.purge_session(data)
+            except Exception as e:
+                return False, _dump(e)
+            return True, f"Purged session {data}"
 
         @self.app.route("/check_task", methods=["GET"])
         def __check_task():
@@ -230,7 +264,7 @@ def create_daemon(test=False, params=None):
                         help="The hostname on which to serve")
     parser.add_argument("--data-dir", "-d", type=str,
                         default=os.path.expanduser("~/.training_server_data"),
-                        help="The directory which will contain all the session and model" +
+                        help="The directory which will contain all the sessions and model" +
                         " etc. files and directories")
     args = parser.parse_args()
     if not test:

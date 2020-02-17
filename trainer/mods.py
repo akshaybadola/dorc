@@ -183,3 +183,4 @@ class Modules:
             tmp_path = os.mkdir(os.path.join(os.path.abspath(config_dir), tmp_dir))
             exec_cmd = f"from {tmp_dir} import config"
             return self._load_zip_file(module_file, checks, tmp_path, exec_cmd, return_key)
+        sys.path.remove(config_dir)

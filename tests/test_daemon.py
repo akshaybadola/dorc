@@ -2,73 +2,71 @@ import os
 import shutil
 import unittest
 import sys
-import requests
 import time
-import json
-from multiprocessing import Process
 sys.path.append("../")
-from trainer.interfaces import FlaskInterface
-from trainer.trainer import Trainer
-from trainer.daemon import create_daemon
+from trainer.daemon import Daemon
 
 
 class DaemonTest(unittest.TestCase):
-    def setUp(self):
-        self.data_dir = ".test_dir"
-        if os.path.exists(self.data_dir):
-            shutil.rmtree(self.data_dir)
-        self.daemon = create_daemon(True, {"port": 23232, "data_dir": ".test_dir"})
-        if not os.path.exists(self.data_dir):
-            os.mkdir(self.data_dir)
-
-    def test_daemon_start(self):
-        p = Process(target=self.daemon.start)
-        p.start()
-        time.sleep(.2)
-        host = "http://" + ":".join([self.daemon.hostname, str(self.daemon.port) + "/"])
-        response = requests.request("GET", host)
-        self.assertEqual(response.status_code, 404)
-        response = requests.request("POST", host + "view_session")
-        self.assertEqual(json.loads(response.content), "Doesn't do anything")
-        p.terminate()
+    @classmethod
+    def setUpClass(cls):
+        cls.data_dir = ".test_dir"
+        if os.path.exists(cls.data_dir):
+            shutil.rmtree(cls.data_dir)
+        if not os.path.exists(cls.data_dir):
+            os.mkdir(cls.data_dir)
+        cls.port = 23232
+        cls.hostname = "127.0.0.1"
+        cls.daemon = Daemon(cls.hostname, cls.port, ".test_dir")
 
     def test_find_port(self):
         port = self.daemon._find_open_port()
         self.assertTrue(port)
 
-    def test_create_session(self):
-        "create session with existing name but different timestamp"
-        # Should be able to create session on top of scanned and loaded sessions
-        # Should also create session with different timestamp
+    def _create_session(self):
         with open("_setup.py", "rb") as f:
             meh = f.read()
         data = {"name": "test_session", "config": meh}
         task_id = self.daemon._get_task_id_launch_func(self.daemon.create_session, data)
         time.sleep(1)
-        self.assertTupleEqual(self.daemon._check_result(task_id), (1, True))
+        return self.daemon._check_result(task_id)[1]
 
-    # def test_scan_sessions(self):
-    #     # create a couple of session_dirs programmatically and it should scan
-    #     # NOTE: config has to be eval code if it can be dumped.
-    #     #       Or pickle. I'm not a big fan of pickle.
-    #     import ipdb; ipdb.set_trace()
+    def test_create_session(self):
+        "create session with existing name but different timestamp"
+        # Should be able to create session on top of scanned and loaded sessions
+        # Should also create session with different timestamp
+        self.assertTrue(self._create_session())
+
+    def test_scan_sessions(self):
+        self._create_session()
+        self._create_session()
+        self._create_session()  # create three more sessions
+        self.terminate_live_sessions()
+        self.daemon._sessions = {}
+        self.daemon.scan_sessions()
+        for k, v in self.daemon._sessions["test_session"]["sessions"].items():
+            with self.subTest(i=str(k)):
+                self.assertIsInstance(v, dict)
+                self.assertFalse("process" in v)
+
+    # def test_load_unload_session(self):
     #     pass
 
-    def tearDown(self):
-        if hasattr(self, "test_dir"):
-            shutil.rmtree(self.test_dir)
-        if os.path.exists(self.data_dir):
-            shutil.rmtree(self.data_dir)
-        for s in self.daemon._sessions.values():
+    @classmethod
+    def terminate_live_sessions(cls):
+        for s in cls.daemon._sessions.values():
             for s_name in s["sessions"]:
                 if "process" in s["sessions"][s_name]:
                     s["sessions"][s_name]["process"].terminate()
                     print(f'Terminated {s["sessions"][s_name]["process"]}')
 
-    # def test_list_sessions(self):
-    #     pass
+    @classmethod
+    def tearDownClass(cls):
+        cls.terminate_live_sessions()
+        if os.path.exists(cls.data_dir):
+            shutil.rmtree(cls.data_dir)
 
-    # def test_destroy_session(self):
+    # def test_purge_session(self):
     #     pass
 
     # def test_auth(self):

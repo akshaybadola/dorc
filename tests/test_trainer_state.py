@@ -1,3 +1,6 @@
+import os
+import shutil
+from datetime import datetime
 import unittest
 import sys
 import time
@@ -11,7 +14,14 @@ class StateTest(unittest.TestCase):
     def setUp(self):
         """Setup a simple trainer with MNIST dataset."""
         self.config = config
-        self.trainer = Trainer(**self.config)
+        if os.path.exists(".test_dir"):
+            shutil.rmtree(".test_dir")
+        os.mkdir(".test_dir")
+        os.mkdir(".test_dir/test_session")
+        time_str = datetime.now().isoformat()
+        os.mkdir(f".test_dir/test_session/{time_str}")
+        self.data_dir = f".test_dir/test_session/{time_str}"
+        self.trainer = Trainer(**{"data_dir": self.data_dir, **self.config})
         self.trainer._init_all()
 
     # def tearDown(self):
@@ -99,6 +109,10 @@ class StateTest(unittest.TestCase):
 
     def test_user_adhoc_main(self):
         pass
+
+    def tearDown(self):
+        if os.path.exists(".test_dir"):
+            shutil.rmtree(".test_dir")
 
     # def test_illegal_states(self):
     #     results = [False, True, False, True, False, True, True, True, False, True,

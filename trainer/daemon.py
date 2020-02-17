@@ -3,6 +3,7 @@ import sys
 import ssl
 import json
 import socket
+import atexit
 import argparse
 import datetime
 import configparser
@@ -36,6 +37,7 @@ class Daemon:
         self._sessions = {}
         self._init_context()
         self._task_id = 0
+        self.__task_ids = []
         self._results = []
 
         # FIXME: all the log functions should be created here
@@ -81,6 +83,7 @@ class Daemon:
         return self._last_free_port
 
     def _create_id(self):
+        self.__task_ids.append(self._task_id)
         self._task_id += 1
         return self._task_id
 
@@ -102,6 +105,8 @@ class Daemon:
     #        * One way can be for trainer to write to both to ".pth" files
     #          and to the session_state file (with a backup)
     #        * session_params for trainer?
+    # FIXME: scan_sessions should be called at beginning and after that should
+    #        raise error unless testing
     def scan_sessions(self):
         session_names = [x for x in os.listdir(self.data_dir) if
                          os.path.isdir(os.path.join(self.data_dir, x))]
@@ -111,13 +116,11 @@ class Daemon:
             self._sessions[s]["sessions"] = {}
             for d in os.listdir(self._sessions[s]["path"]):
                 try:
-                    sess_path = os.path.join(self._sessions[s]["path"], d)
-                    if sess_path not in sys.path:
-                        sys.path.append(sess_path)
-                    from config import config
-                    self._sessions[s]["sessions"][d]["config"] = config
-                    self._sessions[s]["sessions"][d]["state"] =\
-                        json.load(open(os.path.join(d, "session_state")))
+                    data_dir = os.path.join(self._sessions[s]["path"], d)
+                    self._sessions[s]["sessions"][d] = {}
+                    self._sessions[s]["sessions"][d]["data_dir"] = data_dir
+                    with open(os.path.join(self._sessions[s]["path"], d, "session_state")) as f:
+                        self._sessions[s]["sessions"][d]["state"] = json.load(f)
                 except Exception as e:
                     self._sessions[s]["sessions"][d] = "Error " + str(e)
 
@@ -131,26 +134,63 @@ class Daemon:
             if not os.path.exists(self._sessions[session_name]["path"]):
                 os.mkdir(self._sessions[session_name]["path"])  # /sessions/funky_session
         time_str = datetime.datetime.now().isoformat()
+        # Like: /sessions/funky_session/2020-02-17T10:53:06.458827
         data_dir = os.path.join(self._sessions[session_name]["path"], time_str)
         os.mkdir(data_dir)
-        if self._check_config(data["config"]):
+        self._sessions[session_name]["sessions"][time_str] = {}
+        self._create_trainer(task_id, session_name, time_str, data_dir, data["config"])
+        # if self._check_config(data["config"]):
+        #     try:
+        #         status, result = self._modules.add_config(data_dir, data["config"])
+        #         if status:
+        #             trainer = Trainer(**{"data_dir": data_dir, **result})
+        #             trainer._init_all()
+        #         else:
+        #             self._task_q.put((task_id, False, f"Could not read config. {result}"))
+        #             return
+        #         port = self._find_open_port()
+        #         iface = FlaskInterface(self.hostname, port, trainer)
+        #         self._sessions[session_name]["sessions"][time_str]["trainer"] = trainer
+        #         self._sessions[session_name]["sessions"][time_str]["port"] = port
+        #         self._sessions[session_name]["sessions"][time_str]["iface"] = iface
+        #         self._sessions[session_name]["sessions"][time_str]["data_dir"] = data_dir
+        #         p = Process(target=iface.start)
+        #         self._sessions[session_name]["sessions"][time_str]["process"] = p
+        #         p.start()
+        #         self._task_q.put((task_id, True))
+        #     except Exception as e:
+        #         self._task_q.put((task_id, False, f"{e}"))
+        # else:
+        #     self._task_q.put((task_id, False, "Check failed on config"))
+        with open(os.path.join(self._sessions[session_name]["path"], time_str,
+                               "session_state")) as f:
+            self._sessions[session_name]["sessions"][time_str]["state"] = json.load(f)
+
+    def _create_trainer(self, task_id, name, time_str, data_dir, config, add=True):
+        if add and self._check_config(config):
             try:
-                status, result = self._modules.add_config(data_dir, data["config"])
+                status, result = self._modules.add_config(data_dir, config)
                 if status:
                     trainer = Trainer(**{"data_dir": data_dir, **result})
+                    trainer._init_all()
                 else:
                     self._task_q.put((task_id, False, f"Could not read config. {result}"))
                     return
+            except Exception as e:
+                self._task_q.put((task_id, False, f"{e}"))
+        elif not add and self._check_config(config):
+            try:
+                trainer = Trainer(**{"data_dir": data_dir, **config})
+                trainer._init_all()
                 port = self._find_open_port()
-                self._trainer = trainer
                 iface = FlaskInterface(self.hostname, port, trainer)
-                self._sessions[session_name]["sessions"][time_str] = {}                
-                self._sessions[session_name]["sessions"][time_str]["trainer"] = trainer
-                self._sessions[session_name]["sessions"][time_str]["port"] = port
-                self._sessions[session_name]["sessions"][time_str]["iface"] = iface
-                self._sessions[session_name]["sessions"][time_str]["data_dir"] = data_dir
+                self._sessions[name]["sessions"][time_str]["config"] = config
+                self._sessions[name]["sessions"][time_str]["trainer"] = trainer
+                self._sessions[name]["sessions"][time_str]["port"] = port
+                self._sessions[name]["sessions"][time_str]["iface"] = iface
+                self._sessions[name]["sessions"][time_str]["data_dir"] = data_dir
                 p = Process(target=iface.start)
-                self._sessions[session_name]["sessions"][time_str]["process"] = p
+                self._sessions[name]["sessions"][time_str]["process"] = p
                 p.start()
                 self._task_q.put((task_id, True))
             except Exception as e:
@@ -159,30 +199,124 @@ class Daemon:
             self._task_q.put((task_id, False, "Check failed on config"))
 
     def load_unfinished_sessions(self):
-        for name, session in self._sessions:
-            if session:
-                pass
         pass
+        # for name, session in self._sessions:
+        #     if session["state"] == "unfinished":
+        #         self.load_session(0, 'meh')
+        #         pass
+
+    def _check_session_valid(self, session_name, timestamp):
+        if session_name not in self._sessions:
+            return False, f"Unknown session, {session_name}"
+        elif (session_name in self._sessions and
+              timestamp not in self._sessions[session_name]["sessions"]):
+            return False, f"Given session instance not in sessions"
+        elif not os.path.exists(os.path.join(self.data_dir, "/".join([session_name, timestamp]))):
+            return False, f"Session has been deleted"
+        else:
+            return True, None
 
     def load_session(self, task_id, data):
         """Loads a training session into memory"""
-        pass
+        key = data["session_key"]
+        session_name, timestamp = key.split("/")
+        valid, error_str = self._check_session_valid(session_name, timestamp)
+        print(f"LOAD {data}")
+        if not valid:
+            self._task_q.put((task_id, valid, error_str))
+        else:
+            data_dir = os.path.join(self.data_dir, key)
+            config_candidates = [x for x in os.listdir(data_dir)
+                                 if "session_config" in x]
+            if not len(config_candidates) == 1:
+                print(f"SHOULD NOT BE HERE")
+                return False
+            else:
+                # CHECK: How to resolve multiple paths having same module names
+                #        Currently I remove dir from sys.path after loading.
+                #        Not sure if it'll work correctly.
+                if data_dir not in sys.path:
+                    sys.path.append(data_dir)
+                from session_config import config
+                sys.path.remove(data_dir)
+            self._sessions[session_name]["sessions"][timestamp] = {}
+            self._create_trainer(task_id, session_name, timestamp, data_dir, config, False)
+            with open(os.path.join(self._sessions[session_name]["path"], timestamp,
+                                   "session_state")) as f:
+                self._sessions[session_name]["sessions"][timestamp]["state"] = json.load(f)
+            print([(k, v.keys()) for k, v in self._sessions["meh_session"]["sessions"].items()])
+
+    # TODO: log unloaded sessions
+    def _unload_helper(self, name, time_str=None):
+        def _unload(name, time_str):
+            if "process" in self._sessions[name]["sessions"][time_str]:
+                self._sessions[name]["sessions"][time_str]["process"].terminate()
+                self._sessions[name]["sessions"][time_str].pop("process")
+            self._sessions[name]["sessions"][time_str]["trainer"] = None
+            self._sessions[name]["sessions"][time_str]["config"] = None
+            self._sessions[name]["sessions"][time_str].pop("trainer")
+            self._sessions[name]["sessions"][time_str].pop("config")
+            if "port" in self._sessions[name]["sessions"][time_str]:
+                self._sessions[name]["sessions"][time_str].pop("port")
+            if "iface" in self._sessions[name]["sessions"][time_str]:
+                self._sessions[name]["sessions"][time_str].pop("iface")
+        if time_str is None:
+            for k in self._sessions[name]["sessions"].keys():
+                _unload(name, k)
+        else:
+            _unload(name, time_str)
 
     def unload_session(self, task_id, data):
         """Unloads a training session from memory"""
-        pass
+        print("DATA Unload session", data)
+        if "session_key" in data:
+            session_name, timestamp = data["session_key"].split("/")
+            valid, error_str = self._check_session_valid(session_name, timestamp)
+            if not valid:
+                self._task_q.put((task_id, valid, error_str))
+            else:
+                try:
+                    self._unload_helper(session_name, timestamp)
+                    self._task_q.put((task_id, True, f"Unloaded session {data['session_key']}"))
+                except Exception as e:
+                    self._task_q.put((task_id, False, f"{e}"))
+        elif "session_name" in data:
+            session = data["session_name"]
+            try:
+                self._unload_helper(session)
+                self._task_q.put((task_id, True, f"Unloaded all sessions for {session_name}"))
+            except Exception as e:
+                self._task_q.put((task_id, False, f"{e}"))
+        else:
+            print("BAD DATA", data)
 
     def purge_session(self, task_id, data):
         """Unloads the session and removes it from disk"""
         pass
+
+    @property
+    def _sessions_list(self):
+        retval = {}
+        for k, v in self._sessions.items():
+            session_stamps = v["sessions"].keys()
+            for st in session_stamps:
+                key = k + "/" + st
+                session = v["sessions"][st]
+                retval[key] = {}
+                retval[key]["loaded"] = "process" in session
+                retval[key]["port"] = session["port"] if retval[key]["loaded"] else None
+                retval[key]["state"] = session["state"]
+        return _dump(retval)
 
     def start(self):
         self.scan_sessions()
         self.load_unfinished_sessions()
 
         @self.app.route("/sessions", methods=["GET"])
-        def __sessions():
-            return _dump(self._sessions)
+        def __list_sessions():
+            """Returns a dictionary of sessions, their ports if they're alive and the
+            state. Rest of the communication can be done with session"""
+            return self._sessions_list
 
         @self.app.route("/new_session", methods=["POST"])
         def __new_session():
@@ -190,57 +324,75 @@ class Daemon:
             # - Creates a new session with given data
             # - Displays config editor for the user
             # - Or the client should display?
-            data = request.data
-            if "name" not in data:
-                return False, "Name not in data"
+            if "name" not in request.form:
+                return _dump([False, "Name not in request"])
             else:
                 try:
+                    data = request.form["name"]
                     file_bytes = request.files["file"].read()
                 except Exception as e:
-                    return False, f"{e}"
-            data = {"name", data["name"], "config", file_bytes}
+                    return _dump([False, f"{e}"])
+            data = {"name": data, "config": file_bytes}
             task_id = self._get_task_id_launch_func(self.create_session, data)
-            return True, _dump([task_id, "Creating session with whatever data given"])
+            return _dump({"task_id": task_id,
+                          "message": "Creating session with whatever data given"})
 
         @self.app.route("/load_session", methods=["POST"])
         def __load_session():
-            # Loads a previously created a session and starts a trainer for it
-            # Steps:
-            # 1. Check if all required modules are present
-            #    The data structure will be simple and they can be found in session["modules"]
-            # 2. Start the trainer with the params and modules
-            # 3. Can't be done async as that'll hold up the client. I can have a
-            #    simple timer with the client so that it keeps checking back with the server.
-
-            # the client can check for the task if it's completed or not.
-            data = request.data
-            task_id = self._get_task_id_launch_func(self.load_session, data)
-            return _dump((task_id, "Loading session with whatever data given"))
+            data = json.loads(request.json)
+            if "session_key" not in data:
+                return _dump(f"Invalid data {data}")
+            else:
+                task_id = self._get_task_id_launch_func(self.load_session, data)
+                return _dump({"task_id": task_id, "message": f"Loading session with {data}"})
 
         @self.app.route("/unload_session", methods=["POST"])
         def __unload_session():
-            return "Does nothing for now"
+            data = json.loads(request.json)
+            if not ("session_key" in data or "session_name" in data):
+                return _dump(f"Invalid data {data}")
+            else:
+                task_id = self._get_task_id_launch_func(self.unload_session, data)
+                return _dump({"task_id": task_id,
+                              "message": f"Unloading session: {data['session_key']}"})
 
-        # FIXME
+        # FIXME:
+        # TODO: Fix design issues. Should only return return json, not "False, json"
         @self.app.route("/purge_session", methods=["POST"])
         def __purge_session():
             data = request.data
-            try:
-                self.unload_session(data)
-                self.purge_session(data)
-            except Exception as e:
-                return False, _dump(e)
-            return True, f"Purged session {data}"
+            if not ("session_key" in data or "session_name" in data):
+                return _dump(f"Invalid data {data}")
+            else:
+                task_id = self._get_task_id_launch_func(self.purge_session, data)
+                return _dump({"task_id": task_id, "message": f"Purging session {data}"})
 
         @self.app.route("/check_task", methods=["GET"])
         def __check_task():
-            data = request.data
-            # FIXME: data should be parsed correctly
-            result = self._check_result(data["task_id"])
-            if result is None:
-                return _dump((data["task_id"], "Not yet processed"))
+            try:
+                task_id = int(request.args.get("task_id").strip())
+            except Exception as e:
+                return _dump(f"Bad params {task_id}")
+            # FIXME: Check task_id against existing tasks
+            if not task_id not in self.__task_ids:
+                return _dump(f"No such task: {task_id}")
             else:
-                return _dump(result)
+                result = self._check_result(task_id)
+            if result is None:
+                return _dump({"task_id": task_id, "message": "Not yet processed"})
+            else:
+                if len(result) == 2:
+                    return _dump({"task_id": result[0], "message": "Successful"})
+                elif len(result) == 3:
+                    return _dump({"task_id": result[0], "message": result[2]})
+                else:
+                    return _dump(result)
+
+        @self.app.route("/_shutdown", methods=["GET"])
+        def __shutdown_server():
+            func = request.environ.get('werkzeug.server.shutdown')
+            func()
+            return "bleh"
 
         # NOTE: This should be disabled for now. Only if the number of sessions
         #       gets too large should I use this, as otherwise all the session
@@ -249,6 +401,11 @@ class Daemon:
         def __view_session():
             # only views the progress and parameters. No trainer is started
             return _dump("Doesn't do anything")
+
+        @atexit.register
+        def unload_all():
+            for k in self._sessions:
+                self._unload_helper(k)
 
         serving.run_simple(self.hostname, self.port, self.app, ssl_context=self.context)
 
@@ -290,5 +447,12 @@ def create_daemon(test=False, params=None):
     return daemon
 
 
+def _start_daemon(hostname, port, data_dir):
+    daemon = Daemon(hostname, port, data_dir)
+    Thread(target=daemon.start).start()
+    return daemon
+
+
 if __name__ == "__main__":
     daemon = create_daemon()
+    daemon.start()

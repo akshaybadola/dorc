@@ -23,6 +23,7 @@ from .overrides import MyDataLoader, default_tensorify
 from .components import Models
 from .functions import _log_metrics_for_step
 from ._log import Log
+from .util import _dump
 # from .checks import Checks
 from ._checks import (_check_model_params, _check_trainer_params, _check_data_params,
                       _check_resume_or_init_weights)
@@ -192,6 +193,7 @@ class Trainer:
         self._init_state_vars()
         self._init_epoch_runner()
         self._init_modules()
+        self._dump_state()
         # self._init_extra_controls()
 
     # NOTE: Shouldn't export this to Checks as name will be mangled
@@ -1812,21 +1814,18 @@ class Trainer:
     # END: Helpers
 
     # START: Save, Load, Resume
-    def _save(self, save_path=None, best=False):
-        if not save_path:
-            save_path = self._save_path_with_epoch
-        if best:
-            if not save_path.endswith(".pth"):
-                save_path += "_best.pth"
-            else:
-                save_path = save_path.replace(".pth", "") + "_best.pth"
-        elif not save_path.endswith(".pth"):
-            save_path += ".pth"
-        self._logd(f"Trying to save to {save_path}")
+    def _dump_state(self):
+        "Dump everything except weights"
+        dump_path = os.path.join(self._data_dir, "session_state")
+        state = self._get_state(False)
+        with open(dump_path, "w") as f:
+            f.write(_dump(state))
+
+    def _get_state(self, model_weights=True):
         save_state = {}
         save_state["epoch"] = self.epoch
         save_state["iterations"] = self.iterations
-        save_state["models"] = self._models.dump()
+        save_state["models"] = self._models.dump() if model_weights else self._models.names
         save_state["model_params"] = copy.deepcopy(self._model_params)
         save_state["criteria_params"] = copy.deepcopy(self._criteria_params)
         save_state["dataloader_params"] = {}
@@ -1868,6 +1867,20 @@ class Trainer:
             else:
                 save_state["trainer_params"][k] = copy.deepcopy(v)
         save_state["metrics"] = self._metrics
+        return save_state
+
+    def _save(self, save_path=None, best=False):
+        if not save_path:
+            save_path = self._save_path_with_epoch
+        if best:
+            if not save_path.endswith(".pth"):
+                save_path += "_best.pth"
+            else:
+                save_path = save_path.replace(".pth", "") + "_best.pth"
+        elif not save_path.endswith(".pth"):
+            save_path += ".pth"
+        self._logd(f"Trying to save to {save_path}")
+        save_state = self._get_state()
         self._logi(f"Saving to {save_path}")
 
         # FIXME: If some thing is not saved, it cannot be resumed also
@@ -2797,6 +2810,10 @@ class Trainer:
             # reset, launch each in a separate thread, wait for finish
             # CHECK: Is this a good idea? Maybe separate runner from epoch
             getattr(self._epoch_runner, "run_" + step)(step_func, loader, True)
+
+    def dump_state_post_epoch_hook(self):
+        "Dump everything except weights"
+        self._dump_state()
 
     def update_metrics_post_epoch_hook(self):
         """Update the metrics being recorded

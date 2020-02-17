@@ -1,3 +1,6 @@
+import os
+import shutil
+from datetime import datetime
 import unittest
 import sys
 import time
@@ -11,7 +14,14 @@ class EpochTest(unittest.TestCase):
     def setUp(self):
         """Setup a simple trainer with MNIST dataset."""
         self.config = config
-        self.trainer = Trainer(**self.config)
+        if os.path.exists(".test_dir"):
+            shutil.rmtree(".test_dir")
+        os.mkdir(".test_dir")
+        os.mkdir(".test_dir/test_session")
+        time_str = datetime.now().isoformat()
+        os.mkdir(f".test_dir/test_session/{time_str}")
+        self.data_dir = f".test_dir/test_session/{time_str}"
+        self.trainer = Trainer(**{"data_dir": self.data_dir, **self.config})
         self.trainer._init_all()
 
     def test_device_poll(self):
@@ -95,6 +105,10 @@ class EpochTest(unittest.TestCase):
         time.sleep(.5)
         self.assertFalse(epoch_runner.running)
         self.assertFalse(epoch_runner.waiting)
+
+    def tearDown(self):
+        if os.path.exists(".test_dir"):
+            shutil.rmtree(".test_dir")
 
 
 if __name__ == '__main__':

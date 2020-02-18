@@ -5,3 +5,4 @@ from .trainer import interfaces
 from .trainer.check import *
 from .trainer.overrides import MyDataLoader
 from .trainer.helpers import ProxyDataset, get_proxy_dataloader
+from .trainer.daemon import Daemon

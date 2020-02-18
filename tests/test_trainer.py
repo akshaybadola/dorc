@@ -1,3 +1,6 @@
+import os
+import shutil
+from datetime import datetime
 import unittest
 import sys
 from setup import config
@@ -9,7 +12,14 @@ class TrainerTest(unittest.TestCase):
     def setUp(self):
         """Setup a simple trainer with MNIST dataset."""
         self.config = config
-        self.trainer = Trainer(**self.config)
+        if os.path.exists(".test_dir"):
+            shutil.rmtree(".test_dir")
+        os.mkdir(".test_dir")
+        os.mkdir(".test_dir/test_session")
+        time_str = datetime.now().isoformat()
+        os.mkdir(f".test_dir/test_session/{time_str}")
+        self.data_dir = f".test_dir/test_session/{time_str}"
+        self.trainer = Trainer(**{"data_dir": self.data_dir, **self.config})
 
     # TODO: Tweak config's various parameters and check for errors
     #       Would have to be subtests.
@@ -36,7 +46,6 @@ class TrainerTest(unittest.TestCase):
         self.trainer._init_all()
         self.assertFalse(self.trainer._have_resumed)
         self.assertTrue(self.trainer.paused)
-        self.assertTrue(hasattr(self.trainer, "_sm"))
 
     def test_trainer_resume_force(self):
         pass
@@ -88,6 +97,9 @@ class TrainerTest(unittest.TestCase):
     # recurrent and other such models
     # rest of the functions
     # user func transitions
+    def tearDown(self):
+        if os.path.exists(".test_dir"):
+            shutil.rmtree(".test_dir")
 
 
 if __name__ == '__main__':

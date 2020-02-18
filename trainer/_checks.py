@@ -61,6 +61,8 @@ def _check_trainer_params(cls):
         assert "train" in cls._update_functions, "At least train update_function has to be present"
         assert "hooks_run_iter_frequency" in cls._trainer_params, "Training with iterations" +\
             " requires hooks_run_iter_frequency"
+        cls._max_epochs = 0
+        cls._trainer_params["max_epochs"] = 0
         cls._max_iterations = cls._trainer_params["max_iterations"]
         cls._hooks_run_iter_frequency = cls._trainer_params["hooks_run_iter_frequency"]
         assert cls._hooks_run_iter_frequency <= cls._max_iterations, "hooks_run_iter_frequency" +\
@@ -68,6 +70,8 @@ def _check_trainer_params(cls):
     else:
         assert "max_epochs" in cls._trainer_params, "max_epochs not in trainer params"
         cls._max_epochs = cls._trainer_params["max_epochs"]
+        cls._trainer_params["max_iterations"] = 0
+        cls._max_iterations = 0
         assert all(x in cls._update_functions
                    for x in cls._trainer_params["training_steps"]),\
             "Steps in update_functions and training_steps should match"

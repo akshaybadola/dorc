@@ -1,10 +1,10 @@
 import sys
 import ssl
-import json
-from threading import Thread
+# import json
+# from threading import Thread
 from functools import partial
 
-from time import sleep
+# from time import sleep
 from flask import Flask, render_template, request, Response
 from flask_cors import CORS
 from werkzeug import serving
@@ -12,70 +12,70 @@ from werkzeug import serving
 from .util import _dump
 
 
-class AWSInterface:
-    def __init__(self):
-        self.counter = 0
+# class AWSInterface:
+#     def __init__(self):
+#         self.counter = 0
 
-    def fetch_from_sqs(self, sqs_queue, shared_queue):
-        self.logger.info("Initializing polling thread")
-        message = True
-        while True:
-            message = sqs_queue.receive_messages()
-            sleep(1.01)
-            if message:
-                self.logger.info("Received %s" % str(message[0].body))
-                if isinstance(message[0].body, str):
-                    shared_queue.put(json.loads(message[0].body.replace("'", '"')))
-                elif isinstance(message[0].body, dict):
-                    shared_queue.put(message[0].body)
-                message[0].delete()  # easier maybe
-            else:
-                self.logger.info("Received nothing")
+#     def fetch_from_sqs(self, sqs_queue, shared_queue):
+#         self.logger.info("Initializing polling thread")
+#         message = True
+#         while True:
+#             message = sqs_queue.receive_messages()
+#             sleep(1.01)
+#             if message:
+#                 self.logger.info("Received %s" % str(message[0].body))
+#                 if isinstance(message[0].body, str):
+#                     shared_queue.put(json.loads(message[0].body.replace("'", '"')))
+#                 elif isinstance(message[0].body, dict):
+#                     shared_queue.put(message[0].body)
+#                 message[0].delete()  # easier maybe
+#             else:
+#                 self.logger.info("Received nothing")
 
-    def push_to_sqs(self, sqs_queue, message, group=None):
-        self.counter += 1
-        response = sqs_queue.send_message(MessageBody=json.dumps(message),
-                                          MessageDeduplicationId=str(self.counter),
-                                          MessageGroupId=str(group))
-        self.logger.info("Pushed to queue with result %s" % response)
+#     def push_to_sqs(self, sqs_queue, message, group=None):
+#         self.counter += 1
+#         response = sqs_queue.send_message(MessageBody=json.dumps(message),
+#                                           MessageDeduplicationId=str(self.counter),
+#                                           MessageGroupId=str(group))
+#         self.logger.info("Pushed to queue with result %s" % response)
 
-    def fetch_from_s3(self, bucket, key, filename):
-        try:
-            bucket.download_file(Key=key, Filename=filename)
-            self.logger.debug("Downloaded file from %s to %s" % (key, filename))
-            return True
-        except Exception as e:
-            self.logger.error(str(e))
-            return False
+#     def fetch_from_s3(self, bucket, key, filename):
+#         try:
+#             bucket.download_file(Key=key, Filename=filename)
+#             self.logger.debug("Downloaded file from %s to %s" % (key, filename))
+#             return True
+#         except Exception as e:
+#             self.logger.error(str(e))
+#             return False
 
-    def push_to_s3(self, bucket, data):
-        pass
+#     def push_to_s3(self, bucket, data):
+#         pass
 
 
-class HTTPInterface:
-    def __init__(self, hostname, port):
-        self.hostname = hostname
-        self.port = port
+# class HTTPInterface:
+#     def __init__(self, hostname, port):
+#         self.hostname = hostname
+#         self.port = port
 
-    def push_to_server(self):
-        pass
+#     def push_to_server(self):
+#         pass
 
-    def poll_from_server(self):
-        pass
+#     def poll_from_server(self):
+#         pass
 
 
 class FlaskInterface:
-    # CHECK: This Func is not used
-    class Func:
-        def __init__(self, name, caller):
-            self.name = name
-            self.caller = caller
+    # # CHECK: This Func is not used
+    # class Func:
+    #     def __init__(self, name, caller):
+    #         self.name = name
+    #         self.caller = caller
 
-        def __call__(self):
-            Thread(target=self.caller).start()
-            print("Performing %s" % self.name)
+    #     def __call__(self):
+    #         Thread(target=self.caller).start()
+    #         print("Performing %s" % self.name)
 
-    def __init__(self, hostname, port, trainer, bare=False):
+    def __init__(self, hostname, port, trainer, bare=True):
         self.api_host = hostname
         self.api_port = port
         self.logger = None

@@ -4,5 +4,6 @@ from tests.setup import config
 
 config["uid"] = "demo_trainer"
 trainer = Trainer(**config)
-flask = interfaces.FlaskInterface("0.0.0.0", 30000, trainer, True)
+trainer._init_all()
+flask = interfaces.FlaskInterface("0.0.0.0", 20202, trainer, True)
 flask.start()

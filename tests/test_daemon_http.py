@@ -75,8 +75,13 @@ class DaemonHTTPTest(unittest.TestCase):
         self.assertTrue("task_id" in json.loads(response.content))
 
     @classmethod
+    def shutdown_daemon(cls, host):
+        response = requests.request("GET", host + "_shutdown", timeout=2)
+        return response
+
+    @classmethod
     def tearDownClass(cls):
-        requests.request("GET", cls.host + "_shutdown")
+        cls.shutdown_daemon(cls.host)
         if os.path.exists(cls.data_dir):
             shutil.rmtree(cls.data_dir)
 

@@ -249,7 +249,6 @@ class Daemon:
             with open(os.path.join(self._sessions[session_name]["path"], timestamp,
                                    "session_state"), "r") as f:
                 self._sessions[session_name]["sessions"][timestamp]["state"] = json.load(f)
-            print([(k, v.keys()) for k, v in self._sessions["meh_session"]["sessions"].items()])
 
     # TODO: log unloaded sessions
     def _unload_helper(self, name, time_str=None):

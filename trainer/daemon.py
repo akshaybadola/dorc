@@ -14,11 +14,13 @@ from multiprocessing import Process
 from flask import Flask, render_template, request, Response
 from flask_cors import CORS
 from werkzeug import serving
+import logging
 
 from .mods import Modules
 from .trainer import Trainer
 from .interfaces import FlaskInterface
 from .util import _dump
+from ._log import Log
 
 
 class Daemon:
@@ -40,12 +42,22 @@ class Daemon:
         self._task_id = 0
         self.__task_ids = []
         self._results = []
-
-        # FIXME: all the log functions should be created here
-        def print_func(x):
-            print(x)
-        self._modules = Modules(self.data_dir, print_func, print_func,
-                                print_func, print_func)
+        self._logger = logging.getLogger("daemon_logger")
+        log_file = os.path.join(self.data_dir, "logs")
+        formatter = logging.Formatter(datefmt='%Y/%m/%d %I:%M:%S %p', fmt='%(asctime)s %(message)s')
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        self._logger.addHandler(file_handler)
+        self._logger.setLevel(logging.DEBUG)
+        log = Log(self._logger)
+        self._logd = log._logd
+        self._loge = log._loge
+        self._logi = log._logi
+        self._logw = log._logw
+        self._modules = Modules(self.data_dir, self._logd, self._loge,
+                                self._logi, self._logw)
+        self._logi("Initialized Daemon")
 
     def _init_context(self):
         self.api_crt = "res/server.crt"
@@ -69,6 +81,7 @@ class Daemon:
             self._results.append(self._task_q.get())
 
     def _check_config(self, config):
+        self._logw(f"This is a placeholder function")
         # Need python file or module, that's it
         return True
 
@@ -104,8 +117,9 @@ class Daemon:
             return None
 
     # TODO: scan_sessions should be called at beginning and after that should
-    #       raise error unless testing
+    #       raise error (or atleast warn) unless testing
     def scan_sessions(self):
+        self._logd("Scanning Sessions")
         session_names = [x for x in os.listdir(self.data_dir) if
                          os.path.isdir(os.path.join(self.data_dir, x))]
         for s in session_names:
@@ -134,27 +148,34 @@ class Daemon:
                 os.mkdir(self._sessions[session_name]["path"])  # /sessions/funky_session
         time_str = datetime.datetime.now().isoformat()
         # Like: /sessions/funky_session/2020-02-17T10:53:06.458827
+        self._logd(f"Trying to create session {session_name}/{time_str}")
         data_dir = os.path.join(self._sessions[session_name]["path"], time_str)
         os.mkdir(data_dir)
         self._sessions[session_name]["sessions"][time_str] = {}
         self._create_trainer(task_id, session_name, time_str, data_dir, data["config"])
         with open(os.path.join(self._sessions[session_name]["path"], time_str,
                                "session_state")) as f:
+            self._logd(f"Loading sessions state")
             self._sessions[session_name]["sessions"][time_str]["state"] = json.load(f)
 
     def _create_trainer(self, task_id, name, time_str, data_dir, config, add=True):
+        self._logd(f"Trying to create trainer with data_dir {data_dir}")
         if add and self._check_config(config):
             try:
+                self._logd(f"Adding new config")
                 status, result = self._modules.add_config(data_dir, config)
                 if status:
                     trainer = Trainer(**{"data_dir": data_dir, **result})
                     trainer._init_all()
                 else:
+                    self._loge(f"Could not read config. {result}")
                     self._task_q.put((task_id, False, f"Could not read config. {result}"))
             except Exception as e:
+                self._loge(f"Exception occurred {e}")
                 self._task_q.put((task_id, False, f"{e}"))
         elif not add and self._check_config(config):
             try:
+                self._logd(f"Config already existed")
                 trainer = Trainer(**{"data_dir": data_dir, **config})
                 trainer._init_all()
                 port = self._find_open_port()
@@ -169,8 +190,10 @@ class Daemon:
                 p.start()
                 self._task_q.put((task_id, True))
             except Exception as e:
+                self._loge(f"Exception occurred {e}")
                 self._task_q.put((task_id, False, f"{e}"))
         else:
+            self._loge("Check failed on config")
             self._task_q.put((task_id, False, "Check failed on config"))
 
     def _refresh_state(self, session_key):
@@ -180,6 +203,7 @@ class Daemon:
             self._sessions[name]["sessions"][time_str]["state"] = json.load(f)
 
     def _unload_finished_session(self, session_key):
+        self._logd("Unloading finished session {session_key}")
         self._refresh_state(session_key)
         name, time_str = session_key.split("/")
         state = self._sessions[name]["sessions"][time_str]["state"]
@@ -187,12 +211,14 @@ class Daemon:
             self._unload_helper(name, time_str)
 
     def _refresh_all_loaded_sessions(self):
+        self._logd("Refreshing all loaded sessions' states")
         for name in self._sessions:
             for time_str, sess in self._sessions[name]["sessions"].items():
                 if "process" in sess:
                     self._refresh_state("/".join([name, time_str]))
 
     def load_unfinished_sessions(self):
+        self._logd("Loading Unfinished Sessions")
         for name, session in self._sessions.items():
             for sub_name, sub_sess in session["sessions"].items():
                 state = sub_sess["state"]
@@ -223,23 +249,26 @@ class Daemon:
 
     def load_session(self, task_id, data):
         """Loads a training session into memory"""
+        self._logd(f"Trying to load session {data['session_key']}")
         key = data["session_key"]
         session_name, timestamp = key.split("/")
         valid, error_str = self._check_session_valid(session_name, timestamp)
-        print(f"LOAD {data}")
         if not valid:
+            self._logd(f"Invalid session {data['session_key']}")
             self._task_q.put((task_id, valid, error_str))
         else:
             data_dir = os.path.join(self.data_dir, key)
             config_candidates = [x for x in os.listdir(data_dir)
                                  if "session_config" in x]
             if not len(config_candidates) == 1:
+                self._logd(f"Error. More than one config detected for {data['session_key']}")
                 self._task_q.put((task_id, False, f"Error. More than one config detected"))
             else:
                 # CHECK: How to resolve multiple entries in sys.path having same
                 #        module names Currently I remove dir from sys.path after
                 #        loading.  Not sure if it'll work correctly.
                 # NOTE: I think it's not really causing an issue.
+                self._logd(f"Checks passed. Creating session {session_name}/{timestamp}")
                 if data_dir not in sys.path:
                     sys.path.append(data_dir)
                 from session_config import config
@@ -249,11 +278,10 @@ class Daemon:
             with open(os.path.join(self._sessions[session_name]["path"], timestamp,
                                    "session_state"), "r") as f:
                 self._sessions[session_name]["sessions"][timestamp]["state"] = json.load(f)
-            print([(k, v.keys()) for k, v in self._sessions["meh_session"]["sessions"].items()])
 
-    # TODO: log unloaded sessions
     def _unload_helper(self, name, time_str=None):
         def _unload(name, time_str):
+            self._logd(f"Unloading {name}/{time_str}")
             if "process" in self._sessions[name]["sessions"][time_str]:
                 self._sessions[name]["sessions"][time_str]["process"].terminate()
                 self._sessions[name]["sessions"][time_str].pop("process")
@@ -272,36 +300,44 @@ class Daemon:
             _unload(name, time_str)
 
     def _purge_helper(self, task_id, name, time_str):
+        self._logd(f"Purging {name}/{time_str}")
         try:
             self._unload_helper(name, time_str)
             shutil.rmtree(os.path.join(self.data_dir, name, time_str))
             self._sessions[name]["sessions"].pop(time_str)
             self._task_q.put((task_id, True, f"Purged session {name}/{time_str}"))
         except Exception as e:
+            self._logd(f"Exceptioni occurred {e}")
             self._task_q.put((task_id, False, f"{e}"))
 
     def unload_session(self, task_id, data):
         """Unloads a training session from memory"""
-        print("DATA Unload session", data)
         if "session_key" in data:
+            self._logd(f"Trying to Unload session {data['session_key']}")
             session_name, timestamp = data["session_key"].split("/")
             valid, error_str = self._check_session_valid(session_name, timestamp)
             if not valid:
+                self._logd(f"Invalid session {data['session_key']}")
                 self._task_q.put((task_id, valid, error_str))
             else:
                 try:
+                    self._logd(f"Ok to unload session {data['session_key']}")
                     self._unload_helper(session_name, timestamp)
                     self._task_q.put((task_id, True, f"Unloaded session {data['session_key']}"))
                 except Exception as e:
+                    self._logd(f"Exception occurred {e}")
                     self._task_q.put((task_id, False, f"{e}"))
         elif "session_name" in data:
+            self._logd(f"Trying to unload all sessions of {data['session_name']}")
             session = data["session_name"]
             try:
                 self._unload_helper(session)
                 self._task_q.put((task_id, True, f"Unloaded all sessions for {session_name}"))
             except Exception as e:
+                self._logd(f"Exception occurred {e}")
                 self._task_q.put((task_id, False, f"{e}"))
         else:
+            self._logd(f"Incorrect data format given")
             self._task_q.put((task_id, False, "Incorrect data format"))
 
     def compare_sessions(self):
@@ -309,17 +345,22 @@ class Daemon:
 
     def purge_session(self, task_id, data):
         """Unloads the session and removes it from disk"""
+        self._logd(f"Trying to purge session {data['session_key']}")
         if "session_key" in data:
             session_name, timestamp = data["session_key"].split("/")
             valid, error_str = self._check_session_valid(session_name, timestamp)
             if not valid:
+                self._logd(f"Invalid session {data['session_key']}")
                 self._task_q.put((task_id, valid, error_str))
             else:
                 try:
+                    self._logd(f"Ok to purge session {data['session_key']}")
                     self._purge_helper(task_id, session_name, timestamp)
                 except Exception as e:
+                    self._logd(f"Exception occurred {e}")
                     self._task_q.put((task_id, False, f"{e}"))
         else:
+            self._logd(f"Incorrect data format given")
             self._task_q.put((task_id, False, "Incorrect data format"))
 
     @property
@@ -338,6 +379,7 @@ class Daemon:
         return _dump(retval)
 
     def start(self):
+        self._logi("Initializing Server on {self.hostname}:{self.port}")
         self.scan_sessions()
         self.load_unfinished_sessions()
 

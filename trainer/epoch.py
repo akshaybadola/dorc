@@ -1,5 +1,6 @@
 import time
 import numpy as np
+from queue import Queue
 from functools import partial
 from abc import ABC, abstractmethod
 from multiprocessing import Process, Queue
@@ -320,10 +321,30 @@ class EpochLoop(LoopTaskWithHooks):
         super().__init__(func, signals, data_iterator, hooks)
         self.device_mon = device_mon
         self._aborted = Event()
+        self._data_q = Queue()
+        self._iter_finished = False
+        self._data_thread = Thread(target=self._fetch_data)
+        self._data_thread.start()
 
     def _run_hooks(self, **kwargs):
         for hook in self._hooks:
             hook(**kwargs)
+
+    def _fetch_data(self):
+        data_iter = self.data_iterator.__iter__()
+        while True:
+            self.signals.paused.wait()  # wait if paused
+            start = time.time()
+            try:
+                batch = data_iter.__next__()
+                if batch is None or not self.running:
+                    self._iter_finished = True
+                    break
+            except StopIteration as e:
+                self._iter_finished = True
+                break
+            batch_time = time.time() - start
+            self._data_q.put([batch_time, batch])
 
     def run_task(self, **kwargs):
         self._init = False
@@ -332,11 +353,12 @@ class EpochLoop(LoopTaskWithHooks):
         self.signals.paused.wait()  # wait if paused
         self._toggle_waiting()
         try:
-            for i in range(len(self.data_iterator)):
-                print("RUNNING", self.running, self.waiting, self.signals.paused.is_set())
-                start = time.time()
-                x = self.data_iterator.__iter__().__next__()
-                batch_time = time.time() - start
+            while not self._iter_finished or not self._data_q.empty():
+                # print("RUNNING", self.running, self.waiting, self.signals.paused.is_set())
+                # start = time.time()
+                # x = self.data_iterator.__iter__().__next__()
+                # batch_time = time.time() - start
+                batch_time, x = self._data_q.get()
                 if not x:
                     print("not x")
                     break

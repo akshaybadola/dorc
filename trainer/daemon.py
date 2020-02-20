@@ -28,7 +28,8 @@ class Daemon:
         self.hostname = hostname
         self.port = port
         self.data_dir = data_dir
-        self.logger = None
+        if not os.path.exists(self.data_dir):
+            os.mkdir(self.data_dir)
         self.app = Flask(__name__)
         CORS(self.app)
         self.app.config['TEMPLATES_AUTO_RELOAD'] = True
@@ -473,7 +474,6 @@ class Daemon:
 
         @atexit.register
         def unload_all():
-            print("SELF RESULTS", self._results)
             for k in self._sessions:
                 self._unload_helper(k)
 
@@ -511,8 +511,6 @@ def create_daemon(test=False, params=None):
     else:
         for p in params:
             args.__dict__[p] = params[p]
-    if not os.path.exists(args.data_dir):
-        os.mkdir(args.data_dir)
     daemon = Daemon(args.hostname, args.port, args.data_dir)
     return daemon
 

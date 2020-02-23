@@ -24,6 +24,8 @@ from ._log import Log
 
 
 class Daemon:
+    version = "0.1.0"
+
     def __init__(self, hostname, port, data_dir):
         self.hostname = hostname
         self.port = port
@@ -457,6 +459,10 @@ class Daemon:
                     return _dump({"task_id": result[0], "message": result[2]})
                 else:
                     return _dump(result)
+
+        @self.app.route("/_version", methods=["GET"])
+        def __version():
+            return _dump(self.version)
 
         @self.app.route("/_shutdown", methods=["GET"])
         def __shutdown_server():

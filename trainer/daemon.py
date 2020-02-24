@@ -2,6 +2,7 @@ import os
 import sys
 import ssl
 import json
+import time
 import socket
 import shutil
 import atexit
@@ -11,7 +12,7 @@ import configparser
 from queue import Queue
 from threading import Thread
 from multiprocessing import Process
-from flask import Flask, render_template, request, Response
+from flask import Flask, render_template, url_for, redirect, request
 from flask_cors import CORS
 from werkzeug import serving
 import logging
@@ -32,7 +33,11 @@ class Daemon:
         self.data_dir = data_dir
         if not os.path.exists(self.data_dir):
             os.mkdir(self.data_dir)
-        self.app = Flask(__name__)
+        self._template_dir = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "templates")
+        self._static_dir = os.path.join(self._template_dir, "static")
+        self.app = Flask(__name__, static_folder=self._static_dir,
+                         template_folder=self._template_dir)
         CORS(self.app)
         self.app.config['TEMPLATES_AUTO_RELOAD'] = True
         self.use_https = False
@@ -119,6 +124,14 @@ class Daemon:
         else:
             return None
 
+    def _wait_for_task(self, func, task_id, args):
+        func(task_id, *args)
+        result = self._check_result(task_id)
+        while result is None:
+            time.sleep(1)
+            result = self._check_result(task_id)
+        return result[1]
+
     # TODO: scan_sessions should be called at beginning and after that should
     #       raise error (or atleast warn) unless testing
     def scan_sessions(self):
@@ -155,11 +168,18 @@ class Daemon:
         data_dir = os.path.join(self._sessions[session_name]["path"], time_str)
         os.mkdir(data_dir)
         self._sessions[session_name]["sessions"][time_str] = {}
-        self._create_trainer(task_id, session_name, time_str, data_dir, data["config"])
-        with open(os.path.join(self._sessions[session_name]["path"], time_str,
-                               "session_state")) as f:
-            self._logd(f"Loading sessions state")
-            self._sessions[session_name]["sessions"][time_str]["state"] = json.load(f)
+        if self._wait_for_task(self._create_trainer, task_id,
+                               args=[session_name, time_str, data_dir,
+                                     data["config"]]):
+            # self._create_trainer(task_id, session_name, time_str, data_dir, data["config"])
+            with open(os.path.join(self._sessions[session_name]["path"], time_str,
+                                   "session_state")) as f:
+                self._logd(f"Loading sessions state")
+                self._sessions[session_name]["sessions"][time_str]["state"] = json.load(f)
+        else:
+            self._loge(f"Failed task {task_id}. Cleaning up")
+            self._sessions[session_name]["sessions"].pop(time_str)
+            shutil.rmtree(data_dir)
 
     def _create_trainer(self, task_id, name, time_str, data_dir, config, add=True):
         self._logd(f"Trying to create trainer with data_dir {data_dir}")
@@ -378,7 +398,7 @@ class Daemon:
                 retval[key]["loaded"] = "process" in session
                 retval[key]["port"] = session["port"] if retval[key]["loaded"] else None
                 retval[key]["state"] = session["state"]
-                retval[key]["finished"] = session["state"]
+                retval[key]["finished"] = self._check_session_finished(session["state"])
         return _dump(retval)
 
     def start(self):
@@ -392,7 +412,7 @@ class Daemon:
             state. Rest of the communication can be done with session"""
             return self._sessions_list
 
-        @self.app.route("/new_session", methods=["POST"])
+        @self.app.route("/create_session", methods=["POST"])
         def __new_session():
             # TODO:
             # - Creates a new session with given data
@@ -402,7 +422,7 @@ class Daemon:
                 return _dump([False, "Name not in request"])
             else:
                 try:
-                    data = request.form["name"]
+                    data = json.loads(request.form["name"])
                     file_bytes = request.files["file"].read()
                 except Exception as e:
                     return _dump([False, f"{e}"])
@@ -463,6 +483,16 @@ class Daemon:
         @self.app.route("/_version", methods=["GET"])
         def __version():
             return _dump(self.version)
+
+        @self.app.route("/login", methods=["GET", "POST"])
+        def __login():
+            error = None
+            if request.method == "POST":
+                if request.form["username"] != "admin" or request.form["password"] != "admin":
+                    error = "Invalid Credentials. Please try again."
+                else:
+                    return redirect(url_for("home"))
+            return render_template("login.html", error=error)
 
         @self.app.route("/_shutdown", methods=["GET"])
         def __shutdown_server():

@@ -37,6 +37,13 @@ class ClassificationTrainStep:
 
     def __call__(self, models, criteria, batch):
         model = models[self._model_name]
+        # generator = models["generator"]
+        # discriminator = models["discriminator"]
+        # crit_gan = criteria["crit_gan"]
+        # crit_disc = criteria["crit_disc"]
+        # x = torch.randn(100)
+        # gen = generator(x)
+        # crit
         inputs, labels = batch
         inputs = model.to_(inputs)
         labels = model.to_(labels)

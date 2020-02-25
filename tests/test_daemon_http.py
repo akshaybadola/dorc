@@ -33,14 +33,16 @@ class DaemonHTTPTest(unittest.TestCase):
         data = {}
         data["name"] = "meh_session"
         with open("_setup.py", "rb") as f:
-            response = requests.request("POST", self.host + "new_session",
+            response = requests.request("POST", self.host + "create_session",
                                         files={"file": f},
-                                        data={"name": "meh_session"})
+                                        data={"name": json.dumps("meh_session")})
+            print(response.content)
         time.sleep(1)
         with open("_setup.py", "rb") as f:
-            response = requests.request("POST", self.host + "new_session",
+            response = requests.request("POST", self.host + "create_session",
                                         files={"file": f},
-                                        data={"name": "meh_session"})
+                                        data={"name": json.dumps("meh_session")})
+            print(response.content)
         time.sleep(1)
         response = requests.request("GET", self.host + "sessions")
         self.assertIsInstance(json.loads(response.content), dict)

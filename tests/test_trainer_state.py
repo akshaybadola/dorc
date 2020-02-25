@@ -4,7 +4,7 @@ from datetime import datetime
 import unittest
 import sys
 import time
-from setup import config
+from _setup import config
 import torch
 sys.path.append("../")
 from trainer.trainer import Trainer

@@ -63,13 +63,13 @@ module_exports = {"A": A, "B": B, "f": f, "g": g}
         # 2. file python file but loading error
         with open(self.fnames["a"], "rb") as f:
             meh = f.read()
-        status, result = self._modules._load_python_file(meh, [], "_meh.py",
-                                                         "from _meh import module_exports",
+        status, result = self._modules._load_python_file(meh, [], "_meh_a.py",
+                                                         "from _meh_a import module_exports",
                                                          "module_exports")
         self.assertTrue(status)
         self.assertTrue("cls" in result)
         self.assertTrue("f" in result)
-        os.remove("_meh.py")
+        os.remove("_meh_a.py")
 
     def test_load_zip_file(self):
         # TODO: check zip file loading and errors

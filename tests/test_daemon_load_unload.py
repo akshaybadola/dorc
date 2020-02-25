@@ -33,15 +33,15 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
         data["name"] = "meh_session"
         responses = []
         with open("_setup.py", "rb") as f:
-            response = requests.request("POST", self.host + "new_session",
+            response = requests.request("POST", self.host + "create_session",
                                         files={"file": f},
-                                        data={"name": "meh_session"})
+                                        data={"name": json.dumps("meh_session")})
             responses.append(response)
         time.sleep(1)
         with open("_setup.py", "rb") as f:
-            response = requests.request("POST", self.host + "new_session",
+            response = requests.request("POST", self.host + "create_session",
                                         files={"file": f},
-                                        data={"name": "meh_session"})
+                                        data={"name": json.dumps("meh_session")})
             responses.append(response)
         time.sleep(1)
         response = requests.request("GET", self.host + "sessions")

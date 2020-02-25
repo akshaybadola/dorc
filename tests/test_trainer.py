@@ -3,7 +3,7 @@ import shutil
 from datetime import datetime
 import unittest
 import sys
-from setup import config
+from _setup import config
 sys.path.append("../")
 from trainer.trainer import Trainer
 

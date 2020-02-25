@@ -190,6 +190,7 @@ class Daemon:
                 if status:
                     trainer = Trainer(**{"data_dir": data_dir, **result})
                     trainer._init_all()
+                    self._task_q.put((task_id, True))
                 else:
                     self._loge(f"Could not read config. {result}")
                     self._task_q.put((task_id, False, f"Could not read config. {result}"))
@@ -226,7 +227,7 @@ class Daemon:
             self._sessions[name]["sessions"][time_str]["state"] = json.load(f)
 
     def _unload_finished_session(self, session_key):
-        self._logd("Unloading finished session {session_key}")
+        self._logd(f"Unloading finished session {session_key}")
         self._refresh_state(session_key)
         name, time_str = session_key.split("/")
         state = self._sessions[name]["sessions"][time_str]["state"]
@@ -402,7 +403,7 @@ class Daemon:
         return _dump(retval)
 
     def start(self):
-        self._logi("Initializing Server on {self.hostname}:{self.port}")
+        self._logi(f"Initializing Server on {self.hostname}:{self.port}")
         self.scan_sessions()
         self.load_unfinished_sessions()
 

@@ -434,7 +434,10 @@ class Daemon:
 
         @self.app.route("/load_session", methods=["POST"])
         def __load_session():
-            data = json.loads(request.json)
+            if isinstance(request.json, dict):
+                data = request.json
+            else:
+                data = json.loads(request.json)
             if "session_key" not in data:
                 return _dump(f"Invalid data {data}")
             else:
@@ -443,7 +446,10 @@ class Daemon:
 
         @self.app.route("/unload_session", methods=["POST"])
         def __unload_session():
-            data = json.loads(request.json)
+            if isinstance(request.json, dict):
+                data = request.json
+            else:
+                data = json.loads(request.json)
             if not ("session_key" in data or "session_name" in data):
                 return _dump(f"Invalid data {data}")
             else:
@@ -454,7 +460,10 @@ class Daemon:
         # TODO: Fix design issues. Should only return return json, not "False, json"
         @self.app.route("/purge_session", methods=["POST"])
         def __purge_session():
-            data = json.loads(request.json)
+            if isinstance(request.json, dict):
+                data = request.json
+            else:
+                data = json.loads(request.json)
             if "session_key" not in data:
                 return _dump(f"Invalid data {data}")
             else:
@@ -472,12 +481,14 @@ class Daemon:
             else:
                 result = self._check_result(task_id)
             if result is None:
-                return _dump({"task_id": task_id, "message": "Not yet processed"})
+                return _dump({"task_id": task_id, "result": 0, "message": "Not yet processed"})
             else:
                 if len(result) == 2:
-                    return _dump({"task_id": result[0], "message": "Successful"})
-                elif len(result) == 3:
-                    return _dump({"task_id": result[0], "message": result[2]})
+                    return _dump({"task_id": result[0], "result": True, "message": "Successful"})
+                elif len(result) == 3 and result[1]:
+                    return _dump({"task_id": result[0], "result": True, "message": result[2]})
+                elif len(result) == 3 and not result[1]:
+                    return _dump({"task_id": result[0], "result": False, "message": result[2]})
                 else:
                     return _dump(result)
 

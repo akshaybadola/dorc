@@ -1,10 +1,10 @@
 import os
-import shutil
-import unittest
 import sys
-import requests
 import time
 import json
+import shutil
+import requests
+import unittest
 sys.path.append("../")
 from trainer.daemon import _start_daemon
 

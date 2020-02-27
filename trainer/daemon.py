@@ -5,20 +5,22 @@ import json
 import time
 import socket
 import shutil
+import shlex
 import atexit
 import argparse
 import datetime
 import configparser
 from queue import Queue
 from threading import Thread
-from multiprocessing import Process
+import multiprocessing as mp
+from subprocess import Popen, PIPE
 from flask import Flask, render_template, url_for, redirect, request
 from flask_cors import CORS
 from werkzeug import serving
 import logging
 
 from .mods import Modules
-from .trainer import Trainer
+# from .trainer import Trainer
 from .interfaces import FlaskInterface
 from .util import _dump
 from ._log import Log
@@ -28,6 +30,7 @@ class Daemon:
     version = "0.1.0"
 
     def __init__(self, hostname, port, data_dir):
+        self.ctx = mp.get_context("spawn")
         self.hostname = hostname
         self.port = port
         self.data_dir = data_dir
@@ -181,15 +184,20 @@ class Daemon:
             self._sessions[session_name]["sessions"].pop(time_str)
             shutil.rmtree(data_dir)
 
-    def _create_trainer(self, task_id, name, time_str, data_dir, config, add=True):
+    # NOTE: Only load_session sends add=False to _create_trainer
+    # NOTE: `add` Changed to `load`
+    def _create_trainer(self, task_id, name, time_str, data_dir, config, load=False):
         self._logd(f"Trying to create trainer with data_dir {data_dir}")
-        if add and self._check_config(config):
+        if not load and self._check_config(config):  # create but don't load
             try:
                 self._logd(f"Adding new config")
-                status, result = self._modules.add_config(data_dir, config)
+                iface = FlaskInterface(None, None, data_dir)
+                status, result = iface.check_config(config)
+                del iface
+                # status, result = self._modules.add_config(data_dir, config)
                 if status:
-                    trainer = Trainer(**{"data_dir": data_dir, **result})
-                    trainer._init_all()
+                    # trainer = Trainer(**{"data_dir": data_dir, **result})
+                    # trainer._init_all()
                     self._task_q.put((task_id, True))
                 else:
                     self._loge(f"Could not read config. {result}")
@@ -197,21 +205,33 @@ class Daemon:
             except Exception as e:
                 self._loge(f"Exception occurred {e}")
                 self._task_q.put((task_id, False, f"{e}"))
-        elif not add and self._check_config(config):
+        elif load and self._check_config(config):  # create and load
             try:
                 self._logd(f"Config already existed")
-                trainer = Trainer(**{"data_dir": data_dir, **config})
-                trainer._init_all()
+                # trainer = Trainer(**{"data_dir": data_dir, **config})
+                # trainer._init_all()
+                # config["trainer_params"]["gpus"] = "1"
+                # config["trainer_params"]["cuda"] = True
+                # config["dataloader_params"]["train"]["pin_memory"] = False
+                # config["dataloader_params"]["test"]["pin_memory"] = False
                 port = self._find_open_port()
-                iface = FlaskInterface(self.hostname, port, trainer)
+                # iface = FlaskInterface(self.hostname, port, {"data_dir": data_dir, **config})
                 self._sessions[name]["sessions"][time_str]["config"] = config
-                self._sessions[name]["sessions"][time_str]["trainer"] = trainer
+                # self._sessions[name]["sessions"][time_str]["trainer"] = trainer
                 self._sessions[name]["sessions"][time_str]["port"] = port
-                self._sessions[name]["sessions"][time_str]["iface"] = iface
+                # self._sessions[name]["sessions"][time_str]["iface"] = iface
                 self._sessions[name]["sessions"][time_str]["data_dir"] = data_dir
-                p = Process(target=iface.start)
+                cmd = f"python if_run.py {self.hostname} {port} {data_dir}"
+                cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                print("CMD", cmd, cwd)
+                p = Popen(shlex.split(cmd),
+                          env=os.environ,
+                          cwd=cwd)
+                print("CMD 2", cmd, cwd)
+                # p = self.ctx.Process(target=FlaskInterface, args=[self.hostname, port, data_dir])
                 self._sessions[name]["sessions"][time_str]["process"] = p
-                p.start()
+                Thread(target=p.communicate).start()
+                print("Popen?", type(p))
                 self._task_q.put((task_id, True))
             except Exception as e:
                 self._loge(f"Exception occurred {e}")
@@ -293,12 +313,8 @@ class Daemon:
                 #        loading.  Not sure if it'll work correctly.
                 # NOTE: I think it's not really causing an issue.
                 self._logd(f"Checks passed. Creating session {session_name}/{timestamp}")
-                if data_dir not in sys.path:
-                    sys.path.append(data_dir)
-                from session_config import config
-                sys.path.remove(data_dir)
             self._sessions[session_name]["sessions"][timestamp] = {}
-            self._create_trainer(task_id, session_name, timestamp, data_dir, config, False)
+            self._create_trainer(task_id, session_name, timestamp, data_dir, None, True)
             with open(os.path.join(self._sessions[session_name]["path"], timestamp,
                                    "session_state"), "r") as f:
                 self._sessions[session_name]["sessions"][timestamp]["state"] = json.load(f)
@@ -309,9 +325,9 @@ class Daemon:
             if "process" in self._sessions[name]["sessions"][time_str]:
                 self._sessions[name]["sessions"][time_str]["process"].terminate()
                 self._sessions[name]["sessions"][time_str].pop("process")
-            self._sessions[name]["sessions"][time_str]["trainer"] = None
+            # self._sessions[name]["sessions"][time_str]["trainer"] = None
             self._sessions[name]["sessions"][time_str]["config"] = None
-            self._sessions[name]["sessions"][time_str].pop("trainer")
+            # self._sessions[name]["sessions"][time_str].pop("trainer")
             self._sessions[name]["sessions"][time_str].pop("config")
             if "port" in self._sessions[name]["sessions"][time_str]:
                 self._sessions[name]["sessions"][time_str].pop("port")

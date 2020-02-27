@@ -1,85 +1,39 @@
+import os
 import sys
 import ssl
-# import json
-# from threading import Thread
+import atexit
+import logging
 from functools import partial
 
-# from time import sleep
 from flask import Flask, render_template, request, Response
 from flask_cors import CORS
 from werkzeug import serving
 
 from .util import _dump
-
-
-# class AWSInterface:
-#     def __init__(self):
-#         self.counter = 0
-
-#     def fetch_from_sqs(self, sqs_queue, shared_queue):
-#         self.logger.info("Initializing polling thread")
-#         message = True
-#         while True:
-#             message = sqs_queue.receive_messages()
-#             sleep(1.01)
-#             if message:
-#                 self.logger.info("Received %s" % str(message[0].body))
-#                 if isinstance(message[0].body, str):
-#                     shared_queue.put(json.loads(message[0].body.replace("'", '"')))
-#                 elif isinstance(message[0].body, dict):
-#                     shared_queue.put(message[0].body)
-#                 message[0].delete()  # easier maybe
-#             else:
-#                 self.logger.info("Received nothing")
-
-#     def push_to_sqs(self, sqs_queue, message, group=None):
-#         self.counter += 1
-#         response = sqs_queue.send_message(MessageBody=json.dumps(message),
-#                                           MessageDeduplicationId=str(self.counter),
-#                                           MessageGroupId=str(group))
-#         self.logger.info("Pushed to queue with result %s" % response)
-
-#     def fetch_from_s3(self, bucket, key, filename):
-#         try:
-#             bucket.download_file(Key=key, Filename=filename)
-#             self.logger.debug("Downloaded file from %s to %s" % (key, filename))
-#             return True
-#         except Exception as e:
-#             self.logger.error(str(e))
-#             return False
-
-#     def push_to_s3(self, bucket, data):
-#         pass
-
-
-# class HTTPInterface:
-#     def __init__(self, hostname, port):
-#         self.hostname = hostname
-#         self.port = port
-
-#     def push_to_server(self):
-#         pass
-
-#     def poll_from_server(self):
-#         pass
+from .trainer import Trainer
+from .mods import Modules
+from ._log import Log
 
 
 class FlaskInterface:
-    # # CHECK: This Func is not used
-    # class Func:
-    #     def __init__(self, name, caller):
-    #         self.name = name
-    #         self.caller = caller
+    """Flask Interface to the trainer, to create, destroy and control the
+    trainer. Everything's communicated as JSON.
+    """
 
-    #     def __call__(self):
-    #         Thread(target=self.caller).start()
-    #         print("Performing %s" % self.name)
+    def __init__(self, hostname, port, data_dir, bare=True):
+        """
+        :param hostname: :class:`str` host over which to serve
+        :param port: :class:`int` port over which to serve
+        :param trainer: :class:`trainer.Trainer` instance
+        :param bare: `deprecated` whether to server html files or not
+        :returns: None
+        :rtype: None
 
-    def __init__(self, hostname, port, trainer, bare=True):
+        """
         self.api_host = hostname
         self.api_port = port
         self.logger = None
-        self.trainer = trainer
+        self.data_dir = data_dir
         self.bare = bare
         self.app = Flask(__name__)
         CORS(self.app)
@@ -87,6 +41,39 @@ class FlaskInterface:
         self.use_https = False
         self.verify_user = True
         self._init_context()
+        self._logger = logging.getLogger("trainer_logger")
+        log_file = os.path.join(self.data_dir, "trainer_logger")
+        formatter = logging.Formatter(datefmt='%Y/%m/%d %I:%M:%S %p', fmt='%(asctime)s %(message)s')
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        self._logger.addHandler(file_handler)
+        self._logger.setLevel(logging.DEBUG)
+        log = Log(self._logger)
+        self._logd = log._logd
+        self._loge = log._loge
+        self._logi = log._logi
+        self._logw = log._logw
+        self._modules = Modules(self.data_dir, self._logd, self._loge,
+                                self._logi, self._logw)
+        if self.api_host and self.api_port:
+            self.create_trainer()
+            self.start()
+
+    def create_trainer(self):
+        if self.data_dir not in sys.path:
+            sys.path.append(self.data_dir)
+        from session_config import config
+        sys.path.remove(self.data_dir)
+        self.trainer = Trainer(**{"data_dir": self.data_dir, **config})
+        self.trainer._init_all()
+
+    def check_config(self, config):
+        status, result = self._modules.add_config(self.data_dir, config)
+        if status:
+            return status, None
+        else:
+            return status, result
 
     # TODO: I might have to give the names for various thingies while generating
     #       certificates for it to work correctly.
@@ -158,6 +145,10 @@ class FlaskInterface:
             return Response(status=405)
 
     def start(self):
+        @atexit.register
+        def kill_trainer():
+            print("AT EXIT, kill trainer process")
+
         if not self.bare:
             @self.app.route('/')
             def __index():
@@ -172,26 +163,29 @@ class FlaskInterface:
         def __props():
             return _dump(self.trainer.props)
 
+        @self.app.route("/_shutdown", methods=["GET"])
+        def __shutdown_server():
+            func = request.environ.get('werkzeug.server.shutdown')
+            func()
+            return "Shutting down"
+
         # # TODO: This should be a loop over add_rule like controls
         # # TODO: Type check, with types allowed in {"bool", "int", "float", "string", "list[type]"}
         # #       one level depth check
-        # # @self.app.route('/_extras/call_adhoc_run', methods=["POST"])
-        # def __call_adhoc_run():
-        #     error_dict = {"required_atleast_[split]": ["train", "val", "test"],
-        #                   "required_for_[split]": {"metrics": "[list[string]]_which_metrics",
-        #                                            "epoch": "[int|string]_which_epoch",
-        #                                            "fraction": "[float]_fraction_of_dataset"}}
         @self.app.route("/destroy", methods=["GET"])
         def __destroy():
-            self.logger.info("Destroying")
-            self.logger.info("Does nothing for now")
+            self._logi("Destroying")
+            self._logi("Does nothing for now")
 
-        for x, y in self.trainer.controls.items():
-            self.app.add_url_rule("/" + x, x, partial(self.trainer_control, x))
+        # NOTE: Props
         for x in self.trainer.props:
             self.app.add_url_rule("/" + "props/" + x, x, partial(self.trainer_props, x))
 
-        # Adding extras
+        # NOTE: Controls
+        for x, y in self.trainer.controls.items():
+            self.app.add_url_rule("/" + x, x, partial(self.trainer_control, x))
+
+        # NOTE: Adding extras
         for x, y in self.trainer._extras.items():
             if "GET" in y.__http_methods__:
                 self.app.add_url_rule("/_extras/" + x, x, partial(self.trainer_get, x),
@@ -200,7 +194,7 @@ class FlaskInterface:
                 self.app.add_url_rule("/_extras/" + x, x, partial(self.trainer_post, x),
                                       methods=["POST"])
 
-        # Adding helpers
+        # NOTE: Adding helpers
         for x, y in self.trainer._helpers.items():
             methods = []
             if "POST" in y.__http_methods__:

@@ -181,7 +181,37 @@ class Daemon:
             self._sessions[session_name]["sessions"].pop(time_str)
             shutil.rmtree(data_dir)
 
-    def _create_trainer(self, task_id, name, time_str, data_dir, config, add=True):
+    def _create_trainer(self, task_id, name, time_str, data_dir, config, load=None):
+        self._logd(f"Trying to create trainer with data_dir {data_dir}")
+        try:
+            status, result = self._modules.add_config(data_dir, config)
+            if status:
+                print("YES STATUS")
+                print(config)
+                trainer = Trainer(**{"data_dir": data_dir, **result})
+                print("BUT NOT GET HERE")
+                trainer._init_all()
+            else:
+                self._loge(f"Could not read config. {result}")
+                self._task_q.put((task_id, False, f"Could not read config. {result}"))
+                return
+            print("HERE")
+            port = self._find_open_port()
+            iface = FlaskInterface(self.hostname, port, trainer)
+            self._sessions[name]["sessions"][time_str]["config"] = result
+            self._sessions[name]["sessions"][time_str]["trainer"] = trainer
+            self._sessions[name]["sessions"][time_str]["port"] = port
+            self._sessions[name]["sessions"][time_str]["iface"] = iface
+            self._sessions[name]["sessions"][time_str]["data_dir"] = data_dir
+            p = Process(target=iface.start)
+            self._sessions[name]["sessions"][time_str]["process"] = p
+            Thread(target=p.start).start()
+            self._task_q.put((task_id, True))
+        except Exception as e:
+            self._loge(f"Exception occurred {e}")
+            self._task_q.put((task_id, False, f"{e}"))
+
+    def _create_trainer_bak(self, task_id, name, time_str, data_dir, config, add=True):
         self._logd(f"Trying to create trainer with data_dir {data_dir}")
         if add and self._check_config(config):
             try:

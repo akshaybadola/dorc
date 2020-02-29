@@ -510,6 +510,10 @@ class Daemon:
                     return redirect(url_for("home"))
             return render_template("login.html", error=error)
 
+        @self.app.route("/_ping", methods=["GET"])
+        def __ping():
+            return "pong"
+
         @self.app.route("/_shutdown", methods=["GET"])
         def __shutdown_server():
             func = request.environ.get('werkzeug.server.shutdown')

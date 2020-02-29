@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from threading import Thread, Event
 import time
 sys.path.append("../")
-from trainer.epoch import DiscreteTask, LoopTask
+from trainer.task import DiscreteTask, LoopTask
 
 
 class TaskTest(unittest.TestCase):

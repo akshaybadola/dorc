@@ -208,30 +208,18 @@ class Daemon:
         elif load and self._check_config(config):  # create and load
             try:
                 self._logd(f"Config already existed")
-                # trainer = Trainer(**{"data_dir": data_dir, **config})
-                # trainer._init_all()
-                # config["trainer_params"]["gpus"] = "1"
-                # config["trainer_params"]["cuda"] = True
-                # config["dataloader_params"]["train"]["pin_memory"] = False
-                # config["dataloader_params"]["test"]["pin_memory"] = False
                 port = self._find_open_port()
-                # iface = FlaskInterface(self.hostname, port, {"data_dir": data_dir, **config})
                 self._sessions[name]["sessions"][time_str]["config"] = config
-                # self._sessions[name]["sessions"][time_str]["trainer"] = trainer
                 self._sessions[name]["sessions"][time_str]["port"] = port
-                # self._sessions[name]["sessions"][time_str]["iface"] = iface
                 self._sessions[name]["sessions"][time_str]["data_dir"] = data_dir
                 cmd = f"python if_run.py {self.hostname} {port} {data_dir}"
                 cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                print("CMD", cmd, cwd)
-                p = Popen(shlex.split(cmd),
-                          env=os.environ,
-                          cwd=cwd)
-                print("CMD 2", cmd, cwd)
-                # p = self.ctx.Process(target=FlaskInterface, args=[self.hostname, port, data_dir])
+                # print("CMD", cmd, cwd)
+                p = Popen(shlex.split(cmd), env=os.environ, cwd=cwd)
+                # print("CMD 2", cmd, cwd)
                 self._sessions[name]["sessions"][time_str]["process"] = p
                 Thread(target=p.communicate).start()
-                print("Popen?", type(p))
+                # print("Popen?", type(p))
                 self._task_q.put((task_id, True))
             except Exception as e:
                 self._loge(f"Exception occurred {e}")

@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from torch.utils.data import Dataset, DataLoader
 
 from .device import init_nvml, gpu_util, cpu_info, memory_info, DeviceMonitor
-from .util import get_backup_num, gen_file_and_stream_logger, deprecated
+from .util import gen_file_and_stream_logger, deprecated
 from .epoch import Epoch
 from .mods import Modules as Modules
 from .overrides import MyDataLoader, default_tensorify
@@ -290,11 +290,10 @@ class Trainer:
         """Initialize default state variables.
         `epoch` always remains 0 if training only with iterations and
         `self._iterations` increase.
-        
+
         post_epoch_hooks are run after a specified number of iterations which is
         `self._hooks_run_iter_frequency`
 
-        
         :returns: None
         :rtype: None
 
@@ -612,8 +611,8 @@ class Trainer:
                                   "user": "user"}
         # FIXME: For val and test maybe update in separate variables
         self._task_callbacks = {"main": self._run_post_epoch_hooks,
-                                 "adhoc": None,
-                                 "user": None}
+                                "adhoc": None,
+                                "user": None}
 
     def _task_runner_helper(self, which):
         device_monitor = DeviceMonitor(self._device_handles)
@@ -1100,8 +1099,8 @@ class Trainer:
         paused? In the middle of current session? Should the session be
         restarted?
 
-        :param data: 
-        :returns: 
+        :param data:
+        :returns:
         :rtype:
 
         """
@@ -1530,9 +1529,9 @@ class Trainer:
         :returns: preds: {"beam_preds": beam_preds, "greedy_preds": greedy_preds}
         :rtype: :class:`dict`
 
-        # Test would be something like 
+        # Test would be something like
         >>> response = requests.request("GET", server_url)
-        >>> 
+        >>>
 
         """
         if True:              # img_path in self._temp_runner._processed_images:

@@ -61,7 +61,39 @@ class DaemonHTTPTest(unittest.TestCase):
 
     def test_load_session(self):
         "First unload then load"
+        data = {}
+        data["name"] = "meh_session"
+        with open("_setup.py", "rb") as f:
+            response = requests.request("POST", self.host + "create_session",
+                                        files={"file": f},
+                                        data={"name": json.dumps("meh_session")})
+            print(response.content)
+        time.sleep(1)
+        with open("_setup.py", "rb") as f:
+            response = requests.request("POST", self.host + "create_session",
+                                        files={"file": f},
+                                        data={"name": json.dumps("meh_session")})
+            print(response.content)
+        time.sleep(1)
         response = requests.request("GET", self.host + "sessions")
+
+        # NOTE: DEBUG
+        # def test():
+        #     import sys
+        #     sys.path.append("..")
+        #     from trainer.trainer import Trainer
+        #     if os.path.exists(".meh"):
+        #         import shutil
+        #         shutil.rmtree(".meh")
+        #     os.mkdir(".meh")
+        #     from _setup import config
+        #     config["dataloader_params"]["train"]["pin_memory"] = False
+        #     config["dataloader_params"]["test"]["pin_memory"] = False
+        #     trainer = Trainer(**{"data_dir": ".meh", **config})
+        #     trainer._init_all()
+        #     return trainer
+        # trainer = test()
+
         self.assertIsInstance(json.loads(response.content), dict)
         meh = [*json.loads(response.content).keys()][0]
         response = requests.request("POST", self.host + "unload_session",

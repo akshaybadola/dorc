@@ -95,32 +95,36 @@ class EpochLoop(LoopTaskWithHooks):
         super().__init__(func, signals, data_iterator, hooks)
         self.device_mon = device_mon
         self._aborted = Event()
-        # self._data_q = Queue()
-        self._data_q = mp.Queue()
+        self._data_buffer = 20  # batches, will depend actually
+        self._data_q = Queue(maxsize=self._data_buffer)
+        # self._data_q = mp.Queue()
         self._iter_finished = False
-        # self._data_thread = Thread(target=self._fetch_data)
-        # self._data_thread.start()
-        self._data_proc = mp.Process(target=self._fetch_data)
-        self._data_proc.start()
+        self._data_thread = Thread(target=self._fetch_data)
+        self._data_thread.start()
+        # self._data_proc = mp.Process(target=self._fetch_data)
+        # self._data_proc.start()
 
     def _run_hooks(self, **kwargs):
         for hook in self._hooks:
             hook(**kwargs)
 
     def _fetch_data(self):
+        data_iter = self.data_iterator.__iter__()
         while True:
             self.signals.paused.wait()  # wait if paused
             start = time.time()
             try:
-                batch = self.data_iterator.__iter__().__next__()
-                if batch is None or not self.running:
+                batch = data_iter.__next__()
+                if batch is None or self.finished:
+                    print("FINISHED")
                     self._iter_finished = True
                     break
             except StopIteration as e:
                 self._iter_finished = True
                 break
             batch_time = time.time() - start
-            self._data_q.put([batch_time, batch])
+            if not self.finished:
+                self._data_q.put([batch_time, batch])
 
     def run_task(self, **kwargs):
         self._init = False
@@ -130,19 +134,24 @@ class EpochLoop(LoopTaskWithHooks):
         self._toggle_waiting()
         try:
             while not self._iter_finished or not self._data_q.empty():
-                # print("RUNNING", self.running, self.waiting, self.signals.paused.is_set())
+                print("RUNNING", self.running, self.waiting, self.signals.paused.is_set())
                 # start = time.time()
                 # x = self.data_iterator.__iter__().__next__()
                 # batch_time = time.time() - start
+                print("Should get more here")
+                # NOTE: Wait for data
                 batch_time, x = self._data_q.get()
+                print("GOT BATCH")
                 if not x:
                     print("not x")
                     break
                 else:
                     with self.device_mon.monitor():
+                        print("MONITORING result")
                         result = self.func(x, **kwargs)
                     result["batch_time"] = batch_time
                     self._run_hooks(**{"device_mon": self.device_mon, **result})
+                    print("DO WE GET HERE?")
                 if hasattr(self.signals, "aborted") and self.signals.aborted():
                     if self.running:
                         self._toggle_running()

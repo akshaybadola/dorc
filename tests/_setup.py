@@ -105,12 +105,12 @@ config["data"] = {"train": datasets.MNIST('.data',
 config["dataloader_params"] = {"train": {"batch_size": 32,
                                          "num_workers": 0,
                                          "shuffle": True,
-                                         "pin_memory": True},
+                                         "pin_memory": False},
                                "val": None,
                                "test": {"batch_size": 32,
                                         "num_workers": 0,
                                         "shuffle": False,
-                                        "pin_memory": True}}
+                                        "pin_memory": False}}
 config["model_params"] = {"net": {}}
 config["model_defs"] = {"net": {"model": Net, "optimizer": "Adam"}}
 config["update_functions"] = {"train": ClassificationTrainStep("net", "criterion_ce_loss"),

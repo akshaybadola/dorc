@@ -407,6 +407,15 @@ class Daemon:
                 retval[key]["finished"] = self._check_session_finished(session["state"])
         return _dump(retval)
 
+    def _check_username_password(self, data):
+        self._users = ["admin", "joe"]
+        self._passwords = {"admin": "admin", "joe": "admin"}
+        if (data["username"] in self._users and
+                data["password"] == self._passwords[data["username"]]):
+            return True
+        else:
+            return False
+
     def start(self):
         self._logi(f"Initializing Server on {self.hostname}:{self.port}")
         self.scan_sessions()
@@ -501,15 +510,31 @@ class Daemon:
         def __version():
             return _dump(self.version)
 
-        @self.app.route("/login", methods=["GET", "POST"])
+        @self.app.route("/login", methods=["POST"])
         def __login():
-            error = None
-            if request.method == "POST":
-                if request.form["username"] != "admin" or request.form["password"] != "admin":
-                    error = "Invalid Credentials. Please try again."
+            if "username" not in request.form or "password" not in request.form:
+                return _dump([False, "Username or Password not provided"])
+            else:
+                if self._check_username_password(request.form):
+                    return _dump([True, "Login Successful"])
                 else:
-                    return redirect(url_for("home"))
-            return render_template("login.html", error=error)
+                    return _dump([False, "Invalid Credentials"])
+
+        @self.app.route("/upload_data", methods=["POST"])
+        def __upload_data():
+            import ipdb; ipdb.set_trace()
+            if "name" not in request.form:
+                return _dump([False, "Name not in request"])
+            else:
+                try:
+                    data = json.loads(request.form["name"])
+                    file_bytes = request.files["file"].read()
+                except Exception as e:
+                    return _dump([False, f"{e}"])
+            data = {"name": data, "data_file": file_bytes}
+            task_id = self._get_task_id_launch_func(self.add_data, data)
+            return _dump({"task_id": task_id,
+                          "message": "Adding global data"})
 
         @self.app.route("/_ping", methods=["GET"])
         def __ping():

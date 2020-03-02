@@ -121,6 +121,7 @@ class EpochLoop(LoopTaskWithHooks):
                     break
             except StopIteration as e:
                 self._iter_finished = True
+                self.status = True, f"{e}"
                 break
             batch_time = time.time() - start
             if not self.finished:
@@ -210,11 +211,10 @@ class NewEpoch:
     def status(self):
         if self._current_loop is None:
             return False, "idle"
+        elif len(self._current_loop.status) == 1:
+            return self._current_loop.status, "Alive"
         else:
-            if len(self._current_loop.status) == 1:
-                return self._current_loop.status, "Alive"
-            else:
-                return self._current_loop.status
+            return self._current_loop.status
 
     @property
     def current_loop(self):

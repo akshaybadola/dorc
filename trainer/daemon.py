@@ -188,6 +188,8 @@ class Daemon:
     # NOTE: `add` Changed to `load`
     def _create_trainer(self, task_id, name, time_str, data_dir, config, load=False):
         self._logd(f"Trying to create trainer with data_dir {data_dir}")
+        if not os.path.isabs(data_dir):
+            data_dir = os.path.abspath(data_dir)
         if not load and self._check_config(config):  # create but don't load
             try:
                 self._logd(f"Adding new config")
@@ -214,9 +216,8 @@ class Daemon:
                 self._sessions[name]["sessions"][time_str]["data_dir"] = data_dir
                 cmd = f"python if_run.py {self.hostname} {port} {data_dir}"
                 cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                # print("CMD", cmd, cwd)
+                print("CMD", cmd, cwd)
                 p = Popen(shlex.split(cmd), env=os.environ, cwd=cwd)
-                # print("CMD 2", cmd, cwd)
                 self._sessions[name]["sessions"][time_str]["process"] = p
                 Thread(target=p.communicate).start()
                 # print("Popen?", type(p))

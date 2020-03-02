@@ -56,10 +56,17 @@ class FlaskInterface:
         self._logw = log._logw
         self._modules = Modules(self.data_dir, self._logd, self._loge,
                                 self._logi, self._logw)
-        if (self.api_host and self.api_port and
-                os.path.exists(os.path.join(self.data_dir, "session_config"))):
-            self.create_trainer()
-            self.start()
+        self.config_exists = (os.path.exists(os.path.join(self.data_dir, "session_config"))
+                              or os.path.exists(os.path.join(self.data_dir, "session_config.py")))
+        if (self.api_host and self.api_port and self.config_exists):
+            self._logi("Creating Trainer")
+            status, message = self.create_trainer()
+            if status:
+                self.start()
+            else:
+                print("Error creating trainer", message)
+        else:
+            self._logi(f"Not creating Trainer")
 
     def _create_trainer_helper(self):
         if self.data_dir not in sys.path:
@@ -73,7 +80,7 @@ class FlaskInterface:
         return True, "Created Trainer"
 
     def create_trainer(self, config=None):
-        if not os.path.exists(os.path.join(self.data_dir, "session_config")):
+        if not self.config_exists:
             if config is None:
                 return False, "No existing config"
             else:

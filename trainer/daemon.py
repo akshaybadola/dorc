@@ -9,15 +9,18 @@ import shlex
 import atexit
 import argparse
 import datetime
+import logging
 import configparser
 from queue import Queue
 from threading import Thread
 import multiprocessing as mp
 from subprocess import Popen, PIPE
+
+import flask_login
 from flask import Flask, render_template, url_for, redirect, request
 from flask_cors import CORS
 from werkzeug import serving
-import logging
+
 
 from .mods import Modules
 # from .trainer import Trainer
@@ -26,8 +29,17 @@ from .util import _dump
 from ._log import Log
 
 
+class User(flask_login.UserMixin):
+    def __init__(self, id, name):
+        self.id = id
+        self.name = name
+
+    def __repr__(self):
+        return f"{self.id}_{self.name}"
+
+
 class Daemon:
-    version = "0.1.0"
+    version = "0.2.0"
 
     def __init__(self, hostname, port, data_dir):
         self.ctx = mp.get_context("spawn")
@@ -41,8 +53,11 @@ class Daemon:
         self._static_dir = os.path.join(self._template_dir, "static")
         self.app = Flask(__name__, static_folder=self._static_dir,
                          template_folder=self._template_dir)
-        CORS(self.app)
+        # NOTE: Fix for CSRF etc.
+        #       see https://flask-cors.corydolphin.com/en/latest/api.html#using-cors-with-cookies
+        CORS(self.app, supports_credentials=True)
         self.app.config['TEMPLATES_AUTO_RELOAD'] = True
+        self.app.secret_key = '\x14m\xa5\xffh\x13\xe4\xd6\x15G\xbc\xc0mVC\xb2I\xfff\x96\x87\xbd\xed\x1b\xe4\xac\xf0\xcf\x14\xc9~L'
         self.use_https = False
         self.verify_user = True
         self._last_free_port = self.port
@@ -69,6 +84,12 @@ class Daemon:
         self._modules = Modules(self.data_dir, self._logd, self._loge,
                                 self._logi, self._logw)
         self._logi("Initialized Daemon")
+        self.login_manager = flask_login.LoginManager()
+        self.login_manager.init_app(self.app)
+        self.login_manager.login_view = "__login"
+        self._ids = {0: "admin", 1: "joe"}
+        self._users = {"admin": User(0, "admin"), "joe": User(1, "joe")}
+        self._passwords = {"admin": "admin", "joe": "admin"}
 
     def _init_context(self):
         self.api_crt = "res/server.crt"
@@ -408,20 +429,26 @@ class Daemon:
         return _dump(retval)
 
     def _check_username_password(self, data):
-        self._users = ["admin", "joe"]
-        self._passwords = {"admin": "admin", "joe": "admin"}
         if (data["username"] in self._users and
                 data["password"] == self._passwords[data["username"]]):
-            return True
+            return True, self._users[data["username"]]
         else:
-            return False
+            return False, None
 
     def start(self):
         self._logi(f"Initializing Server on {self.hostname}:{self.port}")
         self.scan_sessions()
         self.load_unfinished_sessions()
 
+        @self.login_manager.user_loader
+        def load_user(userid):
+            print("USERID", self._ids)
+            if not isinstance(userid, int):
+                userid = int(userid)
+            return self._users[self._ids[userid]]
+
         @self.app.route("/sessions", methods=["GET"])
+        @flask_login.login_required
         def __list_sessions():
             """Returns a dictionary of sessions, their ports if they're alive and the
             state. Rest of the communication can be done with session"""
@@ -489,7 +516,7 @@ class Daemon:
             try:
                 task_id = int(request.args.get("task_id").strip())
             except Exception as e:
-                return _dump(f"Bad params")
+                return _dump(f"Bad params {e}")
             if task_id not in self.__task_ids:
                 return _dump(f"No such task: {task_id}")
             else:
@@ -515,10 +542,19 @@ class Daemon:
             if "username" not in request.form or "password" not in request.form:
                 return _dump([False, "Username or Password not provided"])
             else:
-                if self._check_username_password(request.form):
+                status, user = self._check_username_password(request.form)
+                if status:
+                    flask_login.login_user(user, remember=True)
                     return _dump([True, "Login Successful"])
                 else:
                     return _dump([False, "Invalid Credentials"])
+
+        @self.app.route("/logout", methods=["GET"])
+        @flask_login.login_required
+        def __logout():
+            # flask_login.logout_user
+            flask_login.logout_user()
+            return _dump([True, "Logged Out"])
 
         @self.app.route("/upload_data", methods=["POST"])
         def __upload_data():

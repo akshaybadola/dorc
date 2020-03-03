@@ -56,8 +56,6 @@ class FlaskInterface:
         self._logw = log._logw
         self._modules = Modules(self.data_dir, self._logd, self._loge,
                                 self._logi, self._logw)
-        self.config_exists = (os.path.exists(os.path.join(self.data_dir, "session_config"))
-                              or os.path.exists(os.path.join(self.data_dir, "session_config.py")))
         if (self.api_host and self.api_port and self.config_exists):
             self._logi("Creating Trainer")
             status, message = self.create_trainer()
@@ -65,19 +63,36 @@ class FlaskInterface:
                 self.start()
             else:
                 print("Error creating trainer", message)
-        else:
-            self._logi(f"Not creating Trainer")
+        elif (not self.state_exists and self.config_exists and
+                not self.api_host and not self.api_port):
+            self._logi(f"Initializing Trainer State")
+            status, message = self.create_trainer()
+            self._logd(f"{status}, {message}")
+            self.trainer = None
+            del self.trainer
+        elif not self.state_exists and not self.config_exists:
+            self._logd(f"Config doesn't exist. Cannot create trainer")
+
+    def config_exists(self):
+        return (os.path.exists(os.path.join(self.data_dir, "session_config"))
+                or os.path.exists(os.path.join(self.data_dir, "session_config.py")))
+
+    def state_exists(self):
+        return os.path.exists(os.path.join(self.data_dir, "session_state"))
 
     def _create_trainer_helper(self):
-        if self.data_dir not in sys.path:
-            sys.path.append(self.data_dir)
-            from session_config import config
-            sys.path.remove(self.data_dir)
-        else:
-            from session_config import config
-        self.trainer = Trainer(**{"data_dir": self.data_dir, **config})
-        self.trainer._init_all()
-        return True, "Created Trainer"
+        try:
+            if self.data_dir not in sys.path:
+                sys.path.append(self.data_dir)
+                from session_config import config
+                sys.path.remove(self.data_dir)
+            else:
+                from session_config import config
+            self.trainer = Trainer(**{"data_dir": self.data_dir, **config})
+            self.trainer._init_all()
+            return True, "Created Trainer"
+        except Exception as e:
+            return False, f"{e}"
 
     def create_trainer(self, config=None):
         if not self.config_exists:
@@ -94,6 +109,9 @@ class FlaskInterface:
 
     def check_config(self, config):
         status, result = self._modules.add_config(self.data_dir, config)
+        # print("CHECK CONFIG", self.data_dir,
+        #       (os.path.exists(self.data_dir + "/session_config")
+        #        or os.path.exists(self.data_dir + "/session_config.py")))
         if status:
             return status, None
         else:

@@ -216,11 +216,18 @@ class Daemon:
                 self._logd(f"Adding new config")
                 iface = FlaskInterface(None, None, data_dir)
                 status, result = iface.check_config(config)
-                del iface
+                # print("IFACE", status, result, data_dir)
+                # print("CONFIG EXISTS", os.path.exists(os.path.join(data_dir)),
+                #       (os.path.exists(os.path.join(data_dir, "session_config"))
+                #        or os.path.exists(os.path.join(data_dir, "session_config.py"))))
                 # status, result = self._modules.add_config(data_dir, config)
                 if status:
                     # trainer = Trainer(**{"data_dir": data_dir, **result})
                     # trainer._init_all()
+                    status, result = iface.create_trainer()
+                    # print("URGH", status, result)
+                    del iface.trainer
+                    del iface
                     self._task_q.put((task_id, True))
                 else:
                     self._loge(f"Could not read config. {result}")
@@ -455,6 +462,7 @@ class Daemon:
             return self._sessions_list
 
         @self.app.route("/create_session", methods=["POST"])
+        @flask_login.login_required
         def __new_session():
             # TODO:
             # - Creates a new session with given data
@@ -474,6 +482,7 @@ class Daemon:
                           "message": "Creating session with whatever data given"})
 
         @self.app.route("/load_session", methods=["POST"])
+        @flask_login.login_required
         def __load_session():
             if isinstance(request.json, dict):
                 data = request.json
@@ -486,6 +495,7 @@ class Daemon:
                 return _dump({"task_id": task_id, "message": f"Loading session with {data}"})
 
         @self.app.route("/unload_session", methods=["POST"])
+        @flask_login.login_required
         def __unload_session():
             if isinstance(request.json, dict):
                 data = request.json
@@ -500,6 +510,7 @@ class Daemon:
 
         # TODO: Fix design issues. Should only return return json, not "False, json"
         @self.app.route("/purge_session", methods=["POST"])
+        @flask_login.login_required
         def __purge_session():
             if isinstance(request.json, dict):
                 data = request.json
@@ -512,6 +523,7 @@ class Daemon:
                 return _dump({"task_id": task_id, "message": f"Purging session {data}"})
 
         @self.app.route("/check_task", methods=["GET"])
+        @flask_login.login_required
         def __check_task():
             try:
                 task_id = int(request.args.get("task_id").strip())
@@ -556,8 +568,28 @@ class Daemon:
             flask_login.logout_user()
             return _dump([True, "Logged Out"])
 
+        @self.app.route("/add_global_module", methods=["POST"])
+        @flask_login.login_required
+        def __add_global_module():
+            "Can be python or zip file"
+            import ipdb; ipdb.set_trace()
+            if "name" not in request.form:
+                return _dump([False, "Name not in request"])
+            else:
+                try:
+                    data = json.loads(request.form["name"])
+                    file_bytes = request.files["file"].read()
+                except Exception as e:
+                    return _dump([False, f"{e}"])
+            data = {"name": data, "data_file": file_bytes}
+            task_id = self._get_task_id_launch_func(self.add_data, data)
+            return _dump({"task_id": task_id,
+                          "message": "Adding global data"})
+
         @self.app.route("/upload_data", methods=["POST"])
+        @flask_login.login_required
         def __upload_data():
+            "Must be zip file"
             import ipdb; ipdb.set_trace()
             if "name" not in request.form:
                 return _dump([False, "Name not in request"])
@@ -577,6 +609,7 @@ class Daemon:
             return "pong"
 
         @self.app.route("/_shutdown", methods=["GET"])
+        @flask_login.login_required
         def __shutdown_server():
             func = request.environ.get('werkzeug.server.shutdown')
             func()

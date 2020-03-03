@@ -22,6 +22,8 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
         cls.daemon = _start_daemon(cls.hostname, cls.port, ".test_dir")
         cls.host = "http://" + ":".join([cls.hostname, str(cls.port) + "/"])
         time.sleep(.5)
+        cls.cookies = requests.request("POST", cls.host + "login",
+                                       data={"username": "admin", "password": "admin"}).cookies
 
     def test_load_unfinished_sessions(self):
         """Restart daemon without removing all directories. Make sure unfinished
@@ -35,16 +37,19 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
         with open("_setup.py", "rb") as f:
             response = requests.request("POST", self.host + "create_session",
                                         files={"file": f},
-                                        data={"name": json.dumps("meh_session")})
+                                        data={"name": json.dumps("meh_session")},
+                                        cookies=self.cookies)
             responses.append(response)
         time.sleep(1)
         with open("_setup.py", "rb") as f:
             response = requests.request("POST", self.host + "create_session",
                                         files={"file": f},
-                                        data={"name": json.dumps("meh_session")})
+                                        data={"name": json.dumps("meh_session")},
+                                        cookies=self.cookies)
             responses.append(response)
         time.sleep(1)
-        response = requests.request("GET", self.host + "sessions")
+        response = requests.request("GET", self.host + "sessions",
+                                        cookies=self.cookies)
         sessions = json.loads(response.content)
         # shutdown the daemon
         response = self.shutdown_daemon(self.host)
@@ -62,27 +67,30 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
         daemon = _start_daemon(self.hostname, self.port + 5, ".test_dir")
         host = "http://" + ":".join([self.hostname, str(self.port + 5) + "/"])
         time.sleep(1)
-        response = requests.request("GET", host + "sessions")
+        response = requests.request("GET", host + "sessions", cookies=self.cookies)
         meh = json.loads(response.content)
         self.assertTrue("loaded" in meh[key])
         self.assertFalse(meh[key]["loaded"])
         responses = []
         for m in meh.keys():
             responses.append(requests.request("POST", host + "purge_session",
-                                              json=json.dumps({"session_key": m})))
+                                              json=json.dumps({"session_key": m}),
+                                              cookies=self.cookies))
         print("RESPONSES", [r.content for r in responses])
         # Give it some time to purge
         time.sleep(1)
         for r in responses:
             task_id = json.loads(r.content)["task_id"]
-            print(requests.request("GET", host + f"check_task?task_id={task_id}").content)
+            print(requests.request("GET", host + f"check_task?task_id={task_id}",
+                                   cookies=self.cookies).content)
         self.shutdown_daemon(host)
         # And some time to shutdown
         time.sleep(1)
 
     @classmethod
     def shutdown_daemon(cls, host):
-        response = requests.request("GET", host + "_shutdown", timeout=2)
+        response = requests.request("GET", host + "_shutdown", timeout=2,
+                                    cookies=cls.cookies)
         return response
 
     @classmethod

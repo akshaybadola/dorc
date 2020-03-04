@@ -4,17 +4,19 @@ from types import SimpleNamespace
 from threading import Thread, Event
 import time
 sys.path.append("../")
-from trainer.task import DiscreteTask, LoopTask
+from trainer.task import DiscreteTask, LoopTask, Signals
 
 
 class TaskTest(unittest.TestCase):
-    def setUp(self):
-        self.running_event = Event()
-        self.aborted_event = Event()
-        self.running_event.clear()
-        self.signals = SimpleNamespace()
-        self.signals.paused = self.running_event
-        self.signals.aborted = lambda: self.aborted_event.is_set()
+    @classmethod
+    def setUpClass(cls):
+        cls.running_event = Event()
+        cls.aborted_event = Event()
+        cls.running_event.clear()
+        # cls.signals = SimpleNamespace()
+        # cls.signals.paused = cls.running_event
+        # cls.signals.aborted = lambda: cls.aborted_event.is_set()
+        # cls.signals = Signals(cls.running_event, cls.aborted_event)
 
     def func(self, result):
         time.sleep(3)
@@ -25,6 +27,9 @@ class TaskTest(unittest.TestCase):
         return True, x
 
     def test_discrete(self):
+        self.running_event.clear()
+        self.aborted_event.clear()
+        self.signals = Signals(self.running_event, self.aborted_event)
         task = DiscreteTask(self.func, self.signals)
         for x in task._states:
             with self.subTest(i=x):
@@ -42,6 +47,9 @@ class TaskTest(unittest.TestCase):
         self.assertDictEqual(task.result, {"val": True})
 
     def test_discrete_abort(self):
+        self.running_event.clear()
+        self.aborted_event.clear()
+        self.signals = Signals(self.running_event, self.aborted_event)
         task = DiscreteTask(self.func, self.signals)
         for x in task._states:
             with self.subTest(i=x):
@@ -55,6 +63,9 @@ class TaskTest(unittest.TestCase):
         self.assertEqual(task.status, (False, "Terminated"))
 
     def test_loop(self):
+        self.running_event.clear()
+        self.aborted_event.clear()
+        self.signals = Signals(self.running_event, self.aborted_event)
         _iter = range(10)
         task = LoopTask(self.loop_func, self.signals, _iter)
         for x in task._states:
@@ -75,6 +86,9 @@ class TaskTest(unittest.TestCase):
         self.assertFalse(task.aborted)
 
     def test_loop_abort(self):
+        self.running_event.clear()
+        self.aborted_event.clear()
+        self.signals = Signals(self.running_event, self.aborted_event)
         _iter = range(10)
         task = LoopTask(self.loop_func, self.signals, _iter)
         for x in task._states:

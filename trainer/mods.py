@@ -1,3 +1,4 @@
+from typing import Callable, Iterable, Tuple, Dict, Any, List, Union
 import os
 import io
 import sys
@@ -7,7 +8,9 @@ import zipfile
 
 
 class Modules:
-    def __init__(self, mods_dir, logd, loge, logi, logw):
+    def __init__(self, mods_dir: str, logd: Callable[[str], str],
+                 loge: Callable[[str], str], logi: Callable[[str], str],
+                 logw: Callable[[str], str]):
         self._mods_dir = mods_dir
         self._logd = logd
         self._loge = loge
@@ -17,7 +20,7 @@ class Modules:
             self._logd(f"Creating directory {self._mods_dir}")
             os.mkdir(mods_dir)
 
-    def _check_file_magic(self, _file, test_str):
+    def _check_file_magic(self, _file: bytes, test_str: str) -> bool:
         if hasattr(magic, "from_buffer"):
             self._logd("from_buffer in magic")
             test = test_str in magic.from_buffer(_file).lower()
@@ -26,18 +29,20 @@ class Modules:
             test = test_str in magic.detect_from_content(_file).name.lower()
         return test
 
-    def make_temp_directory(self):
+    def make_temp_directory(self) -> str:
         dirname = "tmp_" + str(uuid.uuid4()).replace("-", "_")
         os.mkdir(os.path.join(self._mods_dir, dirname))
         return dirname
 
-    def _load_python_file(self, module_file, checks, write_path, exec_cmd, return_key):
+    def _load_python_file(self, module_file: bytes, checks: Iterable[Callable[[str], bool]],
+                          write_path: str, exec_cmd: str, return_key: str) ->\
+                          Tuple[bool, Union[str, Dict]]:
         self._logd("Detected python file")
         with open(write_path, "w") as f:
             self._logd(f"Written to {write_path}")
             f.write(module_file.decode())
         try:
-            ldict = {}
+            ldict: Dict[str, Any] = {}
             self._logd("Checking functions")
             flag = True
             for check_p in checks:
@@ -55,7 +60,9 @@ class Modules:
         except Exception as e:
             return False, self._logd(f"Some weird error occured while importing. Error {e}")
 
-    def _load_zip_file(self, module_file, checks, write_path, exec_cmd, return_key):
+    def _load_zip_file(self, module_file: bytes, checks: Iterable[Callable[[str], bool]],
+                       write_path: str, exec_cmd: str, return_key: str) ->\
+                       Tuple[bool, Union[str, Dict]]:
         zf = zipfile.ZipFile(io.BytesIO(module_file))
         # make sure that __init__.py is at the root of tmp_dir
         if not any(["__init__.py" in x.split("/")[0] for x in zf.namelist()]):
@@ -64,7 +71,7 @@ class Modules:
             # zf.extractall(os.path.join(self._mods_dir, write_path))
             zf.extractall(write_path)
             try:
-                ldict = {}
+                ldict: Dict[str, Any] = {}
                 self._logd(f"Executing {exec_cmd}")
                 exec(exec_cmd, globals(), ldict)
                 return True, ldict[return_key]
@@ -73,7 +80,8 @@ class Modules:
             except Exception as e:
                 return False, self._logd(f"Some weird error occured while importing. Error {e}")
 
-    def add_module(self, request, checks):
+    def add_module(self, request, checks: Iterable[Callable[[str], bool]]) ->\
+            Tuple[bool, Union[str, Dict]]:
         """Adds an arbitrary module from a given python or module as a zip file. File
         must be present in request and is read as ``request.files["file"]``
 
@@ -99,7 +107,7 @@ class Modules:
             sys.path.append(os.path.abspath(self._mods_dir))
         try:
             # file can be zip or text
-            module_file = request.files["file"].read()
+            module_file: bytes = request.files["file"].read()
             test = self._check_file_magic(module_file, "python")
             return_key = "module_exports"
             if test:
@@ -116,7 +124,7 @@ class Modules:
         except Exception as e:
             return False, self._logd(f"Error occured while reading file {e}")
 
-    def add_user_funcs(self, request, user_funcs):
+    def add_user_funcs(self, request, user_funcs) -> Tuple[bool, str]:
         """Add a user function from a given python or module as a zip file. Delegates
         the requeste to :meth:`Trainer.add_module`
 
@@ -146,10 +154,12 @@ class Modules:
         #       Checks can then be like:
         #       1. "inspect." not in file
         #       2. "self." not in file
-        checks = []
-        status, response = self.add_module(request, checks)
-        if status:
-            module_exports = response
+        checks: List[Callable[[str], bool]] = []
+        addm_retval = self.add_module(request, checks)
+        status: bool = addm_retval[0]
+        response: Union[str, Dict] = addm_retval[1]
+        if status:              # dependent type, not caught by mypy
+            module_exports: Dict[str, Any] = response
             if "functions" not in module_exports:
                 return False, self._logw("No functions in data")
             else:
@@ -166,6 +176,8 @@ class Modules:
                 else:
                     retval = [str(x[1]) + " added, " if x[0] else " failed, " for x in statuses]
                     return False, self._logd(f"{retval}")
+        else:
+            return False, "Failed to add module"
 
     def add_config(self, config_dir, module_file):
         test_py_file = self._check_file_magic(module_file, "python")

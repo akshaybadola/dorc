@@ -17,6 +17,7 @@ from torch.utils.data import Dataset, DataLoader
 
 from .device import init_nvml, gpu_util, cpu_info, memory_info, DeviceMonitor
 from .util import gen_file_and_stream_logger, deprecated, _dump
+from .task import Signals
 from .epoch import Epoch
 from .mods import Modules as Modules
 from .overrides import MyDataLoader, default_tensorify
@@ -615,16 +616,19 @@ class Trainer:
 
     def _task_runner_helper(self, which):
         device_monitor = DeviceMonitor(self._device_handles)
-        signals = SimpleNamespace()
+        # signals = SimpleNamespace()
         if which == "main":
-            signals.paused = self._running_event
-            signals.aborted = lambda: self._current_aborted_event.is_set()
+            signals = Signals(self._running_event, self._current_aborted_event)
+            # signals.paused = self._running_event
+            # signals.aborted = lambda: self._current_aborted_event.is_set()
         elif which == "adhoc":
-            signals.paused = self._adhoc_running_event
-            signals.aborted = lambda: self._adhoc_aborted_event.is_set()
+            signals = Signals(self._adhoc_running_event, self._adhoc_aborted_event)
+            # signals.paused = self._adhoc_running_event
+            # signals.aborted = lambda: self._adhoc_aborted_event.is_set()
         elif which == "user":
-            signals.paused = self._userfunc_running_event
-            signals.aborted = lambda: self._userfunc_aborted_event.is_set()
+            signals = Signals(self._usefunc_running_event, self._userfunc_aborted_event)
+            # signals.paused = self._userfunc_running_event
+            # signals.aborted = lambda: self._userfunc_aborted_event.is_set()
         return device_monitor, signals
 
     def _task_runner_initialize(self, name, metrics, extra_metrics, callback):
@@ -942,7 +946,7 @@ class Trainer:
                     and ((a_run != b_run and a_run in {"running", "paused"}
                           and b_run in {"running", "paused"})  # running <-> paused
                          # only paused -> finished
-                         or (a_run == "paused" and b_run == "finished")))
+                         or (a_run in {"paused"} and b_run == "finished")))
 
         def main_different_step():
             return (a_loop == "main" == b_loop

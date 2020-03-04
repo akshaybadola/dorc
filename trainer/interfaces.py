@@ -73,10 +73,12 @@ class FlaskInterface:
         elif not self.state_exists and not self.config_exists:
             self._logd(f"Config doesn't exist. Cannot create trainer")
 
+    @property
     def config_exists(self):
         return (os.path.exists(os.path.join(self.data_dir, "session_config"))
                 or os.path.exists(os.path.join(self.data_dir, "session_config.py")))
 
+    @property
     def state_exists(self):
         return os.path.exists(os.path.join(self.data_dir, "session_state"))
 
@@ -95,17 +97,16 @@ class FlaskInterface:
             return False, f"{e}"
 
     def create_trainer(self, config=None):
-        if not self.config_exists:
-            if config is None:
-                return False, "No existing config"
-            else:
-                status, result = self.check_config(config)
-                if status:
-                    return self._create_trainer_helper()
-                else:
-                    return status, result
-        else:
+        if self.config_exists:
             return self._create_trainer_helper()
+        elif not self.config_exists and config is None:
+            return False, "No existing config"
+        elif not self.config_exists and config is not None:
+            status, result = self.check_config(config)
+            if status:
+                return self._create_trainer_helper()
+            else:
+                return status, result
 
     def check_config(self, config):
         status, result = self._modules.add_config(self.data_dir, config)

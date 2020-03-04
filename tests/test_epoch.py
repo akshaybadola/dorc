@@ -7,6 +7,7 @@ import time
 from _setup import config
 from threading import Thread
 sys.path.append("../")
+from trainer.epoch import EpochLoop
 from trainer.trainer import Trainer
 
 
@@ -51,6 +52,7 @@ class EpochTest(unittest.TestCase):
         t.start()
         self.trainer._running_event.set()
         time.sleep(2)
+        # import ipdb; ipdb.set_trace()
         self.assertTrue(epoch_runner.running)
         self.assertFalse(epoch_runner.waiting)
         self.trainer._running_event.clear()

@@ -1,7 +1,22 @@
+from typing import Callable, Iterable, Dict, Any
 import time
 import multiprocessing as mp
 from abc import ABC, abstractmethod
 from threading import Thread, Event
+
+
+class Signals:
+    def __init__(self, paused: Event, aborted: Event):
+        self._paused = paused
+        self._aborted = aborted
+
+    @property
+    def paused(self) -> Event:
+        return self._paused
+
+    @property
+    def aborted(self) -> bool:
+        return self._aborted.is_set()
 
 
 class Task(ABC):
@@ -18,7 +33,7 @@ class Task(ABC):
     Epoch is a kind of task, but it isn't a subclass right now.
     """
 
-    def __init__(self, func, signals):
+    def __init__(self, func: Callable, signals: Signals):
         self.func = func
         self.signals = signals
         self._running = Event()
@@ -37,15 +52,15 @@ class Task(ABC):
         pass
 
     @property
-    def init(self):
+    def init(self) -> bool:
         return self._init
 
     @property
-    def running(self):
+    def running(self) -> bool:
         return self._running.is_set()
 
     @abstractmethod
-    def finished(self):
+    def finished(self) -> bool:
         pass
 
     def _toggle_running(self):
@@ -81,7 +96,7 @@ class DiscreteTask(Task):
         self._toggle_running()
 
     @property
-    def finished(self):
+    def finished(self) -> bool:
         return (not self.init) and (not self.running)
 
     def finish(self):
@@ -120,13 +135,13 @@ class LoopTask(Task):
 
     Epoch is a kind of task, but it isn't a subclass right now.
     """
-    def __init__(self, func, signals, data_iterator):
+    def __init__(self, func: Callable, signals: Signals, data_iterator: Iterable):
         super().__init__(func, signals)
         self.task_type = "loop"
         self.data_iterator = data_iterator
         self._states = {"paused", "init", "finished", "running"}
         self._waiting = False
-        self.result = {}
+        self.result: Dict[Any, Any] = {}
         self.aborted = False
 
     def reset(self):
@@ -143,21 +158,18 @@ class LoopTask(Task):
 
         """
         self._running.clear()
+        self._waiting = False
 
     @property
-    def waiting(self):
+    def waiting(self) -> bool:
         return self._waiting
 
     @property
-    def running(self):
-        return self._running.is_set()
-
-    @property
-    def paused(self):
+    def paused(self) -> bool:
         return self.running and self.waiting
 
     @property
-    def finished(self):
+    def finished(self) -> bool:
         return (not self.running) and (not self.waiting) and (not self.init)
 
     def _toggle_waiting(self):
@@ -175,7 +187,12 @@ class LoopTask(Task):
         try:
             for i, x in enumerate(self.data_iterator):
                 self.result[i] = self.func(x, **kwargs)
-                if hasattr(self.signals, "aborted") and self.signals.aborted():
+                # NOTE: signals.aborted is a lambda though it should really not
+                #       be implementation specific. Whether it is a function or
+                #       a property shouldn't be up to us, it should be available
+                #       as a property in fact in the sense, signals should be an
+                #       object.
+                if hasattr(self.signals, "aborted") and self.signals.aborted:
                     if self.running:
                         self._toggle_running()
                     self.status = False, "Terminated"
@@ -192,16 +209,17 @@ class LoopTask(Task):
 
 
 class LoopTaskWithHooks(LoopTask):
-    def __init__(self, func, signals, data_iterator, hooks):
+    def __init__(self, func: Callable, signals: Signals, data_iterator,
+                 hooks: Iterable[Callable[[], None]]):
         super().__init__(func, signals, data_iterator)
         self._hooks = hooks     # key, value pairs, values are functions
 
     @property
-    def hooks(self):
+    def hooks(self) -> Iterable[Callable[[], None]]:
         return self._hooks
 
     def _run_hooks(self):
-        for h, hook in self._hooks:
+        for hook in self._hooks:
             hook(self)
 
     def run_task(self, **kwargs):
@@ -214,7 +232,7 @@ class LoopTaskWithHooks(LoopTask):
             for i, x in enumerate(self.data_iterator):
                 self.result[i] = self.func(x, **kwargs)
                 self._run_hooks()
-                if hasattr(self.signals, "aborted") and self.signals.aborted():
+                if hasattr(self.signals, "aborted") and self.signals.aborted:
                     if self.running:
                         self._toggle_running()
                     self.status = False, "Terminated"

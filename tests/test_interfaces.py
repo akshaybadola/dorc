@@ -25,6 +25,7 @@ class InterfaceTest(unittest.TestCase):
             f_bytes = f.read()
             status, message = cls.iface.create_trainer(f_bytes)
         Thread(target=cls.iface.start).start()
+        time.sleep(1)
 
     def test_iface_init(self):
         response = requests.request("GET", self.host + "start")

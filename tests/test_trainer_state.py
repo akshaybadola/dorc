@@ -107,8 +107,8 @@ class StateTest(unittest.TestCase):
         self.assertEqual(self.trainer.current_state, "main_running_train")
         self.trainer._abort_current()
 
-    def test_user_adhoc_main(self):
-        pass
+    # def test_user_adhoc_main(self):
+    #     pass
 
     def tearDown(self):
         if os.path.exists(".test_dir"):

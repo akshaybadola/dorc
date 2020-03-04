@@ -1,14 +1,20 @@
+from typing import List, Dict, Iterable, Any, Union, Tuple
 import torch
+import logging
 
 
 class Models:
-    def __init__(self, models, optimizers, devices, gpus, logger):
+    def __init__(self, models: Dict[str, torch.nn.Module],
+                 # optimizers: Dict[str, torch.optim.optimizer.Optimizer],
+                 optimizers: Dict[str, Any],
+                 devices: Dict[str, Union[str, torch.device]],
+                 gpus, logger: logging.Logger):
         assert all(isinstance(x, dict) for x in [models, optimizers, devices])
         assert set(models.keys()) == set(optimizers.keys())
         assert set(models.keys()) == set(devices.keys())
         self._optimizers = optimizers
         self._devices = devices
-        self._models = {}
+        self._models: Dict[str, torch.nn.Module] = {}
         self._gpus = gpus
         self._logger = logger
         # model attributes are added to torch.nn.Module directly
@@ -39,18 +45,20 @@ class Models:
             self._status.append((status, message))
 
     @property
-    def status(self):
+    def status(self) -> Iterable[Tuple[bool, str]]:
         return self._status
 
-    def _check(self, model):
+    def _check(self, model) -> Tuple[bool, str]:
         if not hasattr(model, "forward"):
             return False, f"No forward call in model {type(model).__qualname__}"
-        if not hasattr(model, "_device"):
+        elif not hasattr(model, "_device"):
             return True, f"No \"_device\" attr in model {type(model).__qualname__}. "
-        if not hasattr(model, "to_"):
+        elif not hasattr(model, "to_"):
             return True, f"No \"to_\" attr in model {type(model).__qualname__}. "
+        else:
+            return True, "Edge Case?"
 
-    def set_device(self, model_name, device):
+    def set_device(self, model_name: str, device: Union[str, torch.device]):
         """Sets the device and patches the model with _device and to_ attrs
 
         :param model_name: 
@@ -100,23 +108,24 @@ class Models:
         return iter(self._models)
 
     @property
-    def names(self):
+    def names(self) -> List[str]:
         return [*self._models.keys()]
 
     @property
-    def devices(self):
+    def devices(self) -> Dict[str, torch.device]:
         return {k: v._device for k, v in self._models.items()}
 
-    def load_weights(self, model_name, state_dict):
+    def load_weights(self, model_name: str, state_dict: Dict[str, torch.Tensor]) ->\
+            Tuple[bool, Union[str, None]]:
         try:
             for k in state_dict:
                 state_dict[k] = self._models[model_name].to_(state_dict[k])
             self._models[model_name].load_state_dict(state_dict)
             return True, None
         except Exception as e:
-            return False, e
+            return False, f"{e}"
 
-    def add(self, model, params):
+    def add(self, model: torch.nn.Module, params: Dict[str, Any]):
         """Add model to self and initialize it according to the params
 
         :param params: params for the model. :class:`dict` with keys
@@ -125,7 +134,7 @@ class Models:
         :rtype: None
 
         """
-        if self._check(model):
+        if self._check(model)[0]:
             name = params["name"]
             self._models[name] = model
             self._models[name]._name = name
@@ -145,7 +154,7 @@ class Models:
 
     # CHECK: Maybe optimizer can be none? In case there's nothing to optimize? Not sure.
     #        Also how to exclude parameters of model?
-    def load(self, model_states):
+    def load(self, model_states: Dict[str, Any]) -> Tuple[bool, Union[str, None]]:
         for name, state in model_states.items():
             params = {"name": state["name"], "optimizer": state["optimizer"],
                       "optimizer_name": state["optimizer_name"], "device": state["device"]}

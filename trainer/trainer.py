@@ -16,14 +16,13 @@ from types import SimpleNamespace
 from torch.utils.data import Dataset, DataLoader
 
 from .device import init_nvml, gpu_util, cpu_info, memory_info, DeviceMonitor
-from .util import gen_file_and_stream_logger, deprecated
+from .util import gen_file_and_stream_logger, deprecated, _dump
 from .epoch import Epoch
 from .mods import Modules as Modules
 from .overrides import MyDataLoader, default_tensorify
 from .components import Models
 from .functions import _log_metrics_for_step
 from ._log import Log
-from .util import _dump
 # from .checks import Checks
 from ._checks import (_check_model_params, _check_trainer_params, _check_data_params,
                       _check_resume_or_init_weights)
@@ -978,6 +977,7 @@ class Trainer:
             return (a_loop in {"adhoc", "user"} and b_loop in {"adhoc", "user"}
                     and a_run == "finished" and b_run in {"paused", "running"})
 
+        target = None
         # CHECK: To force or not to force. That is the question
         if main_same_step():
             print("MAIN same step")
@@ -2481,7 +2481,7 @@ class Trainer:
                 for f in save_files:
                     result = re.search("val_acc_......", f)
                     if result:
-                        results.append(f, result.group())
+                        results.append((f, result.group()))
                 if results:
                     results.sort(key=lambda x: x[1])
                     return os.path.join(self._savedir, results[-1][0])

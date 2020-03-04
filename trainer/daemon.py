@@ -389,7 +389,7 @@ class Daemon:
             session = data["session_name"]
             try:
                 self._unload_helper(session)
-                self._task_q.put((task_id, True, f"Unloaded all sessions for {session_name}"))
+                self._task_q.put((task_id, True, f"Unloaded all sessions for session_name"))
             except Exception as e:
                 self._logd(f"Exception occurred {e}")
                 self._task_q.put((task_id, False, f"{e}"))

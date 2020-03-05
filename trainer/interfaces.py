@@ -20,7 +20,7 @@ class FlaskInterface:
     trainer. Everything's communicated as JSON.
     """
 
-    def __init__(self, hostname, port, data_dir, bare=True):
+    def __init__(self, hostname, port, data_dir, bare=True, production=False):
         """
         :param hostname: :class:`str` host over which to serve
         :param port: :class:`int` port over which to serve
@@ -35,6 +35,7 @@ class FlaskInterface:
         self.logger = None
         self.data_dir = data_dir
         self.bare = bare
+        self.production = production
         self.app = Flask(__name__)
         CORS(self.app)
         self.app.config['TEMPLATES_AUTO_RELOAD'] = True
@@ -49,7 +50,7 @@ class FlaskInterface:
         file_handler.setFormatter(formatter)
         self._logger.addHandler(file_handler)
         self._logger.setLevel(logging.DEBUG)
-        log = Log(self._logger)
+        log = Log(self._logger, self.production)
         self._logd = log._logd
         self._loge = log._loge
         self._logi = log._logi
@@ -90,7 +91,8 @@ class FlaskInterface:
                 sys.path.remove(self.data_dir)
             else:
                 from session_config import config
-            self.trainer = Trainer(**{"data_dir": self.data_dir, **config})
+            self.trainer = Trainer(**{"data_dir": self.data_dir, "production": self.production,
+                                      **config})
             self.trainer._init_all()
             return True, "Created Trainer"
         except Exception as e:

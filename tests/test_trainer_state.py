@@ -77,9 +77,11 @@ class StateTest(unittest.TestCase):
         self.trainer._start_if_not_running()
         time.sleep(.5)
         self.assertFalse(self.trainer.paused)
+        time.sleep(.5)
+        self.assertFalse(self.trainer._epoch_runner.train_loop.paused)
+        self.assertFalse(self.trainer._epoch_runner.train_loop.finished)
+        self.assertFalse(self.trainer._epoch_runner.train_loop.init)
         self.assertEqual(self.trainer.current_state, "main_running_train")
-        print(self.trainer._task_runners)
-        time.sleep(1)
         self.assertTrue(self.trainer._epoch_runner.running)
         self.assertTrue("main" in self.trainer._threads)
         self.trainer._user_funcs["test_func"] = lambda: None
@@ -91,12 +93,19 @@ class StateTest(unittest.TestCase):
                                           "callback": "test_func"}})
         time.sleep(1)
         self.assertTrue("adhoc" in self.trainer._task_runners)
+        self.assertTrue(self.trainer._epoch_runner.train_loop.paused)
+        self.assertFalse(self.trainer._epoch_runner.train_loop.finished)
+        self.assertFalse(self.trainer._epoch_runner.train_loop.init)
         self.assertIsNotNone(self.trainer._task_runners["adhoc"])
         self.assertTrue(len(self.trainer._task_runners["adhoc"].batch_vars) > 0)
-        self.trainer.pause()
+        self.trainer.pause()    # NOTE: pauses adhoc loop now
         time.sleep(.5)
         self.assertTrue(self.trainer._task_runners["adhoc"].test_loop.paused)
+        self.assertFalse(self.trainer._task_runners["adhoc"].test_loop.finished)
+        self.assertFalse(self.trainer._task_runners["adhoc"].test_loop.init)
         self.trainer._abort_current_run_cb()
+        time.sleep(.5)
+        self.assertTrue(self.trainer._task_runners["adhoc"].test_loop.finished)
         # self.trainer.pause()
         # time.sleep(.5)
         # er = self.trainer._task_runners["main"]
@@ -106,6 +115,7 @@ class StateTest(unittest.TestCase):
         self.assertTrue(self.trainer._task_runners["main"].running)
         self.assertEqual(self.trainer.current_state, "main_running_train")
         self.trainer._abort_current()
+        # import ipdb; ipdb.set_trace()
 
     # def test_user_adhoc_main(self):
     #     pass

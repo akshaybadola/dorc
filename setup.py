@@ -34,5 +34,5 @@ from Cython.Build import cythonize
 # )
 
 setup(
-    ext_modules=cythonize('clobber.py', compiler_directives={"language_level": "3"})
+    ext_modules=cythonize('trainer.py', compiler_directives={"language_level": "3"})
 )

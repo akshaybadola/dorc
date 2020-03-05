@@ -125,8 +125,10 @@ class EpochLoop(LoopTaskWithHooks):
     def _fetch_data(self):
         data_iter = self.data_iterator.__iter__()
         while True:
-            self.signals.paused.wait()  # wait if paused
-            # print("FETCH FINSIHED", self.finished, self.running)
+            # NOTE: The _fetch_data thread also used to wait but now it won't,
+            #       it'll simply fill up its size
+            #
+            # self.signals.paused.wait()  # wait if paused
             start = time.time()
             try:
                 batch = data_iter.__next__()
@@ -143,7 +145,6 @@ class EpochLoop(LoopTaskWithHooks):
                 break
             batch_time = time.time() - start
             if not self.finished:
-                # CHECK: How to break out of this event loop?
                 try:
                     self._data_q.put([batch_time, batch], False)
                     # print("PUT")
@@ -171,7 +172,7 @@ class EpochLoop(LoopTaskWithHooks):
                 # CHECK: How to break out of here?
                 try:
                     batch_time, x = self._data_q.get(False)
-                    print("GOT BATCH")
+                    # print("GOT BATCH")
                 except queue.Empty:
                     if self._iter_finished:
                         print("ITER FINISHED?")
@@ -198,7 +199,7 @@ class EpochLoop(LoopTaskWithHooks):
                     # NOTE: Hooks are passed as callables with no positional
                     #       args from epoch and only take kwargs
                     self._run_hooks(**{"device_mon": self.device_mon, **result})
-                    print("DO WE GET HERE?")
+                    # print("DO WE GET HERE?")
                 if hasattr(self.signals, "aborted") and self.signals.aborted:
                     if self.running:
                         self._toggle_running()

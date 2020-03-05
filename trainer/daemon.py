@@ -15,9 +15,10 @@ from queue import Queue
 from threading import Thread
 import multiprocessing as mp
 from subprocess import Popen, PIPE
+from markupsafe import escape
 
 import flask_login
-from flask import Flask, render_template, url_for, redirect, request
+from flask import Flask, render_template, url_for, redirect, request, Response
 from flask_cors import CORS
 from werkzeug import serving
 
@@ -41,18 +42,40 @@ class User(flask_login.UserMixin):
 class Daemon:
     version = "0.2.0"
 
-    def __init__(self, hostname, port, data_dir):
+    def __init__(self, hostname, port, data_dir, production=False,
+                 template_dir=None, static_dir=None, root_dir=None):
         self.ctx = mp.get_context("spawn")
         self.hostname = hostname
         self.port = port
         self.data_dir = data_dir
+        self.production = production
         if not os.path.exists(self.data_dir):
             os.mkdir(self.data_dir)
-        self._template_dir = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "templates")
-        self._static_dir = os.path.join(self._template_dir, "static")
+        # self._template_dir = os.path.join(os.path.dirname(os.path.dirname(
+        #     os.path.abspath(__file__))), "templates")
+        # self._static_dir = os.path.join(self._template_dir, "static")
+        if template_dir is None:
+            self._template_dir = os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))), "dist")
+        else:
+            self._template_dir = template_dir
+        if static_dir is None:
+            self._static_dir = os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))), "dist")
+        else:
+            self._static_dir = static_dir
+        if root_dir is None:
+            self._root_dir = os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))))
+        else:
+            self._root_dir = root_dir
+        if not os.path.exists(self._template_dir) or not os.path.exists(self._static_dir)\
+           or not self._root_dir:
+            print("FATAL ERROR! Cannot initialize with template, static and root dirs")
+            return
         self.app = Flask(__name__, static_folder=self._static_dir,
                          template_folder=self._template_dir)
+        print(os.path.abspath(self._template_dir), os.path.abspath(self._static_dir))
         # NOTE: Fix for CSRF etc.
         #       see https://flask-cors.corydolphin.com/en/latest/api.html#using-cors-with-cookies
         CORS(self.app, supports_credentials=True)
@@ -76,7 +99,7 @@ class Daemon:
         file_handler.setFormatter(formatter)
         self._logger.addHandler(file_handler)
         self._logger.setLevel(logging.DEBUG)
-        log = Log(self._logger)
+        log = Log(self._logger, self.production)
         self._logd = log._logd
         self._loge = log._loge
         self._logi = log._logi
@@ -214,7 +237,7 @@ class Daemon:
         if not load and self._check_config(config):  # create but don't load
             try:
                 self._logd(f"Adding new config")
-                iface = FlaskInterface(None, None, data_dir)
+                iface = FlaskInterface(None, None, data_dir, production=self.production)
                 status, result = iface.check_config(config)
                 # print("IFACE", status, result, data_dir)
                 # print("CONFIG EXISTS", os.path.exists(os.path.join(data_dir)),
@@ -242,8 +265,8 @@ class Daemon:
                 self._sessions[name]["sessions"][time_str]["config"] = config
                 self._sessions[name]["sessions"][time_str]["port"] = port
                 self._sessions[name]["sessions"][time_str]["data_dir"] = data_dir
-                cmd = f"python if_run.py {self.hostname} {port} {data_dir}"
-                cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                cmd = f"python if_run.py {self.hostname} {port} {data_dir} {self.production}"
+                cwd = self._root_dir
                 print("CMD", cmd, cwd)
                 p = Popen(shlex.split(cmd), env=os.environ, cwd=cwd)
                 self._sessions[name]["sessions"][time_str]["process"] = p
@@ -443,6 +466,7 @@ class Daemon:
             return False, None
 
     def start(self):
+        self._cache = {}
         self._logi(f"Initializing Server on {self.hostname}:{self.port}")
         self.scan_sessions()
         self.load_unfinished_sessions()
@@ -453,6 +477,46 @@ class Daemon:
             if not isinstance(userid, int):
                 userid = int(userid)
             return self._users[self._ids[userid]]
+
+        @self.app.route("/", methods=["GET"])
+        def __index():
+            return render_template("index_parcel.html")
+
+        @self.app.route("/<filename>", methods=["GET"])
+        def __files(filename=None):
+            def read_file(mode):
+                with open(os.path.join(self._template_dir, filename), mode) as f:
+                    content = f.read()
+                return content
+            filename = escape(filename)
+            if filename in self._cache:
+                content = self._cache[filename]["content"]
+                mimetype = self._cache[filename]["mimetype"]
+                return Response(content, mimetype=mimetype)
+            elif filename in os.listdir(self._template_dir):
+                if filename.endswith("css"):
+                    mode = "r"
+                    mimetype = "text/css"
+                elif filename.endswith("js"):
+                    mode = "r"
+                    mimetype = "text/css"
+                elif filename.endswith("png"):
+                    mode = "rb"
+                    mimetype = "image/png"
+                elif filename.endswith("jpg") or filename.endswith("jpeg"):
+                    mode = "rb"
+                    mimetype = "image/jpeg"
+                else:
+                    print(filename)
+                    mode = "r"
+                    mimetype = "text/html"
+                content = read_file(mode)
+                self._cache[filename] = {}
+                self._cache[filename]["content"] = content
+                self._cache[filename]["mimetype"] = mimetype
+                return Response(content, mimetype=mimetype)
+            else:
+                return Response("Not found", status=404)
 
         @self.app.route("/sessions", methods=["GET"])
         @flask_login.login_required
@@ -556,7 +620,7 @@ class Daemon:
             else:
                 status, user = self._check_username_password(request.form)
                 if status:
-                    flask_login.login_user(user, remember=True)
+                    flask_login.login_user(user, remember=False)
                     return _dump([True, "Login Successful"])
                 else:
                     return _dump([False, "Invalid Credentials"])
@@ -666,8 +730,10 @@ def create_daemon(test=False, params=None):
     return daemon
 
 
-def _start_daemon(hostname, port, data_dir):
-    daemon = Daemon(hostname, port, data_dir)
+def _start_daemon(hostname, port, data_dir, production=False,
+                  template_dir=None, static_dir=None, root_dir=None):
+    daemon = Daemon(hostname, port, data_dir, production, template_dir,
+                    static_dir, root_dir)
     Thread(target=daemon.start).start()
     return daemon
 

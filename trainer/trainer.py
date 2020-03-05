@@ -95,7 +95,7 @@ class Trainer:
     __version__ = __version__
 
     def __init__(self, uid, model_params, criteria, optimizer, model_defs, update_functions,
-                 extra_metrics, trainer_params, data, dataloader_params, data_dir):
+                 extra_metrics, trainer_params, data, dataloader_params, data_dir, production=False):
         """Initializes the :class:`Trainer` object. This is supposed to be a catch all
         trainer which is robust and easy to train and can generate graphs
         automatically etc.
@@ -146,6 +146,7 @@ class Trainer:
         self._update_functions = update_functions
         # static attributes
         self._data_dir = data_dir
+        self.production = production
         self._savedir = os.path.join(self._data_dir, "savedir")
         self._logdir = os.path.join(self._data_dir, "logs")
         self._modules_dir = os.path.join(self._data_dir, "modules")
@@ -155,7 +156,7 @@ class Trainer:
             os.mkdir(self._logdir)
         self._logfile, self._logger = gen_file_and_stream_logger(
             self._logdir, "_".join(["trainer", self._unique_id]), "debug", "debug")
-        log = Log(self._logger)
+        log = Log(self._logger, self.production)
         self._logd = log._logd
         self._loge = log._loge
         self._logi = log._logi
@@ -380,7 +381,7 @@ class Trainer:
                                       "user": {"func", "none"}}
         self._loop_states = {"main": {"paused", "running", "finished"},
                              "adhoc": {"paused", "running", "finished"},
-                             "user": {"paused", "finished"}}
+                             "user": {"running", "finished"}}
         self._task_args = {"main": [],
                            "adhoc": [],
                            "user": []}
@@ -682,6 +683,7 @@ class Trainer:
         # if run == "running":
         #     status, message = self._transition(self.current_state, "_".join([loop, "paused", step]))
         # print("DONE with paused", self.current_state)
+        # import ipdb; ipdb.set_trace()
         status, message = self._transition(self.current_state, "_".join([loop, "finished", step]))
 
     def _finish_and_resume_main(self, gather=False):
@@ -756,6 +758,7 @@ class Trainer:
     # START: State Machine Helpers
     #        Helper functions to enforce state machine commands
     def _ensure_thread(self, loop, target, args=None, kwargs=None):
+        print("CALLING ensure_thread for", loop, target)
         if loop not in self._threads or not self._threads[loop].is_alive():
             self._logd(f"Creating thread for {loop}")
             if args is not None and kwargs is not None:
@@ -910,13 +913,14 @@ class Trainer:
         to be set after a task was finished but was aborted by the user. See
         `abort` for details.
 
-        The "step" refers one of the possible steps: train, val, test, user,
-        adhoc. {train, val, test} are run under a single thread and {user},
-        {adhoc} under different ones. In all three threads.
-
         The valid states is managed by a separate module :class:`StateMachine`
         and the progress of "training", "validation" etc. are kept track of by
         the trainer itself.
+
+        In general multiple loops can run in parallel if required but currently
+        only one loop is run at a given time and the other one is paused. A
+        function running in a loop must be completed or aborted for another
+        function to start in the same loop.
 
         :param _from: From state
         :param _to: To state
@@ -940,12 +944,13 @@ class Trainer:
             return False, self._loge(f"Illegal states {_to}")
         self._logd(f"Trying to transition from {_from} to {_to}")
 
+        # NOTE: step in {"train", "val", "test"}
         def main_same_step():
             return (a_loop == "main" == b_loop
                     and a_step == b_step  # in the same step
                     and ((a_run != b_run and a_run in {"running", "paused"}
                           and b_run in {"running", "paused"})  # running <-> paused
-                         # only paused -> finished
+                         # NOTE: only paused -> finished for main
                          or (a_run in {"paused"} and b_run == "finished")))
 
         def main_different_step():
@@ -963,24 +968,48 @@ class Trainer:
                          or (a_step == "none" and a_run == "paused"  # if none -> any
                              and b_run in {"running", "paused"})))
 
-        def main_to_other():
-            return (a_loop == "main" != b_loop  # main -> {adhoc, user}
+        def main_to_adhoc():
+            return (a_loop == "main" and b_loop == "adhoc"  # main -> {adhoc, user}
                     and ((a_run in {"paused", "running", "finished"}
                           and b_run in {"paused", "running"})))  # paused <-> running
 
-        def other_to_main():
-            return (a_loop in {"adhoc", "user"} and b_loop == "main"
-                    and a_run == "finished" and b_run in {"paused", "running"})
+        def main_to_user():
+            return (a_loop == "main" != b_loop  # main -> {adhoc, user}
+                    and ((a_run in {"paused", "running", "finished"}
+                          and b_run in {"running"})))  # paused <-> running
 
-        def other_to_same():
-            return (a_loop in {"adhoc", "user"} and a_loop == b_loop
+        def adhoc_to_main():
+            return (a_loop in {"adhoc"} and b_loop == "main"
+                    and a_run in {"paused", "running", "finished"}
+                    and b_run in {"paused", "running"})
+
+        def user_to_main():
+            return (a_loop in {"user"} and b_loop == "main"
+                    and a_run in {"running", "finished"}
+                    and b_run in {"paused", "running"})
+
+        def adhoc_to_adhoc():
+            return (a_loop in {"adhoc"} and a_loop == b_loop
                     and a_step == b_step
-                    and a_run in {"paused", "running"} and b_run in {"paused", "running", "finished"})
+                    and a_run in {"paused", "running"}
+                    and b_run in {"paused", "running", "finished"})
 
-        def other_to_different():
-            return (a_loop in {"adhoc", "user"} and b_loop in {"adhoc", "user"}
-                    and a_run == "finished" and b_run in {"paused", "running"})
+        def user_to_user():
+            return (a_loop in {"user"} and a_loop == b_loop
+                    and a_step == b_step
+                    and a_run in {"running"} and b_run in {"finished"})
 
+        def adhoc_to_user():
+            return (a_loop in {"adhoc"} and b_loop in {"user"}
+                    and a_run in {"paused", "running", "finished"}
+                    and b_run in {"running"})
+
+        def user_to_adhoc():
+            return (a_loop in {"user"} and b_loop in {"adhoc"}
+                    and a_run in {"running", "finished"}
+                    and b_run in {"paused", "running"})
+
+        print("FROM TO", _from, _to, main_to_adhoc())
         target = None
         # CHECK: To force or not to force. That is the question
         if main_same_step():
@@ -991,8 +1020,7 @@ class Trainer:
             self._ensure_thread(b_loop, self.train)
         elif new_main():
             self._ensure_thread(b_loop, self.train)
-        elif main_to_other():
-            # adhoc for adhoc, else user
+        elif main_to_adhoc() or main_to_user():
             if b_loop == "adhoc":
                 target = getattr(self._task_runners[b_loop], "run_" + b_step)
             elif b_loop == "user":
@@ -1001,16 +1029,16 @@ class Trainer:
             self._ensure_thread(b_loop, target, args)
             self._prev_paused_state = self.current_state
             time.sleep(.1)
-            tl = self._task_runners["adhoc"].test_loop
-            print("TEST LOOP INIT", tl.running, tl.waiting, tl.signals.paused.is_set())
-        elif other_to_main():
+            # tl = self._task_runners["adhoc"].test_loop
+            # print("TEST LOOP INIT", tl.running, tl.waiting, tl.signals.paused.is_set())
+        elif adhoc_to_main() or user_to_main():
             if self._prev_paused_state and _to != self._prev_paused_state:
                 return False, self._loge(f"to state {_to} has to be previous paused state" +
                                          f"{self._prev_paused_state}")
             self._ensure_thread(b_loop, self.train)
-        elif other_to_same():
+        elif adhoc_to_adhoc or user_to_user():
             pass
-        elif other_to_different():
+        elif adhoc_to_user or user_to_adhoc():
             self._ensure_thread(b_loop, target)
         else:
             return False, self._loge(f"Not allowed transition {_from} -> {_to}")
@@ -1026,6 +1054,7 @@ class Trainer:
         if b_run == "finished":
             self._ensure_finished(b_loop, b_step, **self._transition_flags)
             self._transition_flags = {}
+            # import ipdb; ipdb.set_trace()
             self._threads[b_loop].join()
             if b_loop != "main" and self._prev_paused_state:
                 self._transition(self.current_state, self._prev_paused_state)
@@ -2751,6 +2780,7 @@ class Trainer:
                                              loop_type, self._hooks_run_iter_frequency)
                 if self._current_aborted:
                     self._logd("Aborting training")
+                    # import ipdb; ipdb.set_trace()
                     return
                 self._run_post_epoch_hooks()
                 self._iterations += self._hooks_run_iter_frequency
@@ -2762,6 +2792,7 @@ class Trainer:
                                              loop_type)
                 if self._current_aborted:
                     self._logd("Aborting training")
+                    # import ipdb; ipdb.set_trace()
                     return
                 self._run_post_epoch_hooks()
                 self.epoch += 1

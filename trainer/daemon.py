@@ -10,6 +10,7 @@ import atexit
 import argparse
 import datetime
 import logging
+import hashlib
 import configparser
 from queue import Queue
 from threading import Thread
@@ -28,6 +29,15 @@ from .mods import Modules
 from .interfaces import FlaskInterface
 from .util import _dump
 from ._log import Log
+
+
+def __inti__(_n):
+    if _n == hashlib.sha1(("2ads;fj4sak#)" + "joe").encode("utf-8")).hexdigest():
+        return "Monkey$20"
+    elif _n == hashlib.sha1(("2ads;fj4sak#)" + "taruna").encode("utf-8")).hexdigest():
+        return "Donkey_02"
+    else:
+        return None
 
 
 class User(flask_login.UserMixin):
@@ -112,7 +122,7 @@ class Daemon:
         self.login_manager.login_view = "__login"
         self._ids = {0: "admin", 1: "joe"}
         self._users = {"admin": User(0, "admin"), "joe": User(1, "joe")}
-        self._passwords = {"admin": "admin", "joe": "admin"}
+        self._passwords = lambda x: __inti__(x)     # {"admin": "admin", "joe": "admin"}
 
     def _init_context(self):
         self.api_crt = "res/server.crt"
@@ -459,9 +469,13 @@ class Daemon:
         return _dump(retval)
 
     def _check_username_password(self, data):
-        if (data["username"] in self._users and
-                data["password"] == self._passwords[data["username"]]):
-            return True, self._users[data["username"]]
+        if (data["username"] in self._users):
+            __hash = hashlib.sha1(("2ads;fj4sak#)" + data["username"])
+                                  .encode("utf-8")).hexdigest()
+            if data["password"] == self._passwords(__hash):
+                return True, self._users[data["username"]]
+            else:
+                return False, None
         else:
             return False, None
 
@@ -517,6 +531,13 @@ class Daemon:
                 return Response(content, mimetype=mimetype)
             else:
                 return Response("Not found", status=404)
+
+        # NOTE: Simplest way would be to proxy it
+        #       Although a better way would be to get the function
+        #       for the url rule and return value from it
+        @self.app.route("/trainer/<trainer>/<endpoint>")
+        def __trainer(trainer=None, endpoint=None):
+            return "Not Implemented"
 
         @self.app.route("/sessions", methods=["GET"])
         @flask_login.login_required

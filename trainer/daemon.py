@@ -62,6 +62,12 @@ class Daemon:
         self.production = production
         if not os.path.exists(self.data_dir):
             os.mkdir(self.data_dir)
+        self.modules_dir = os.path.join(self.data_dir, "modules")
+        if not os.path.exists(self.modules_dir):
+            os.mkdir(self.modules_dir)
+        self.datasets_dir = os.path.join(self.data_dir, "datasets")
+        if not os.path.exists(self.datasets_dir):
+            os.mkdir(self.datasets_dir)
         # self._template_dir = os.path.join(os.path.dirname(os.path.dirname(
         #     os.path.abspath(__file__))), "templates")
         # self._static_dir = os.path.join(self._template_dir, "static")
@@ -99,6 +105,7 @@ class Daemon:
         self._task_q = Queue()
         self._sessions = {}
         self._modules = {}
+        self._datasets = {}
         self._init_context()
         self._task_id = 0
         self.__task_ids = []
@@ -118,7 +125,7 @@ class Daemon:
         self._logw = log._logw
         self._module_loader = Modules(self.data_dir, self._logd, self._loge,
                                       self._logi, self._logw)
-        self._load_available_modules()
+        self._load_available_global_modules()
         self._logi("Initialized Daemon")
         self.login_manager = flask_login.LoginManager()
         self.login_manager.init_app(self.app)
@@ -192,51 +199,71 @@ class Daemon:
             result = self._check_result(task_id)
         return result[1]
 
-    def _load_modules_from_dir(self, mods_dir):
-        """Load all the available modules in the module directory. If two modules with
-        the same name are imported, the previous one is overwritten. A global
-        list of modules is maintained.
-
-        The modules are listed as file/def where def is any variable definition:
-        function, class or global variable. They're simply imported as file.var.
-
-        For a zip file module, __init__.py should contain all the definitions
-        which should be available.
-
-        :returns: None
-        :rtype: None
-
-        """
-        if mods_dir not in sys.path:
-            sys.path.append(mods_dir)
-        py_mods = [x[:-3] for x in os.listdir(mods_dir) if x.endswith(".py")]
-        dir_mods = [x for x in os.listdir(mods_dir) if not x.endswith(".py")
-                    and os.path.isdir(x)]
-        mods = [*py_mods, *dir_mods]
-        # NOTE: May depend on load time of individual modules
-        for m in mods:
-            exec_cmd = f"import {m}"
-            ldict = {}
-            exec(exec_cmd, globals(), ldict)
-            self._modules[m] = [x for x in ldict[m].__dict__ if not x.startswith("__")]
-        del ldict
-        sys.path.remove(mods_dir)
-
     def _load_available_global_modules(self):
-        mods_dir = os.path.join(self.data_dir, "global_modules")
-        if not os.path.exists(mods_dir):
-            self._logd("No existing modules dir. Creating")
-            os.mkdir(mods_dir)
-        self._load_modules_from_dir(mods_dir)
+        mods_dir = self.modules_dir
+        self._module_loader.read_modules_from_dir(mods_dir)
 
+    def _dataset_valid_p(self, data_dict):
+        if len(data_dict.keys()) != 1:
+            return False, "Too many modules. Shouldn't happen."
+        if "dataset" not in [*data_dict.values()][0]:
+            return False, "'dataset' not in module"
+        else:
+            if self.datasets_dir not in sys.path:
+                sys.path.append(self.datasets_dir)
+                # NOTE: Conflicts can arrive in datasets and modules
+                #       Should append _dataset to every dataset
+                mod_name = [*data_dict.keys()][0]
+                ldict = {}
+                exec(f"import {mod_name}", globals(), ldict)
+                dataset = ldict[mod_name]
+                x = dataset.dataset
+                if not hasattr(x, "__len__"):
+                    return False, "{mod_name}.dataset doesn't have __len__"
+                elif not hasattr(x, "__getitem__"):
+                    return False, "{mod_name}.dataset doesn't have __getitem__"
+                else:
+                    return True, "Added dataset {mod_name}"
+
+    def _load_dataset(self, task_id, data):
+        name = data["name"]
+        if not name.endswith("_data"):
+            name = name + "_data"
+        file_bytes = data["data_file"]
+        data_dir = self.datasets_dir
+        result = self._module_loader.add_named_module(data_dir, file_bytes, name)
+        if result[0]:
+            status, message = self._dataset_valid_p(result[1])
+            if status:
+                self._datasets.update(result[1])
+                self._task_q.put((task_id, True, message))
+            else:
+                self._task_q.put((task_id, status, message))
+        else:
+            self._loge(f"Could not add dataset. {result}")
+            self._task_q.put((task_id, False, f"Could not add dataset. {result}"))
+
+    def _load_module(self, task_id, data):
+        mod_name = data["name"]
+        mod_file = data["data_file"]
+        print("MODULE name", mod_name)
+        mods_dir = self.modules_dir
+        status, result = self._module_loader.add_named_module(mods_dir, mod_file, mod_name)
+        if status:
+            self._modules.update(result)
+            self._task_q.put((task_id, True))
+        else:
+            self._loge(f"Could not load module. {result}")
+            self._task_q.put((task_id, False, f"Could not load module. {result}"))
+
+    # The following line should execute in the session env
+    # self._read_modules_from_dir(mods_dir)
     def _load_available_session_modules(self, session_dir):
-        mods_dir = os.path.join(session_dir, "modules")
+        mods_dir = self.modules_dir
         if not os.path.exists(mods_dir):
             self._logd("No existing modules dir. Creating")
             os.mkdir(mods_dir)
         raise NotImplementedError
-        # Actually the following line should execute in the session env
-        # self._load_modules_from_dir(mods_dir)
 
     # TODO: scan_sessions should be called at beginning and after that should
     #       raise error (or atleast warn) unless testing
@@ -714,10 +741,23 @@ class Daemon:
             flask_login.logout_user()
             return _dump([True, "Logged Out"])
 
-        @self.app.route("/add_global_module", methods=["POST"])
+        @self.app.route("/list_session_modules", methods=["GET"])
         @flask_login.login_required
-        def __add_global_module():
-            "Can be python or zip file"
+        def __list_session_modules():
+            """Returns the list of global modules available.
+            """
+            return _dump("Not Implemented yet")
+
+        @self.app.route("/add_session_module", methods=["POST"])
+        @flask_login.login_required
+        def __add_session_module():
+            """Can be python or zip file. Shows up in global modules and is immediately
+            available for loading to all sessions. Will overwrite if a module
+            with the same name already exists.
+
+            NOTE: Make sure that the imports are reloaded if there's an update
+            """
+            return _dump("Not implemented yet")
             import ipdb; ipdb.set_trace()
             if "name" not in request.form:
                 return _dump([False, "Name not in request"])
@@ -728,14 +768,21 @@ class Daemon:
                 except Exception as e:
                     return _dump([False, f"{e}"])
             data = {"name": data, "data_file": file_bytes}
-            task_id = self._get_task_id_launch_func(self.add_data, data)
+            task_id = self._get_task_id_launch_func(self._load_module, data)
             return _dump({"task_id": task_id,
                           "message": "Adding global data"})
 
-        @self.app.route("/upload_data", methods=["POST"])
+
+        @self.app.route("/delete_session_module", methods=["POST"])
         @flask_login.login_required
-        def __upload_data():
-            "Must be zip file"
+        def __delete_session_module():
+            """Can be python or zip file. Shows up in global modules and is immediately
+            available for loading to all sessions. Will overwrite if a module
+            with the same name already exists.
+
+            NOTE: Make sure that the imports are reloaded if there's an update
+            """
+            return _dump("Not implemented yet")
             import ipdb; ipdb.set_trace()
             if "name" not in request.form:
                 return _dump([False, "Name not in request"])
@@ -746,9 +793,116 @@ class Daemon:
                 except Exception as e:
                     return _dump([False, f"{e}"])
             data = {"name": data, "data_file": file_bytes}
-            task_id = self._get_task_id_launch_func(self.add_data, data)
+            task_id = self._get_task_id_launch_func(self._load_module, data)
             return _dump({"task_id": task_id,
                           "message": "Adding global data"})
+
+        @self.app.route("/list_global_modules", methods=["GET"])
+        @flask_login.login_required
+        def __list_global_modules():
+            """Returns the list of global modules available.
+            """
+            return _dump(self._modules)
+
+        @self.app.route("/add_global_module", methods=["POST"])
+        @flask_login.login_required
+        def __add_global_module():
+            """Can be python or zip file. Shows up in global modules and is immediately
+            available for loading to all sessions. Will overwrite if a module
+            with the same name already exists.
+
+            NOTE: Make sure that the imports are reloaded if there's an update
+            """
+            if "name" not in request.form:
+                return _dump([False, "Name not in request"])
+            else:
+                try:
+                    data = json.loads(request.form["name"])
+                    file_bytes = request.files["file"].read()
+                except Exception as e:
+                    return _dump([False, f"{e}"])
+            data = {"name": data, "data_file": file_bytes}
+            task_id = self._get_task_id_launch_func(self._load_module, data)
+            return _dump({"task_id": task_id,
+                          "message": "Adding global module"})
+
+        @self.app.route("/delete_global_module", methods=["POST"])
+        @flask_login.login_required
+        def __delete_global_module():
+            """Deletes the given module from the list of global modules. The module is
+            immediately unavailable for all future running functions.
+
+            NOTE: Make sure that the imports are reloaded if there's an update
+            NOTE: What if a function relied on some deleted module? It should
+                  no longer work. Not sure how to handle that.
+            """
+            if "name" not in request.form:
+                return _dump([False, "Name not in request"])
+            elif request.form["name"] not in self._modules:
+                return _dump([False, "No such module"])
+            else:
+                try:
+                    mod_name = request.form["name"]
+                    self._modules.pop(mod_name)
+                    mods_dir = self.modules_dir
+                    if os.path.exists(os.path.join(mods_dir, mod_name)):
+                        shutil.rmtree(os.path.join(mods_dir, mod_name))
+                        return _dump([True, "Removed {mod_name}."])
+                    elif os.path.exists(os.path.join(mods_dir, mod_name + ".py")):
+                        os.remove(os.path.join(mods_dir, mod_name + ".py"))
+                        return _dump([True, "Removed {mod_name}."])
+                    else:
+                        return _dump([True, "Module {mod_name} was not on disk"])
+                except Exception as e:
+                    return _dump([False, f"{e}"])
+
+        @self.app.route("/upload_dataset", methods=["POST"])
+        @flask_login.login_required
+        def __upload_dataset():
+            """Must be zip file. An __init__.py should be at the top of the zip file and
+            should access the data with relative paths or through the
+            network. No assumptions about absolute paths should be made.
+
+            The dataset name should be given in form along with description and
+            the dataset must implement __len__ and __getitem__. 
+
+            Type of data should also be mentioned.
+
+            """
+            if "name" not in request.form:
+                return _dump([False, "Name not in request"])
+            else:
+                try:
+                    data = json.loads(request.form["name"])
+                    file_bytes = request.files["file"].read()
+                except Exception as e:
+                    return _dump([False, f"{e}"])
+            data = {"name": data, "data_file": file_bytes}
+            task_id = self._get_task_id_launch_func(self._load_dataset, data)
+            return _dump({"task_id": task_id,
+                          "message": "Adding global data"})
+
+        @self.app.route("/delete_dataset", methods=["POST"])
+        @flask_login.login_required
+        def __delete_dataset():
+            if "name" not in request.form:
+                return _dump([False, "Name not in request"])
+            else:
+                name = request.form["name"]
+                if not name.endswith("_data"):
+                    name = name + "_data"
+                if name not in self._datasets:
+                    return _dump([False, "No such dataset"])
+                try:
+                    self._datasets.pop(name)
+                    data_dir = self.datasets_dir
+                    if os.path.exists(os.path.join(data_dir, name)):
+                        shutil.rmtree(os.path.join(data_dir, name))
+                        return _dump([True, "Removed {name}."])
+                    else:
+                        return _dump([True, "Module {name} was not on disk"])
+                except Exception as e:
+                    return _dump([False, f"{e}"])
 
         @self.app.route("/_ping", methods=["GET"])
         def __ping():

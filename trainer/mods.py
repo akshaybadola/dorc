@@ -39,7 +39,7 @@ class Modules:
                           Tuple[bool, Union[str, Dict]]:
         self._logd("Detected python file")
         with open(write_path, "w") as f:
-            self._logd(f"Written to {write_path}")
+            print(self._logd(f"Written to {write_path}"))
             f.write(module_file.decode())
         try:
             ldict: Dict[str, Any] = {}
@@ -65,10 +65,12 @@ class Modules:
                        Tuple[bool, Union[str, Dict]]:
         zf = zipfile.ZipFile(io.BytesIO(module_file))
         # make sure that __init__.py is at the root of tmp_dir
+        print("FILE NAME list", zf.namelist())
         if not any(["__init__.py" in x.split("/")[0] for x in zf.namelist()]):
             return False, self._logd(f"zip file must have __init__.py at the top level")
         else:
             # zf.extractall(os.path.join(self._mods_dir, write_path))
+            print(self._logd(f"Extracting to {write_path}"))
             zf.extractall(write_path)
             try:
                 ldict: Dict[str, Any] = {}
@@ -196,3 +198,65 @@ class Modules:
             exec_cmd = f"from {tmp_dir} import config"
             return self._load_zip_file(module_file, checks, tmp_path, exec_cmd, return_key)
         sys.path.remove(config_dir)
+
+    def add_named_module(self, mods_dir, module_file, module_name):
+        test_py_file = self._check_file_magic(module_file, "python")
+        return_key = module_name
+        checks = []
+        if mods_dir not in sys.path:
+            sys.path.append(mods_dir)
+        if test_py_file:
+            tmp_name = module_name
+            tmp_file = os.path.join(os.path.abspath(mods_dir), tmp_name + ".py")
+            exec_cmd = f"import {module_name}"
+            mod = self._load_python_file(module_file, checks, tmp_file, exec_cmd, return_key)
+        else:
+            tmp_dir = module_name
+            tmp_path = os.path.join(os.path.abspath(mods_dir), tmp_dir)
+            os.mkdir(tmp_path)
+            print("WRITE PATH", mods_dir, tmp_path, module_name)
+            exec_cmd = f"import {module_name}"
+            mod = self._load_zip_file(module_file, checks, tmp_path, exec_cmd, return_key)
+        sys.path.remove(mods_dir)
+        if mod[0]:
+            symbol_names = [x for x in mod[1].__dict__ if not x.startswith("__")]
+            return True, {module_name: symbol_names}
+        else:
+            return mod
+
+    def _get_symbols_from_module(self, mod_name):
+        exec_cmd = f"import {mod_name}"
+        ldict = {}
+        exec(exec_cmd, globals(), ldict)
+        symbol_names = [x for x in ldict[mod_name].__dict__
+                        if not x.startswith("__")]
+        del ldict
+        return symbol_names
+
+    def read_modules_from_dir(self, mods_dir):
+        """Load all the available modules in the module directory. If two modules with
+        the same name are imported, the previous one is overwritten. A global
+        list of modules is maintained.
+
+        The modules are listed as file/def where def is any variable definition:
+        function, class or global variable. They're simply imported as file.var.
+
+        For a zip file module, __init__.py should contain all the definitions
+        which should be available.
+
+        :returns: None
+        :rtype: None
+
+        """
+        modules_dict = {}
+        if mods_dir not in sys.path:
+            sys.path.append(mods_dir)
+        py_mods = [x[:-3] for x in os.listdir(mods_dir) if x.endswith(".py")]
+        dir_mods = [x for x in os.listdir(mods_dir) if not x.endswith(".py")
+                    and os.path.isdir(os.path.join(mods_dir, x))]
+        mods = [*py_mods, *dir_mods]
+        # NOTE: Time taken may depend on load time of individual modules
+        for m in mods:
+            modules_dict[m] = self._get_symbols_from_module(m)
+        sys.path.remove(mods_dir)
+        return modules_dict

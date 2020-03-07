@@ -7,6 +7,7 @@ import socket
 import shutil
 import shlex
 import atexit
+import inspect
 import argparse
 import datetime
 import logging
@@ -97,6 +98,7 @@ class Daemon:
         self._threads = {}
         self._task_q = Queue()
         self._sessions = {}
+        self._modules = {}
         self._init_context()
         self._task_id = 0
         self.__task_ids = []
@@ -114,8 +116,9 @@ class Daemon:
         self._loge = log._loge
         self._logi = log._logi
         self._logw = log._logw
-        self._modules = Modules(self.data_dir, self._logd, self._loge,
-                                self._logi, self._logw)
+        self._module_loader = Modules(self.data_dir, self._logd, self._loge,
+                                      self._logi, self._logw)
+        self._load_available_modules()
         self._logi("Initialized Daemon")
         self.login_manager = flask_login.LoginManager()
         self.login_manager.init_app(self.app)
@@ -189,6 +192,52 @@ class Daemon:
             result = self._check_result(task_id)
         return result[1]
 
+    def _load_modules_from_dir(self, mods_dir):
+        """Load all the available modules in the module directory. If two modules with
+        the same name are imported, the previous one is overwritten. A global
+        list of modules is maintained.
+
+        The modules are listed as file/def where def is any variable definition:
+        function, class or global variable. They're simply imported as file.var.
+
+        For a zip file module, __init__.py should contain all the definitions
+        which should be available.
+
+        :returns: None
+        :rtype: None
+
+        """
+        if mods_dir not in sys.path:
+            sys.path.append(mods_dir)
+        py_mods = [x[:-3] for x in os.listdir(mods_dir) if x.endswith(".py")]
+        dir_mods = [x for x in os.listdir(mods_dir) if not x.endswith(".py")
+                    and os.path.isdir(x)]
+        mods = [*py_mods, *dir_mods]
+        # NOTE: May depend on load time of individual modules
+        for m in mods:
+            exec_cmd = f"import {m}"
+            ldict = {}
+            exec(exec_cmd, globals(), ldict)
+            self._modules[m] = [x for x in ldict[m].__dict__ if not x.startswith("__")]
+        del ldict
+        sys.path.remove(mods_dir)
+
+    def _load_available_global_modules(self):
+        mods_dir = os.path.join(self.data_dir, "global_modules")
+        if not os.path.exists(mods_dir):
+            self._logd("No existing modules dir. Creating")
+            os.mkdir(mods_dir)
+        self._load_modules_from_dir(mods_dir)
+
+    def _load_available_session_modules(self, session_dir):
+        mods_dir = os.path.join(session_dir, "modules")
+        if not os.path.exists(mods_dir):
+            self._logd("No existing modules dir. Creating")
+            os.mkdir(mods_dir)
+        raise NotImplementedError
+        # Actually the following line should execute in the session env
+        # self._load_modules_from_dir(mods_dir)
+
     # TODO: scan_sessions should be called at beginning and after that should
     #       raise error (or atleast warn) unless testing
     def scan_sessions(self):
@@ -211,14 +260,26 @@ class Daemon:
                     self._sessions[s]["sessions"][d] = "Error " + str(e)
 
     def create_session(self, task_id, data):
-        """Creates a new training session from given data"""
+        """Creates a new training session from given data
+
+        A session has a structure `session[key]` where `key` in `{"path", "sessions",
+        "modules"}` Modules are loaded from the module path which is appended to
+        sys.path for that particular session. Each module has a separate
+        namespace as such and since each trainer instance is separate, it should
+        be easy to separate. The modules are shared among all the subsessions.
+
+        """
         session_name = data["name"]
         if session_name not in self._sessions:
             self._sessions[session_name] = {}
             self._sessions[session_name]["path"] = os.path.join(self.data_dir, session_name)
             self._sessions[session_name]["sessions"] = {}
+            self._sessions[session_name]["modules"] = {}
             if not os.path.exists(self._sessions[session_name]["path"]):
                 os.mkdir(self._sessions[session_name]["path"])  # /sessions/funky_session
+            modules_path = os.path.join(self._sessions[session_name]["path"], "modules")
+            if not os.path.exists(modules_path):
+                os.mkdir(modules_path)  # /sessions/funky_session/modules
         time_str = datetime.datetime.now().isoformat()
         # Like: /sessions/funky_session/2020-02-17T10:53:06.458827
         self._logd(f"Trying to create session {session_name}/{time_str}")
@@ -301,7 +362,7 @@ class Daemon:
         self._refresh_state(session_key)
         name, time_str = session_key.split("/")
         state = self._sessions[name]["sessions"][time_str]["state"]
-        if self._check_session_finished(state):
+        if self._session_finished_p(state):
             self._unload_helper(name, time_str)
 
     def _refresh_all_loaded_sessions(self):
@@ -316,19 +377,19 @@ class Daemon:
         for name, session in self._sessions.items():
             for sub_name, sub_sess in session["sessions"].items():
                 state = sub_sess["state"]
-                if self._check_session_finished(state):
+                if not self._session_finished_p(state):
                     self.load_session(0, {"session_key": "/".join([name, sub_name])})
 
-    def _check_session_finished(self, state) -> bool:
+    def _session_finished_p(self, state) -> bool:
         epoch = state["epoch"]
         max_epochs = state["trainer_params"]["max_epochs"]
         iterations = state["iterations"]
         max_iterations = state["trainer_params"]["max_iterations"]
         if (not iterations and not max_iterations and epoch < max_epochs) or\
            (not epoch and not max_epochs and iterations < max_iterations):
-            return True
-        else:
             return False
+        else:
+            return True
 
     def _check_session_valid(self, session_name, timestamp):
         if session_name not in self._sessions:
@@ -465,7 +526,7 @@ class Daemon:
                 retval[key]["loaded"] = "process" in session
                 retval[key]["port"] = session["port"] if retval[key]["loaded"] else None
                 retval[key]["state"] = session["state"]
-                retval[key]["finished"] = self._check_session_finished(session["state"])
+                retval[key]["finished"] = self._session_finished_p(session["state"])
         return _dump(retval)
 
     def _check_username_password(self, data):

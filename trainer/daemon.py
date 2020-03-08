@@ -201,7 +201,8 @@ class Daemon:
 
     def _load_available_global_modules(self):
         mods_dir = self.modules_dir
-        self._module_loader.read_modules_from_dir(mods_dir)
+        self._modules = self._module_loader.read_modules_from_dir(
+            mods_dir, excludes=[lambda x: x.startswith("__")])
 
     def _dataset_valid_p(self, data_dict):
         if len(data_dict.keys()) != 1:
@@ -219,11 +220,11 @@ class Daemon:
                 dataset = ldict[mod_name]
                 x = dataset.dataset
                 if not hasattr(x, "__len__"):
-                    return False, "{mod_name}.dataset doesn't have __len__"
+                    return False, f"{mod_name}.dataset doesn't have __len__"
                 elif not hasattr(x, "__getitem__"):
-                    return False, "{mod_name}.dataset doesn't have __getitem__"
+                    return False, f"{mod_name}.dataset doesn't have __getitem__"
                 else:
-                    return True, "Added dataset {mod_name}"
+                    return True, f"Added dataset {mod_name}"
 
     def _load_dataset(self, task_id, data):
         name = data["name"]
@@ -245,6 +246,8 @@ class Daemon:
 
     def _load_module(self, task_id, data):
         mod_name = data["name"]
+        if not mod_name.startswith("_module_"):
+            mod_name = "_module_" + mod_name
         mod_file = data["data_file"]
         print("MODULE name", mod_name)
         mods_dir = self.modules_dir
@@ -270,7 +273,8 @@ class Daemon:
     def scan_sessions(self):
         self._logd("Scanning Sessions")
         session_names = [x for x in os.listdir(self.data_dir) if
-                         os.path.isdir(os.path.join(self.data_dir, x))]
+                         os.path.isdir(os.path.join(self.data_dir, x))
+                         and x != "modules"]
         for s in session_names:
             self._sessions[s] = {}
             self._sessions[s]["path"] = os.path.join(self.data_dir, s)
@@ -402,10 +406,14 @@ class Daemon:
     def load_unfinished_sessions(self):
         self._logd("Loading Unfinished Sessions")
         for name, session in self._sessions.items():
-            for sub_name, sub_sess in session["sessions"].items():
-                state = sub_sess["state"]
-                if not self._session_finished_p(state):
-                    self.load_session(0, {"session_key": "/".join([name, sub_name])})
+            try:
+                for sub_name, sub_sess in session["sessions"].items():
+                    state = sub_sess["state"]
+                    if not self._session_finished_p(state):
+                        self.load_session(0, {"session_key": "/".join([name, sub_name])})
+            except Exception as e:
+                self._loge(f"Could not load session {name}. Error {e}")
+                continue
 
     def _session_finished_p(self, state) -> bool:
         epoch = state["epoch"]
@@ -543,6 +551,7 @@ class Daemon:
 
     @property
     def _sessions_list(self):
+        # return _dump(self._sessions)
         retval = {}
         for k, v in self._sessions.items():
             session_stamps = v["sessions"].keys()
@@ -591,11 +600,11 @@ class Daemon:
                     content = f.read()
                 return content
             filename = escape(filename)
-            if filename in self._cache:
-                content = self._cache[filename]["content"]
-                mimetype = self._cache[filename]["mimetype"]
-                return Response(content, mimetype=mimetype)
-            elif filename in os.listdir(self._template_dir):
+            # if filename in self._cache:
+            #     content = self._cache[filename]["content"]
+            #     mimetype = self._cache[filename]["mimetype"]
+            #     return Response(content, mimetype=mimetype)
+            if filename in os.listdir(self._template_dir):
                 if filename.endswith("css"):
                     mode = "r"
                     mimetype = "text/css"
@@ -847,7 +856,7 @@ class Daemon:
                     mods_dir = self.modules_dir
                     if os.path.exists(os.path.join(mods_dir, mod_name)):
                         shutil.rmtree(os.path.join(mods_dir, mod_name))
-                        return _dump([True, "Removed {mod_name}."])
+                        return _dump([True, f"Removed {mod_name}."])
                     elif os.path.exists(os.path.join(mods_dir, mod_name + ".py")):
                         os.remove(os.path.join(mods_dir, mod_name + ".py"))
                         return _dump([True, "Removed {mod_name}."])
@@ -864,7 +873,7 @@ class Daemon:
             network. No assumptions about absolute paths should be made.
 
             The dataset name should be given in form along with description and
-            the dataset must implement __len__ and __getitem__. 
+            the dataset must implement __len__ and __getitem__.
 
             Type of data should also be mentioned.
 

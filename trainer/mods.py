@@ -224,7 +224,7 @@ class Modules:
         else:
             return mod
 
-    def _get_symbols_from_module(self, mod_name):
+    def _get_symbols_from_module(self, mod_name: str) -> Iterable:
         exec_cmd = f"import {mod_name}"
         ldict = {}
         exec(exec_cmd, globals(), ldict)
@@ -233,7 +233,8 @@ class Modules:
         del ldict
         return symbol_names
 
-    def read_modules_from_dir(self, mods_dir):
+    def read_modules_from_dir(self, mods_dir: str,
+                              excludes: Iterable[Callable[[str], bool]]) -> Dict:
         """Load all the available modules in the module directory. If two modules with
         the same name are imported, the previous one is overwritten. A global
         list of modules is maintained.
@@ -257,6 +258,7 @@ class Modules:
         mods = [*py_mods, *dir_mods]
         # NOTE: Time taken may depend on load time of individual modules
         for m in mods:
-            modules_dict[m] = self._get_symbols_from_module(m)
+            if not any(e(m) for e in excludes):
+                modules_dict[m] = self._get_symbols_from_module(m)
         sys.path.remove(mods_dir)
         return modules_dict

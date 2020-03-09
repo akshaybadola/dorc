@@ -865,6 +865,13 @@ class Daemon:
                 except Exception as e:
                     return _dump([False, f"{e}"])
 
+        @self.app.route("/list_datasets", methods=["GET"])
+        @flask_login.login_required
+        def __list_datasets():
+            """Returns the list of global modules available.
+            """
+            return _dump(self._datasets)
+
         @self.app.route("/upload_dataset", methods=["POST"])
         @flask_login.login_required
         def __upload_dataset():

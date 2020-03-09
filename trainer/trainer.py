@@ -24,11 +24,11 @@ from .overrides import MyDataLoader, default_tensorify
 from .components import Models
 from .functions import _log_metrics_for_step
 from ._log import Log
-# from .checks import Checks
 from ._checks import (_check_model_params, _check_trainer_params, _check_data_params,
                       _check_resume_or_init_weights)
-from .helpers import (control, prop, extras, helpers, ProxyDataset, get_proxy_dataloader,
-                      PropertyProxy, HookDict, HookList, GET, POST, Exposes)
+from .helpers import (control, prop, extras, helpers, internals, ProxyDataset,
+                      get_proxy_dataloader, PropertyProxy, HookDict, HookList,
+                      GET, POST, Exposes)
 from .version import __version__
 
 
@@ -1694,7 +1694,14 @@ class Trainer:
         statuses = []
         for k, v in data.items():
             if not hasattr(self, k):
-                self._logw(f"{k} not an attribute of {self}")
+                self._logw(f"{k} not an attribute of {self}. Will add.")
+                if v["type"] in {"str", "int", "float"}:
+                    _v = {"str": str, "int": int, "float": float}[v["type"]](v["value"])
+                    setattr(self, k, _v)
+                    statuses.append(True)
+                else:
+                    self._loge(f"Not a recognized type for {k} {v['type']}")
+                    statuses.append(False)
             else:
                 try:
                     if v["type"] in {"str", "int", "float"}:
@@ -1846,16 +1853,23 @@ class Trainer:
     # END: Helpers
 
     # START: Save, Load, Resume
+    @internals
     def _dump_state(self):
         "Dump everything except weights"
-        dump_path = os.path.join(self._data_dir, "session_state")
-        state = self._get_state(False)
-        with open(dump_path, "w") as f:
-            f.write(_dump(state))
+        try:
+            dump_path = os.path.join(self._data_dir, "session_state")
+            state = self._get_state(False)
+            with open(dump_path, "w") as f:
+                f.write(_dump(state))
+            return True, "Dumped"
+        except Exception as e:
+            return False, f"{e}"
 
     def _get_state(self, model_weights=True):
         save_state = {}
         save_state["epoch"] = self.epoch
+        if hasattr(self, "given_name"):
+            save_state["given_name"] = self.given_name
         save_state["iterations"] = self.iterations
         save_state["models"] = self._models.dump() if model_weights else self._models.names
         save_state["model_params"] = copy.deepcopy(self._model_params)
@@ -2329,6 +2343,7 @@ class Trainer:
         return self.__version__
 
     @property
+    @deprecated
     def unique_id(self):
         return self._unique_id
 
@@ -2439,6 +2454,10 @@ class Trainer:
     @property
     def _helpers(self):
         return dict((x.__name__, x) for x in helpers.members)
+
+    @property
+    def _internals(self):
+        return dict((x.__name__, x) for x in internals.members)
 
     @property
     def _extras(self):

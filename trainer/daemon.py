@@ -7,7 +7,7 @@ import socket
 import shutil
 import shlex
 import atexit
-import inspect
+import requests
 import argparse
 import datetime
 import logging
@@ -37,6 +37,13 @@ def __inti__(_n):
         return "Monkey$20"
     elif _n == hashlib.sha1(("2ads;fj4sak#)" + "taruna").encode("utf-8")).hexdigest():
         return "Donkey_02"
+    else:
+        return None
+
+
+def __unti__(_n):
+    if _n == "_sxde#@_":
+        return '\x14m\xa5\xffh\x13\xe4\xd6\x15G\xbc\xc0mVC\xb2I\xfff\x96\x87\xbd\xed\x1b\xe4\xac\xf0\xcf\x14\xc9~L'
     else:
         return None
 
@@ -97,7 +104,8 @@ class Daemon:
         #       see https://flask-cors.corydolphin.com/en/latest/api.html#using-cors-with-cookies
         CORS(self.app, supports_credentials=True)
         self.app.config['TEMPLATES_AUTO_RELOAD'] = True
-        self.app.secret_key = '\x14m\xa5\xffh\x13\xe4\xd6\x15G\xbc\xc0mVC\xb2I\xfff\x96\x87\xbd\xed\x1b\xe4\xac\xf0\xcf\x14\xc9~L'
+        # NOTE: Not sure if this is really useful
+        self.app.secret_key = __unti__("_sxde#@_")
         self.use_https = False
         self.verify_user = True
         self._last_free_port = self.port
@@ -126,6 +134,7 @@ class Daemon:
         self._module_loader = Modules(self.data_dir, self._logd, self._loge,
                                       self._logi, self._logw)
         self._load_available_global_modules()
+        self._load_available_global_datasets()
         self._logi("Initialized Daemon")
         self.login_manager = flask_login.LoginManager()
         self.login_manager.init_app(self.app)
@@ -204,6 +213,13 @@ class Daemon:
         self._modules = self._module_loader.read_modules_from_dir(
             mods_dir, excludes=[lambda x: x.startswith("__")])
 
+    def _load_available_global_datasets(self):
+        json_filenames = [x for x in os.listdir(self.datasets_dir)
+                          if x.endswith(".json")]
+        for x in json_filenames:
+            with open(os.path.join(self.datasets_dir, x)) as f:
+                self._datasets[x.replace(".json", "")] = json.load(f)
+
     def _dataset_valid_p(self, data_dict):
         if len(data_dict.keys()) != 1:
             return False, "Too many modules. Shouldn't happen."
@@ -228,6 +244,8 @@ class Daemon:
 
     def _load_dataset(self, task_id, data):
         name = data["name"]
+        desc = data["description"]
+        dtype = data["type"]
         if not name.endswith("_data"):
             name = name + "_data"
         file_bytes = data["data_file"]
@@ -236,7 +254,12 @@ class Daemon:
         if result[0]:
             status, message = self._dataset_valid_p(result[1])
             if status:
-                self._datasets.update(result[1])
+                self._datasets[name] = {}
+                self._datasets[name]["members"] = result[1][name]
+                self._datasets[name]["description"] = desc
+                self._datasets[name]["type"] = dtype
+                with open(os.path.join(data_dir, name + ".json"), "w") as f:
+                    json.dump({name: self._datasets[name]}, f)
                 self._task_q.put((task_id, True, message))
             else:
                 self._task_q.put((task_id, status, message))
@@ -274,7 +297,7 @@ class Daemon:
         self._logd("Scanning Sessions")
         session_names = [x for x in os.listdir(self.data_dir) if
                          os.path.isdir(os.path.join(self.data_dir, x))
-                         and x != "modules"]
+                         and x not in {"modules", "datasets"}]
         for s in session_names:
             self._sessions[s] = {}
             self._sessions[s]["path"] = os.path.join(self.data_dir, s)
@@ -555,9 +578,9 @@ class Daemon:
         retval = {}
         for k, v in self._sessions.items():
             session_stamps = v["sessions"].keys()
-            for st in session_stamps:
-                key = k + "/" + st
-                session = v["sessions"][st]
+            for ts in session_stamps:
+                key = k + "/" + ts
+                session = v["sessions"][ts]
                 retval[key] = {}
                 retval[key]["loaded"] = "process" in session
                 retval[key]["port"] = session["port"] if retval[key]["loaded"] else None
@@ -643,6 +666,48 @@ class Daemon:
             state. Rest of the communication can be done with session"""
             return self._sessions_list
 
+        @self.app.route("/update_given_name", methods=["POST"])
+        @flask_login.login_required
+        def __update_given_name():
+            print("JSON?", request.json)
+            if hasattr(request, "data"):
+                print("DATA", request.data)
+            print("FORM", [*request.form.keys()])
+            if isinstance(request.json, dict):
+                data = request.json
+            else:
+                data = json.loads(request.json)
+            if "given_name" not in data:
+                return _dump([False, "Name not in data"])
+            if "trainer_url" not in data:
+                return _dump([False, "Missing params"])
+            if "session_key" not in data:
+                return _dump([False, "Missing params"])
+            else:
+                url = data.pop("trainer_url")
+                key = data.pop("session_key")
+                # hack_param first, then force dump_state
+                hp_data = {"given_name": {"type": "str", "value": data["given_name"]}}
+                response = requests.request("POST", url + "_helpers/hack_param",
+                                            headers={'Content-Type': 'application/json'},
+                                            data=json.dumps(hp_data))
+                if response.status_code == 200:
+                    response = requests.request("POST", url + "_internals/_dump_state",
+                                                headers={'Content-Type': 'application/json'},
+                                                data=json.dumps({"secret": "_sxde#@_"}))
+                    resp_str = json.loads(response.content)[0]
+                    if resp_str[0]:
+                        sess, ts = key.split("/")
+                        # NOTE: Update state
+                        with open(os.path.join(self._sessions[sess]["path"], ts, "session_state"),
+                                  "r") as f:
+                            self._sessions[sess]["sessions"][ts]["state"] = json.load(f)
+                        return _dump([True, "Updated successfully"])
+                    else:
+                        return _dump([True, f"{resp_str[1]}"])
+                else:
+                    return _dump([False, f"Could not assign name"])
+
         @self.app.route("/create_session", methods=["POST"])
         @flask_login.login_required
         def __new_session():
@@ -650,8 +715,9 @@ class Daemon:
             # - Creates a new session with given data
             # - Displays config editor for the user
             # - Or the client should display?
-            if "name" not in request.form:
-                return _dump([False, "Name not in request"])
+            if "name" not in request.form or ("name" in request.form
+                                              and not len(request.form["name"])):
+                return _dump([False, "Name not in request or empty name"])
             else:
                 try:
                     data = json.loads(request.form["name"])
@@ -768,8 +834,9 @@ class Daemon:
             """
             return _dump("Not implemented yet")
             import ipdb; ipdb.set_trace()
-            if "name" not in request.form:
-                return _dump([False, "Name not in request"])
+            if "name" not in request.form or ("name" in request.form
+                                              and not len(request.form["name"])):
+                return _dump([False, "Name not in request or empty name"])
             else:
                 try:
                     data = json.loads(request.form["name"])
@@ -780,7 +847,6 @@ class Daemon:
             task_id = self._get_task_id_launch_func(self._load_module, data)
             return _dump({"task_id": task_id,
                           "message": "Adding global data"})
-
 
         @self.app.route("/delete_session_module", methods=["POST"])
         @flask_login.login_required
@@ -793,8 +859,9 @@ class Daemon:
             """
             return _dump("Not implemented yet")
             import ipdb; ipdb.set_trace()
-            if "name" not in request.form:
-                return _dump([False, "Name not in request"])
+            if "name" not in request.form or ("name" in request.form
+                                              and not len(request.form["name"])):
+                return _dump([False, "Name not in request or empty name"])
             else:
                 try:
                     data = json.loads(request.form["name"])
@@ -822,8 +889,9 @@ class Daemon:
 
             NOTE: Make sure that the imports are reloaded if there's an update
             """
-            if "name" not in request.form:
-                return _dump([False, "Name not in request"])
+            if "name" not in request.form or ("name" in request.form
+                                              and not len(request.form["name"])):
+                return _dump([False, "Name not in request or empty name"])
             else:
                 try:
                     data = json.loads(request.form["name"])
@@ -845,8 +913,9 @@ class Daemon:
             NOTE: What if a function relied on some deleted module? It should
                   no longer work. Not sure how to handle that.
             """
-            if "name" not in request.form:
-                return _dump([False, "Name not in request"])
+            if "name" not in request.form or ("name" in request.form
+                                              and not len(request.form["name"])):
+                return _dump([False, "Name not in request or empty name"])
             elif request.form["name"] not in self._modules:
                 return _dump([False, "No such module"])
             else:
@@ -885,15 +954,23 @@ class Daemon:
             Type of data should also be mentioned.
 
             """
-            if "name" not in request.form:
-                return _dump([False, "Name not in request"])
-            else:
-                try:
-                    data = json.loads(request.form["name"])
-                    file_bytes = request.files["file"].read()
-                except Exception as e:
-                    return _dump([False, f"{e}"])
-            data = {"name": data, "data_file": file_bytes}
+            if "name" not in request.form or ("name" in request.form
+                                              and not len(request.form["name"])):
+                return _dump([False, "Name not in request or empty name"])
+            if "description" not in request.form or ("description" in request.form
+                                                     and not len(request.form["description"])):
+                return _dump([False, "Description not in request or empty description"])
+            if "type" not in request.form or ("type" in request.form
+                                              and not len(request.form["type"])):
+                return _dump([False, "Dataset type not in request or empty"])
+            try:
+                data = {}
+                for x in ["name", "description", "type"]:
+                    data[x] = json.loads(request.form[x])
+                file_bytes = request.files["file"].read()
+            except Exception as e:
+                return _dump([False, f"{e}"])
+            data = {"data_file": file_bytes, **data}
             task_id = self._get_task_id_launch_func(self._load_dataset, data)
             return _dump({"task_id": task_id,
                           "message": "Adding global data"})
@@ -901,8 +978,9 @@ class Daemon:
         @self.app.route("/delete_dataset", methods=["POST"])
         @flask_login.login_required
         def __delete_dataset():
-            if "name" not in request.form:
-                return _dump([False, "Name not in request"])
+            if "name" not in request.form or ("name" in request.form
+                                              and not len(request.form["name"])):
+                return _dump([False, "Name not in request or empty name"])
             else:
                 name = request.form["name"]
                 if not name.endswith("_data"):
@@ -914,9 +992,12 @@ class Daemon:
                     data_dir = self.datasets_dir
                     if os.path.exists(os.path.join(data_dir, name)):
                         shutil.rmtree(os.path.join(data_dir, name))
-                        return _dump([True, "Removed {name}."])
+                        return _dump([True, f"Removed {name}."])
+                    elif os.path.exists(os.path.join(data_dir, name + ".py")):
+                        os.remove(os.path.join(data_dir, name + ".py"))
+                        return _dump([True, f"Removed {name}."])
                     else:
-                        return _dump([True, "Module {name} was not on disk"])
+                        return _dump([True, f"Dataset {name} was not on disk"])
                 except Exception as e:
                     return _dump([False, f"{e}"])
 

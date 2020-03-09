@@ -15,6 +15,13 @@ from .mods import Modules
 from ._log import Log
 
 
+def __ifaceunti__(_n):
+    if _n == "_sxde#@_":
+        return True
+    else:
+        return False
+
+
 class FlaskInterface:
     """Flask Interface to the trainer, to create, destroy and control the
     trainer. Everything's communicated as JSON.
@@ -168,6 +175,7 @@ class FlaskInterface:
     def trainer_post(self, func_name):
         if hasattr(request, "json"):
             data = request.json
+            print("TRAINER POST data", data)
             status, response = getattr(self.trainer, func_name)(data)
             response = _dump(response)
             if not status:
@@ -188,6 +196,25 @@ class FlaskInterface:
             return self.trainer_get(func_name)
         else:
             return Response(status=405)
+
+    def trainer_internals(self, func_name):
+        if hasattr(request, "json"):
+            data = request.json
+            if "secret" not in data:
+                return _dump([False, None])
+            elif "secret" in data and not __ifaceunti__(data["secret"]):
+                return _dump([False, None])
+            else:
+                data.pop("secret")
+                status, response = getattr(self.trainer, func_name)(**data)
+            response = _dump(response)
+            if not status:
+                return Response(response, status=400, mimetype='application/json')
+            else:
+                return Response(response, status=200, mimetype='application/json')
+        else:
+            response = _dump({"error": "No data given"})
+            return Response(response, status=400, mimetype='application/json')
 
     def start(self):
         @atexit.register
@@ -248,4 +275,8 @@ class FlaskInterface:
                 methods.append("GET")
             self.app.add_url_rule("/_helpers/" + x, x, partial(self.trainer_route, x),
                                   methods=methods)
+
+        for x, y in self.trainer._internals.items():
+            self.app.add_url_rule("/_internals/" + x, x, partial(self.trainer_internals, x),
+                                  methods=["POST"])
         serving.run_simple(self.api_host, self.api_port, self.app, ssl_context=self.context)

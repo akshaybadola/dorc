@@ -114,6 +114,7 @@ control = Tag("control")
 prop = Tag("prop")
 extras = Tag("extras")
 helpers = Tag("helpers")
+internals = Tag("internals")
 
 
 def GET(f):

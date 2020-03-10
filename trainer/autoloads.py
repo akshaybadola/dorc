@@ -1,3 +1,78 @@
+import torch
+
+
+# TODO: This has to better defined with the execution logic
+#       being inferred from the variable `execution_logic`
+# TODO: to_string also has to be better implemented so that
+#       most of the function is exported automatically and
+#       only the relevant parts need to be filled in.
+# TODO: Automatic separate code for parallel and non parallel
+#       execution
+# TODO: Currently there's no way of specifying which optimizer
+#       to use. That has to be incorporated. Not sure how to
+#       proceed.
+class ModelStep:
+    def __init__(self, model_names, execution_logic):
+        self._model_names = model_names
+        self._execution_logic = execution_logic
+
+    def __call__(self, trainer, batch):
+        raise NotImplementedError
+
+    def export(self):
+        raise NotImplementedError
+
+
+class ClassificationTrainStep:
+    def __init__(self, model_name, criterion_name):
+        self._model_name = model_name
+        self._criterion_name = criterion_name
+        self.returns = {("metric", "loss"), ("", "outputs"), ("", "labels"), ("", "total")}
+
+    def __call__(self, models, criteria, batch):
+        model = models[self._model_name]
+        inputs, labels = batch
+        inputs = model.to_(inputs)
+        labels = model.to_(labels)
+        model.train()
+        model._optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criteria[self._criterion_name](outputs, labels)
+        loss.backward()
+        return {"loss": loss.detach().item(), "outputs": outputs.detach(),
+                "labels": labels.detach(), "total": len(labels)}
+
+
+class ClassificationTestStep:
+    def __init__(self, model_name, criterion_name):
+        self._model_name = model_name
+        self._criterion_name = criterion_name
+        self.returns = {("metric", "loss"), ("", "outputs"), ("", "labels"), ("", "total")}
+
+    def __call__(self, models, criteria, batch):
+        model = models[self._model_name]
+        inputs, labels = batch
+        model.eval()
+        with torch.no_grad():
+            inputs = model.to_(inputs)
+            labels = model.to_(labels)
+            outputs = model(inputs)
+            loss = criteria[self._criterion_name](outputs, labels)
+            return {"loss": loss.detach().item(), "outputs": outputs.detach(),
+                    "labels": labels.detach(), "total": len(labels)}
+
+
+# Example of using extra metrics
+# extra_metrics = {"train": {"accuracy": {"function": accuracy,
+#                                         "inputs": ["outputs", "batch[1]"]}},
+#                  "val": {"accuracy": {"function": accuracy,
+#                                       "inputs": ["outputs", "batch[1]"]}}}
+def accuracy(outputs, labels):
+    _, predicted = torch.max(outputs, 1)
+    correct = (predicted == labels).sum()
+    return float(correct)/len(predicted)
+
+
 # NOTE: Why are these functions doing this requires provides anyway? Is this
 #       type checking or error checking? If I want robust adherence to a spec, I
 #       should make provides and requires abstract functions. Checkable has

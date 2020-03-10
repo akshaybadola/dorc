@@ -1,3 +1,4 @@
+import os
 import sys
 from trainer.interfaces import FlaskInterface
 
@@ -10,4 +11,5 @@ if __name__ == '__main__':
         production = False
     else:
         production = True
+    sys.path.append(os.path.join(data_dir, "..", ".."))
     FlaskInterface(hostname, port, data_dir, production=production)

@@ -65,19 +65,33 @@ class Daemon:
         self.ctx = mp.get_context("spawn")
         self.hostname = hostname
         self.port = port
-        self.data_dir = data_dir
+        self.data_dir = os.path.abspath(data_dir)
         self.production = production
+        # NOTE: init data_dir
         if not os.path.exists(self.data_dir):
             os.mkdir(self.data_dir)
-        self.modules_dir = os.path.join(self.data_dir, "modules")
+        # FIXME: Code duplication here
+        # NOTE: init modules_dir
+        self.modules_dir = os.path.join(self.data_dir, "global_modules")
         if not os.path.exists(self.modules_dir):
             os.mkdir(self.modules_dir)
-        self.datasets_dir = os.path.join(self.data_dir, "datasets")
+        if not os.path.exists(os.path.join(self.modules_dir, "__init__.py")):
+            with open(os.path.join(self.modules_dir, "__init__.py"), "w") as f:
+                f.write("")
+        shutil.copy(os.path.join(os.path.dirname(__file__), "autoloads.py"),
+                    self.modules_dir)
+        self.env_str = f"""
+import sys
+sys.path.append("{self.data_dir}")
+"""
+        # NOTE: init datasets_dir
+        self.datasets_dir = os.path.join(self.data_dir, "global_datasets")
         if not os.path.exists(self.datasets_dir):
             os.mkdir(self.datasets_dir)
-        # self._template_dir = os.path.join(os.path.dirname(os.path.dirname(
-        #     os.path.abspath(__file__))), "templates")
-        # self._static_dir = os.path.join(self._template_dir, "static")
+        if not os.path.exists(os.path.join(self.datasets_dir, "__init__.py")):
+            with open(os.path.join(self.datasets_dir, "__init__.py"), "w") as f:
+                f.write("")
+        # NOTE: init template and static dirs
         if template_dir is None:
             self._template_dir = os.path.join(os.path.dirname(os.path.dirname(
                 os.path.abspath(__file__))), "dist")
@@ -88,6 +102,7 @@ class Daemon:
                 os.path.abspath(__file__))), "dist")
         else:
             self._static_dir = static_dir
+        # NOTE: root_dir is relative (CHECK why?)
         if root_dir is None:
             self._root_dir = os.path.join(os.path.dirname(os.path.dirname(
                 os.path.abspath(__file__))))
@@ -99,8 +114,7 @@ class Daemon:
             return
         self.app = Flask(__name__, static_folder=self._static_dir,
                          template_folder=self._template_dir)
-        print(os.path.abspath(self._template_dir), os.path.abspath(self._static_dir))
-        # NOTE: Fix for CSRF etc.
+        # NOTE: FIXME Fix for CSRF etc.
         #       see https://flask-cors.corydolphin.com/en/latest/api.html#using-cors-with-cookies
         CORS(self.app, supports_credentials=True)
         self.app.config['TEMPLATES_AUTO_RELOAD'] = True
@@ -109,6 +123,7 @@ class Daemon:
         self.use_https = False
         self.verify_user = True
         self._last_free_port = self.port
+        # NOTE: Daemon Resources
         self._threads = {}
         self._task_q = Queue()
         self._sessions = {}
@@ -118,6 +133,7 @@ class Daemon:
         self._task_id = 0
         self.__task_ids = []
         self._results = []
+        # NOTE: Logger
         self._logger = logging.getLogger("daemon_logger")
         log_file = os.path.join(self.data_dir, "logs")
         formatter = logging.Formatter(datefmt='%Y/%m/%d %I:%M:%S %p', fmt='%(asctime)s %(message)s')
@@ -131,11 +147,14 @@ class Daemon:
         self._loge = log._loge
         self._logi = log._logi
         self._logw = log._logw
+        # NOTE: Module Loader
         self._module_loader = Modules(self.data_dir, self._logd, self._loge,
                                       self._logi, self._logw)
+        # NOTE: Initialize modules and datasets
         self._load_available_global_modules()
         self._load_available_global_datasets()
         self._logi("Initialized Daemon")
+        # NOTE: Initialize login manager
         self.login_manager = flask_login.LoginManager()
         self.login_manager.init_app(self.app)
         self.login_manager.login_view = "__login"
@@ -208,10 +227,19 @@ class Daemon:
             result = self._check_result(task_id)
         return result[1]
 
+    def _update_init_file(self, init_file, module_names):
+        lines = []
+        for m in module_names:
+            lines.append(f"from . import {m}\n")
+        with open(init_file, "w") as f:
+            f.writelines(lines)
+
     def _load_available_global_modules(self):
         mods_dir = self.modules_dir
         self._modules = self._module_loader.read_modules_from_dir(
             mods_dir, excludes=[lambda x: x.startswith("__")])
+        self._update_init_file(os.path.join(self.modules_dir, "__init__.py"),
+                               self._modules.keys())
 
     def _load_available_global_datasets(self):
         json_filenames = [x for x in os.listdir(self.datasets_dir)
@@ -219,6 +247,8 @@ class Daemon:
         for x in json_filenames:
             with open(os.path.join(self.datasets_dir, x)) as f:
                 self._datasets[x.replace(".json", "")] = json.load(f)
+        self._update_init_file(os.path.join(self.datasets_dir, "__init__.py"),
+                               self._modules.keys())
 
     def _dataset_valid_p(self, data_dict):
         if len(data_dict.keys()) != 1:
@@ -228,19 +258,29 @@ class Daemon:
         else:
             if self.datasets_dir not in sys.path:
                 sys.path.append(self.datasets_dir)
-                # NOTE: Conflicts can arrive in datasets and modules
-                #       Should append _dataset to every dataset
-                mod_name = [*data_dict.keys()][0]
-                ldict = {}
-                exec(f"import {mod_name}", globals(), ldict)
-                dataset = ldict[mod_name]
-                x = dataset.dataset
-                if not hasattr(x, "__len__"):
-                    return False, f"{mod_name}.dataset doesn't have __len__"
-                elif not hasattr(x, "__getitem__"):
-                    return False, f"{mod_name}.dataset doesn't have __getitem__"
-                else:
-                    return True, f"Added dataset {mod_name}"
+            mod_name = [*data_dict.keys()][0]
+            ldict = {}
+            exec(f"import {mod_name}", globals(), ldict)
+            dataset = ldict[mod_name]
+            if not hasattr(dataset, "dataset"):
+                return False, f"'dataset' not in {mod_name}"
+            else:
+                return True, f"Added dataset {mod_name}"
+            # check for splits?
+            # NOTE: Old code which checks for __len__ and __getitem__
+            # # NOTE: Conflicts can arrive in datasets and modules
+            # #       Should append _dataset to every dataset
+            # mod_name = [*data_dict.keys()][0]
+            # ldict = {}
+            # exec(f"import {mod_name}", globals(), ldict)
+            # dataset = ldict[mod_name]
+            # x = dataset.dataset
+            # if not hasattr(x, "__len__"):
+            #     return False, f"{mod_name}.dataset doesn't have __len__"
+            # elif not hasattr(x, "__getitem__"):
+            #     return False, f"{mod_name}.dataset doesn't have __getitem__"
+            # else:
+            #     return True, f"Added dataset {mod_name}"
 
     def _load_dataset(self, task_id, data):
         name = data["name"]
@@ -297,21 +337,23 @@ class Daemon:
         self._logd("Scanning Sessions")
         session_names = [x for x in os.listdir(self.data_dir) if
                          os.path.isdir(os.path.join(self.data_dir, x))
-                         and x not in {"modules", "datasets"}]
+                         and x not in {os.path.basename(self.modules_dir),
+                                       os.path.basename(self.datasets_dir)}]
         for s in session_names:
             self._sessions[s] = {}
             self._sessions[s]["path"] = os.path.join(self.data_dir, s)
             self._sessions[s]["sessions"] = {}
             for d in os.listdir(self._sessions[s]["path"]):
-                try:
-                    data_dir = os.path.join(self._sessions[s]["path"], d)
-                    self._sessions[s]["sessions"][d] = {}
-                    self._sessions[s]["sessions"][d]["data_dir"] = data_dir
-                    with open(os.path.join(self._sessions[s]["path"], d, "session_state"),
-                              "r") as f:
-                        self._sessions[s]["sessions"][d]["state"] = json.load(f)
-                except Exception as e:
-                    self._sessions[s]["sessions"][d] = "Error " + str(e)
+                if d not in {"modules", "datasets"}:
+                    try:
+                        data_dir = os.path.join(self._sessions[s]["path"], d)
+                        self._sessions[s]["sessions"][d] = {}
+                        self._sessions[s]["sessions"][d]["data_dir"] = data_dir
+                        with open(os.path.join(self._sessions[s]["path"], d, "session_state"),
+                                  "r") as f:
+                            self._sessions[s]["sessions"][d]["state"] = json.load(f)
+                    except Exception as e:
+                        self._sessions[s]["sessions"][d] = "Error " + str(e)
 
     def create_session(self, task_id, data):
         """Creates a new training session from given data
@@ -363,7 +405,7 @@ class Daemon:
             try:
                 self._logd(f"Adding new config")
                 iface = FlaskInterface(None, None, data_dir, production=self.production)
-                status, result = iface.check_config(config)
+                status, result = iface.check_config(config, env=self.env_str)
                 # print("IFACE", status, result, data_dir)
                 # print("CONFIG EXISTS", os.path.exists(os.path.join(data_dir)),
                 #       (os.path.exists(os.path.join(data_dir, "session_config"))
@@ -575,6 +617,7 @@ class Daemon:
     @property
     def _sessions_list(self):
         # return _dump(self._sessions)
+        print(self._sessions)
         retval = {}
         for k, v in self._sessions.items():
             session_stamps = v["sessions"].keys()
@@ -599,7 +642,9 @@ class Daemon:
         else:
             return False, None
 
+    # NOTE: Main entry point for the server
     def start(self):
+        # FIXME: Cache isn't used as of now
         self._cache = {}
         self._logi(f"Initializing Server on {self.hostname}:{self.port}")
         self.scan_sessions()
@@ -623,6 +668,7 @@ class Daemon:
                     content = f.read()
                 return content
             filename = escape(filename)
+            # FIXME: Cache isn't used as of now
             # if filename in self._cache:
             #     content = self._cache[filename]["content"]
             #     mimetype = self._cache[filename]["mimetype"]
@@ -711,10 +757,6 @@ class Daemon:
         @self.app.route("/create_session", methods=["POST"])
         @flask_login.login_required
         def __new_session():
-            # TODO:
-            # - Creates a new session with given data
-            # - Displays config editor for the user
-            # - Or the client should display?
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
                 return _dump([False, "Name not in request or empty name"])

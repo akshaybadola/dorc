@@ -22,13 +22,12 @@ from .epoch import Epoch
 from .mods import Modules as Modules
 from .overrides import MyDataLoader, default_tensorify
 from .components import Models
-from .functions import _log_metrics_for_step
 from ._log import Log
 from ._checks import (_check_model_params, _check_trainer_params, _check_data_params,
                       _check_resume_or_init_weights)
 from .helpers import (control, prop, extras, helpers, internals, ProxyDataset,
                       get_proxy_dataloader, PropertyProxy, HookDict, HookList,
-                      GET, POST, Exposes)
+                      GET, POST, Exposes, _log_metrics_for_step)
 from .version import __version__
 
 
@@ -94,8 +93,9 @@ class Trainer:
     """
     __version__ = __version__
 
-    def __init__(self, uid, model_params, criteria, optimizer, model_defs, update_functions,
-                 extra_metrics, trainer_params, data, dataloader_params, data_dir, production=False):
+    def __init__(self, model_params, criteria, optimizer, model_defs, update_functions,
+                 extra_metrics, trainer_params, data, dataloader_params, data_dir,
+                 uid="uid_deprecated", production=False):
         """Initializes the :class:`Trainer` object. This is supposed to be a catch all
         trainer which is robust and easy to train and can generate graphs
         automatically etc.

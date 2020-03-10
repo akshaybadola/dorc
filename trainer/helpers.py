@@ -172,3 +172,17 @@ def get_proxy_dataloader(dataset, params, fraction_or_number, logger=None):
             logger.warn(f"Dataset dataset doesn't define \"_get_raw\".\
             Drawing samples from test data will not be available.")
     return temp_loader
+
+
+def _log_metrics_for_step(step, key_name, step_loader, metrics,
+                          update_key, log_func):
+    metric_names = set(metrics.keys())
+    log_func(f"Total datapoints processed for {step} step in {key_name}: {update_key}," +
+             f" {metrics['num_datapoints'][update_key]}")
+    for m in metric_names:
+        if update_key in metrics[m]:
+            log_func(f"Value of metric {m} for {step} step in {key_name} is:" +
+                     f" {metrics[m][update_key]}")
+        else:
+            log_func(f"No value recorded for {step}_step," +
+                     f" metric {m} and {key_name} {update_key}")

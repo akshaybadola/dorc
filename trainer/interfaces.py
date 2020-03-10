@@ -117,8 +117,8 @@ class FlaskInterface:
             else:
                 return status, result
 
-    def check_config(self, config):
-        status, result = self._modules.add_config(self.data_dir, config)
+    def check_config(self, config, env=None):
+        status, result = self._modules.add_config(self.data_dir, config, env=env)
         # print("CHECK CONFIG", self.data_dir,
         #       (os.path.exists(self.data_dir + "/session_config")
         #        or os.path.exists(self.data_dir + "/session_config.py")))

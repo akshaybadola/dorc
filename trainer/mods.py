@@ -74,13 +74,14 @@ class Modules:
             zf.extractall(write_path)
             try:
                 ldict: Dict[str, Any] = {}
-                self._logd(f"Executing {exec_cmd}")
+                print(self._logd(f"Executing {exec_cmd}"))
                 exec(exec_cmd, globals(), ldict)
                 return True, ldict[return_key]
             except ImportError as e:
-                return False, self._logd(f"Could not import module_exports from given file. Error {e}")
+                import ipdb; ipdb.set_trace()
+                return False, self._logd(f"Could not import {return_key} from given file. Error {e}")
             except Exception as e:
-                return False, self._logd(f"Some weird error occured while importing. Error {e}")
+                return False, self._logd(f"Some weird error occured while importing {return_key}. Error {e}")
 
     def add_module(self, request, checks: Iterable[Callable[[str], bool]]) ->\
             Tuple[bool, Union[str, Dict]]:
@@ -181,21 +182,22 @@ class Modules:
         else:
             return False, "Failed to add module"
 
-    def add_config(self, config_dir, module_file):
+    def add_config(self, config_dir, module_file, env=None):
         test_py_file = self._check_file_magic(module_file, "python")
         return_key = "config"
         checks = []
         if config_dir not in sys.path:
             sys.path.append(config_dir)
+        tmp_dir = tmp_name = "session_config"
+        if env:
+            exec_cmd = env + "\n" + f"from session_config import config"
+        else:
+            exec_cmd = f"from session_confing import config"
         if test_py_file:
-            tmp_name = "session_config"
             tmp_file = os.path.join(os.path.abspath(config_dir), tmp_name + ".py")
-            exec_cmd = f"from {tmp_name} import config"
             return self._load_python_file(module_file, checks, tmp_file, exec_cmd, return_key)
         else:
-            tmp_dir = "session_config"
-            tmp_path = os.mkdir(os.path.join(os.path.abspath(config_dir), tmp_dir))
-            exec_cmd = f"from {tmp_dir} import config"
+            tmp_path = os.path.join(os.path.abspath(config_dir), tmp_dir)
             return self._load_zip_file(module_file, checks, tmp_path, exec_cmd, return_key)
         sys.path.remove(config_dir)
 

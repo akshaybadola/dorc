@@ -3,6 +3,7 @@ import sys
 import ssl
 import atexit
 import logging
+import traceback
 from functools import partial
 
 from flask import Flask, render_template, request, Response
@@ -27,7 +28,7 @@ class FlaskInterface:
     trainer. Everything's communicated as JSON.
     """
 
-    def __init__(self, hostname, port, data_dir, bare=True, production=False):
+    def __init__(self, hostname, port, data_dir, bare=True, production=False, no_start=False):
         """
         :param hostname: :class:`str` host over which to serve
         :param port: :class:`int` port over which to serve
@@ -44,7 +45,7 @@ class FlaskInterface:
         self.bare = bare
         self.production = production
         self.app = Flask(__name__)
-        CORS(self.app)
+        CORS(self.app, supports_credentials=True)
         self.app.config['TEMPLATES_AUTO_RELOAD'] = True
         self.use_https = False
         self.verify_user = True
@@ -67,10 +68,13 @@ class FlaskInterface:
         if (self.api_host and self.api_port and self.config_exists):
             self._logi("Creating Trainer")
             status, message = self.create_trainer()
-            if status:
+            if status and no_start:
+                self._logi("no_start given. Not starting")
+            elif status and not no_start:
+                self._logi("Starting server")
                 self.start()
             else:
-                print("Error creating trainer", message)
+                self._loge(f"Error creating trainer {message}")
         elif (not self.state_exists and self.config_exists and
                 not self.api_host and not self.api_port):
             self._logi(f"Initializing Trainer State")
@@ -103,7 +107,7 @@ class FlaskInterface:
             self.trainer._init_all()
             return True, "Created Trainer"
         except Exception as e:
-            return False, f"{e}"
+            return False, f"{e}" + "\n" + traceback.format_exc()
 
     def create_trainer(self, config=None):
         if self.config_exists:
@@ -142,7 +146,8 @@ class FlaskInterface:
                 self.context.load_cert_chain(self.api_crt, self.api_key)
             except Exception as e:
                 sys.exit("Error starting flask server. " +
-                         "Missing cert or key. Details: {}".format(e))
+                         f"Missing cert or key. Details: {e}"
+                         + "\n" + traceback.format_exc())
         else:
             self.context = None
 
@@ -175,7 +180,6 @@ class FlaskInterface:
     def trainer_post(self, func_name):
         if hasattr(request, "json"):
             data = request.json
-            print("TRAINER POST data", data)
             status, response = getattr(self.trainer, func_name)(data)
             response = _dump(response)
             if not status:

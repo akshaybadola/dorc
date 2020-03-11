@@ -7,6 +7,7 @@ import time
 import json
 import torch
 import inspect
+import traceback
 from functools import partial
 from threading import Thread, Event
 from PIL import Image
@@ -389,6 +390,7 @@ class Trainer:
                             "adhoc": [],
                             "user": []}
         self._current_state = "main_paused_none"
+        self._prev_paused_state = None
 
     # TODO: For each such variable i.e., static, property etc. add a decorator
     #       or a function such that they're added to that list e.g.,
@@ -753,6 +755,9 @@ class Trainer:
         #         self._transition(self.current_state, "_".join(["force", "running", step]))
         #     else:
         #         self._transition(self.current_state, "_".join(["normal", "running", step]))
+
+    def _abort_on_error(self):
+        self._abort_current
     # END: Internal Controls
 
     # START: State Machine Helpers
@@ -1185,13 +1190,15 @@ class Trainer:
                         self._models.load_weights(name, load_state["models"][name])
                 except Exception as e:
                     return False,\
-                        self._logi(f"Could not load weights {weights}. Error occured {e}")
+                        self._loge(f"Could not load weights {weights}. Error occured {e}" +
+                                   + "\n" + traceback.format_exc())
                 return True, self._logi(f"Successfuly loaded weights {weights}")
             else:
                 try:
                     self._resume_from_path(os.path.join(self._savedir, weights))
                 except Exception as e:
-                    return False, self._logi(f"Could not resume from {weights}. Error occured {e}")
+                    return False, self._logi(f"Could not resume from {weights}. Error occured {e}" +
+                                             f"\n{traceback.format_exc()}")
                 return True, self._logi(f"Resumed from file")
 
     # CHECK: I think it's more generic now.
@@ -1236,7 +1243,7 @@ class Trainer:
                 output, callback = async_result.get()
             except Exception as e:
                 return False, f"Unexpected output format for function {func_name}," +\
-                    f" Error occured {e}"
+                    f" Error occured {e}" + f"\n{traceback.format_exc()}"
             if callback not in self.user_funcs:
                 return False, {"error": self._loge(f"Unknown function {callback} given"),
                                "available_functions": self.user_funcs}
@@ -1632,7 +1639,8 @@ class Trainer:
             try:
                 Image.open(img_path)
             except Exception as e:
-                return False, self._loge(f"Error occurred while reading file {e}")
+                return False, self._loge(f"Error occurred while reading file {e}" +
+                                         f"\n{traceback.format_exc()}")
             with open(img_path, "rb") as img_file:
                 return True, base64.b64encode(img_file.read()).decode("utf-8")
 
@@ -1645,7 +1653,8 @@ class Trainer:
             img_file = request.files["file"].read()
             test = self._check_file_magic(img_file, "image")
         except Exception as e:
-            return False, self._loge(f"Error reading file {e}")
+            return False, self._loge(f"Error reading file {e}" +
+                                     f"\n{traceback.format_exc()}")
         if test:
             import skimage
             self._logd("Detected image file")
@@ -1671,7 +1680,8 @@ class Trainer:
         try:
             weights = torch.load(request.files["file"], map_location="cpu")
         except Exception as e:
-            return False, self._loge(f"Error occured while reading data {e}")
+            return False, self._loge(f"Error occured while reading data {e}" +
+                                     f"\n{traceback.format_exc()}")
         if not all(x in weights for x in model_names):
             return False, self._logd(f"Check save file! " +
                                      f"Not all {model_names} in given weights {weights.keys()}")
@@ -1684,7 +1694,8 @@ class Trainer:
                     return False, self._loge(f"Error while updating component {err}")
             return True, self._logd(f"Updated Models {model_names}")
         except Exception as e:
-            return False, self._loge(f"Error occured while loading models {e}")
+            return False, self._loge(f"Error occured while loading models {e}" +
+                                     f"\n{traceback.format_exc()}")
 
     @POST
     @helpers
@@ -1772,7 +1783,8 @@ class Trainer:
                                       "device": self.device}
                             self._models.add(model, params)
                     except Exception as e:
-                        return False, self._loge(f"Some weird error occured {e}")
+                        return False, self._loge(f"Some weird error occured {e}" +
+                                                 f"\n{traceback.format_exc()}")
                     return status, self._logd(f"Added model {name} successfully")
         else:
             return status, response
@@ -1863,7 +1875,7 @@ class Trainer:
                 f.write(_dump(state))
             return True, "Dumped"
         except Exception as e:
-            return False, f"{e}"
+            return False, f"{e}" + f"\n{traceback.format_exc()}"
 
     def _get_state(self, model_weights=True):
         save_state = {}
@@ -2174,7 +2186,7 @@ class Trainer:
         except Exception as e:
             status = False
             message = f"Could not save to {self._save_path_with_epoch}" + "_force" +\
-                f" error {e}"
+                f" error {e}" + f"\n{traceback.format_exc()}"
         self._transition(self.current_state, self._prev_paused_state)
         self._prev_paused_state = None
         return status, message
@@ -2208,11 +2220,12 @@ class Trainer:
 
         """
         try:
-            self._abort_current()
+            self._abort_current("user")
             self.save()
-            self._abort_session()
+            self._abort_session("user")
         except Exception as e:
-            return False, self._logi(f"Could not abort {self.current_state}. Error {e}")
+            return False, self._logi(f"Could not abort {self.current_state}. Error {e}" +
+                                     f"\n{traceback.format_exc()}")
         return True, self._logi(f"Aborted state {self.current_state} and current session")
 
     @control
@@ -2226,9 +2239,10 @@ class Trainer:
 
         """
         try:
-            self._abort_current()
+            self._abort_current("user")
         except Exception as e:
-            return False, self._logi(f"Could not abort {self.current_state}. Error {e}")
+            return False, self._logi(f"Could not abort {self.current_state}. Error {e}" +
+                                     f"\n{traceback.format_exc()}")
         return True, self._logi(f"Aborted {self.current_state}")
 
     @control
@@ -2242,9 +2256,10 @@ class Trainer:
 
         """
         try:
-            self._abort_current_run_cb()
+            self._abort_current_run_cb("user")
         except Exception as e:
-            return False, self._logi(f"Could not abort {self.current_state}. Error {e}")
+            return False, self._logi(f"Could not abort {self.current_state}. Error {e}" +
+                                     f"\n{traceback.format_exc()}")
         return True, self._logi(f"Aborted {self.current_state}")
     # END: Controls
 
@@ -2296,19 +2311,19 @@ class Trainer:
         self._toggle_session_aborted()
         self._transition(self.current_state, "force_finshed_none")
 
-    def _abort_current(self):
+    def _abort_current(self, cause: str):
         self._toggle_current_aborted()
         self._finish_if_paused_or_running()
         # self._toggle_current_aborted()
         print("ABORTED flag", self._current_aborted)
-        self._aborted.append(self.current_state.split("_")[-1])
+        self._aborted.append([self.current_state.split("_")[-1], cause])
 
-    def _abort_current_run_cb(self):
+    def _abort_current_run_cb(self, cause: str):
         self._toggle_current_aborted()
         self._finish_if_paused_or_running(True)
         # self._toggle_current_aborted()
         print("ABORTED flag", self._current_aborted)
-        self._aborted.append(self.current_state.split("_")[-1])
+        self._aborted.append([self.current_state.split("_")[-1], cause])
     # END: Flags
 
     # START: Internal Controls Other
@@ -2319,7 +2334,7 @@ class Trainer:
     def _force_validate_parallel(self):
         # Runs in alternate loop
         pass
-    
+
     def _force_test_parallel(self):
         # Runs in alternate loop
         pass
@@ -2328,11 +2343,11 @@ class Trainer:
         # Pauses main loop
         pass
 
-    def _run_user_func(self, user_func_name):
+    def _run_user_func(self, user_func_name: str):
         # pauses main loop, shouldn't update weights
         pass
 
-    def _run_user_func_parallel(self, user_func_name):
+    def _run_user_func_parallel(self, user_func_name: str):
         # runs in alternate loop, if model is used will make a copy of model
         pass
     # END: Internal Controls Other
@@ -2797,6 +2812,9 @@ class Trainer:
                 # NOTE: run for self._hooks_run_iter_frequency
                 self._epoch_runner.run_train(self.train_step_func, self.train_loader,
                                              loop_type, self._hooks_run_iter_frequency)
+                if not self._epoch_runner.train_loop.status[0]:
+                    print("ERROR in train_loop")
+                    self._abort_current(self._epoch_runner.train_loop.status[1])
                 if self._current_aborted:
                     self._logd("Aborting training")
                     # import ipdb; ipdb.set_trace()
@@ -2957,6 +2975,7 @@ class Trainer:
             self._post_epoch_hooks_to_run.insert(position, name.replace("_post_epoch_hook", ""))
 
     def _run_post_epoch_hooks(self):
+        time.sleep(5)
         self._logd("Running post epoch hooks")
         all_hooks = self.all_post_epoch_hooks
         hook_prefixes = self.post_epoch_hooks_to_run

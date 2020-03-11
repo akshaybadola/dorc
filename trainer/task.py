@@ -1,5 +1,6 @@
 from typing import Callable, Iterable, Dict, Any
 import time
+import traceback
 import multiprocessing as mp
 from abc import ABC, abstractmethod
 from threading import Thread, Event
@@ -118,7 +119,7 @@ class DiscreteTask(Task):
             self._t = Thread(target=self._check_p)
             self._t.start()
         except Exception as e:
-            self.status = False, e
+            self.status = False, f"{e}" + "\n" + traceback.format_exc()
             self._toggle_running()
 
 
@@ -204,7 +205,7 @@ class LoopTask(Task):
                     self.signals.paused.wait()
                     self._toggle_waiting()
         except Exception as e:
-            self.status = False, e
+            self.status = False, f"{e}" + "\n" + traceback.format_exc()
         self.finish()
 
 
@@ -245,5 +246,5 @@ class LoopTaskWithHooks(LoopTask):
                     self._toggle_waiting()
         except Exception as e:
             self.aborted = True
-            self.status = False, e
+            self.status = False, f"{e}" + "\n" + traceback.format_exc()
         self.finish()

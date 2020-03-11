@@ -82,7 +82,22 @@ class DeviceMonitor:
     @property
     def gpu_util(self):
         if self._handles:
-            return self._data["gpu_util"]
+            all_keys = set.union(*[set(x.keys()) for x in self._data["gpu_info"]])
+            util = {}
+            for k in all_keys:
+                util[k] = [x[k]["gpu"] for x in self._data["gpu_info"]]
+            return util
+        else:
+            return None
+
+    @property
+    def gpu_mem_util(self):
+        if self._handles:
+            all_keys = set.union(*[set(x.keys()) for x in self._data["gpu_info"]])
+            mem = {}
+            for k in all_keys:
+                mem[k] = [x[k]["memory"] for x in self._data["gpu_info"]]
+            return mem
         else:
             return None
 

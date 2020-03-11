@@ -5,6 +5,7 @@ import sys
 import uuid
 import magic
 import zipfile
+import traceback
 
 
 class Modules:
@@ -56,9 +57,11 @@ class Modules:
                 exec(exec_cmd, globals(), ldict)
                 return True, ldict[return_key]
         except ImportError as e:
-            return False, self._logd(f"Could not import module_exports from given file. Error {e}")
+            return False, self._logd(f"Could not import module_exports from given file. Error {e}"
+                                     + "\n" + traceback.format_exc())
         except Exception as e:
-            return False, self._logd(f"Some weird error occured while importing. Error {e}")
+            return False, self._logd(f"Some weird error occured while importing. Error {e}"
+                                     + "\n" + traceback.format_exc())
 
     def _load_zip_file(self, module_file: bytes, checks: Iterable[Callable[[str], bool]],
                        write_path: str, exec_cmd: str, return_key: str) ->\
@@ -78,10 +81,11 @@ class Modules:
                 exec(exec_cmd, globals(), ldict)
                 return True, ldict[return_key]
             except ImportError as e:
-                import ipdb; ipdb.set_trace()
-                return False, self._logd(f"Could not import {return_key} from given file. Error {e}")
+                return False, self._logd(f"Could not import {return_key} from given file. Error {e}"
+                                         + "\n" + traceback.format_exc())
             except Exception as e:
-                return False, self._logd(f"Some weird error occured while importing {return_key}. Error {e}")
+                return False, self._logd(f"Some weird error occured while importing {return_key}. Error {e}"
+                                         + "\n" + traceback.format_exc())
 
     def add_module(self, request, checks: Iterable[Callable[[str], bool]]) ->\
             Tuple[bool, Union[str, Dict]]:
@@ -125,7 +129,8 @@ class Modules:
             else:
                 return False, self._logd(f"Given file neither python nor zip.")
         except Exception as e:
-            return False, self._logd(f"Error occured while reading file {e}")
+            return False, self._logd(f"Error occured while reading file {e}"
+                                     + "\n" + traceback.format_exc())
 
     def add_user_funcs(self, request, user_funcs) -> Tuple[bool, str]:
         """Add a user function from a given python or module as a zip file. Delegates

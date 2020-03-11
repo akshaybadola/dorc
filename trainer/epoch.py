@@ -4,6 +4,7 @@ import numpy as np
 import queue
 from functools import partial
 from threading import Thread, Event
+import traceback
 import multiprocessing as mp
 
 from .task import LoopTaskWithHooks, Signals
@@ -80,8 +81,15 @@ def _log_post_batch_hook(epoch: 'Epoch', **kwargs):
     #     epoch.batch_vars.append((step, epoch.batch_num[step], "time", kwargs["time"]))
     if "device_mon" in kwargs:
         dm = kwargs["device_mon"]
-        if dm.gpu_util is not None:
-            epoch.batch_vars.append((step, epoch.batch_num[step], "gpu_util", np.mean(dm.gpu_util)))
+        # print("LOGGING device_mon in kwargs", dm.__dict__)
+        gpu_util = dm.gpu_util
+        gpu_mem_util = dm.gpu_mem_util
+        if gpu_util is not None:
+            epoch.batch_vars.append((step, epoch.batch_num[step], "gpu_util",
+                                     [(k, np.mean(v)) for k, v in gpu_util.items()]))
+        if gpu_mem_util is not None:
+            epoch.batch_vars.append((step, epoch.batch_num[step], "gpu_mem_util",
+                                     [(k, np.mean(v)) for k, v in gpu_mem_util.items()]))
         epoch.batch_vars.append((step, epoch.batch_num[step], "cpu_util", np.mean(dm.cpu_util)))
         epoch.batch_vars.append((step, epoch.batch_num[step], "mem_util", np.mean(dm.mem_util)))
         epoch.batch_vars.append((step, epoch.batch_num[step], "time", dm.time))
@@ -141,7 +149,7 @@ class EpochLoop(LoopTaskWithHooks):
                     break
             except StopIteration as e:
                 self._iter_finished = True
-                self.status = True, f"{e}"
+                self.status = True, f"{e}" + "\n" + traceback.format_exc()
                 break
             batch_time = time.time() - start
             if not self.finished:
@@ -198,6 +206,7 @@ class EpochLoop(LoopTaskWithHooks):
                     result["batch_time"] = batch_time
                     # NOTE: Hooks are passed as callables with no positional
                     #       args from epoch and only take kwargs
+                    # print("BEFORE Running hooks in train_loop")
                     self._run_hooks(**{"device_mon": self.device_mon, **result})
                     # print("DO WE GET HERE?")
                 if hasattr(self.signals, "aborted") and self.signals.aborted:
@@ -213,7 +222,7 @@ class EpochLoop(LoopTaskWithHooks):
                     self._toggle_waiting()
         except Exception as e:
             self._aborted.set()
-            self.status = False, e
+            self.status = False, f"{e}" + "\n" + traceback.format_exc()
         self.finish()
 
 
@@ -263,7 +272,7 @@ class Epoch:
     def status(self) -> Union[Tuple[bool, str], bool]:
         if self._current_loop is None:
             return False, "idle"
-        elif len(self._current_loop.status) == 1:
+        elif isinstance(self._current_loop.status, bool):
             return self._current_loop.status, "Alive"
         else:
             return self._current_loop.status
@@ -323,7 +332,7 @@ class Epoch:
                 self._all_post_batch_hooks[step][name] = partial(hook, self)
                 return True
             except Exception as e:
-                return False, f"Error occurred {e}"
+                return False, f"Error occurred {e}\n" + traceback.format_exc()
         else:
             return False, "Wrong step or not callable hook"
 

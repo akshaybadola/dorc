@@ -1,6 +1,5 @@
 import torch
 from torchvision import datasets, transforms
-import global_modules as gm
 
 
 class Net(torch.nn.Module):
@@ -30,50 +29,50 @@ class Net(torch.nn.Module):
         return output
 
 
-# class ClassificationTrainStep:
-#     def __init__(self, model_name, criterion_name):
-#         self._model_name = model_name
-#         self._criterion_name = criterion_name
-#         self.returns = {("metric", "loss"), ("", "outputs"), ("", "labels"), ("", "total")}
+class ClassificationTrainStep:
+    def __init__(self, model_name, criterion_name):
+        self._model_name = model_name
+        self._criterion_name = criterion_name
+        self.returns = {("metric", "loss"), ("", "outputs"), ("", "labels"), ("", "total")}
 
-#     def __call__(self, models, criteria, batch):
-#         model = models[self._model_name]
-#         # generator = models["generator"]
-#         # discriminator = models["discriminator"]
-#         # crit_gan = criteria["crit_gan"]
-#         # crit_disc = criteria["crit_disc"]
-#         # x = torch.randn(100)
-#         # gen = generator(x)
-#         # crit
-#         inputs, labels = batch
-#         inputs = model.to_(inputs)
-#         labels = model.to_(labels)
-#         model.train()
-#         model._optimizer.zero_grad()
-#         outputs = model(inputs)
-#         loss = criteria[self._criterion_name](outputs, labels)
-#         loss.backward()
-#         return {"loss": loss.detach().item(), "outputs": outputs.detach(),
-#                 "labels": labels.detach(), "total": len(labels)}
+    def __call__(self, models, criteria, batch):
+        model = models[self._model_name]
+        # generator = models["generator"]
+        # discriminator = models["discriminator"]
+        # crit_gan = criteria["crit_gan"]
+        # crit_disc = criteria["crit_disc"]
+        # x = torch.randn(100)
+        # gen = generator(x)
+        # crit
+        inputs, labels = batch
+        inputs = model.to_(inputs)
+        labels = model.to_(labels)
+        model.train()
+        model._optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criteria[self._criterion_name](outputs, labels)
+        loss.backward()
+        return {"loss": loss.detach().item(), "outputs": outputs.detach(),
+                "labels": labels.detach(), "total": len(labels)}
 
 
-# class ClassificationTestStep:
-#     def __init__(self, model_name, criterion_name):
-#         self._model_name = model_name
-#         self._criterion_name = criterion_name
-#         self.returns = {("metric", "loss"), ("", "outputs"), ("", "labels"), ("", "total")}
+class ClassificationTestStep:
+    def __init__(self, model_name, criterion_name):
+        self._model_name = model_name
+        self._criterion_name = criterion_name
+        self.returns = {("metric", "loss"), ("", "outputs"), ("", "labels"), ("", "total")}
 
-#     def __call__(self, models, criteria, batch):
-#         model = models[self._model_name]
-#         inputs, labels = batch
-#         model.eval()
-#         with torch.no_grad():
-#             inputs = model.to_(inputs)
-#             labels = model.to_(labels)
-#             outputs = model(inputs)
-#             loss = criteria[self._criterion_name](outputs, labels)
-#             return {"loss": loss.detach().item(), "outputs": outputs.detach(),
-#                     "labels": labels.detach(), "total": len(labels)}
+    def __call__(self, models, criteria, batch):
+        model = models[self._model_name]
+        inputs, labels = batch
+        model.eval()
+        with torch.no_grad():
+            inputs = model.to_(inputs)
+            labels = model.to_(labels)
+            outputs = model(inputs)
+            loss = criteria[self._criterion_name](outputs, labels)
+            return {"loss": loss.detach().item(), "outputs": outputs.detach(),
+                    "labels": labels.detach(), "total": len(labels)}
 
 
 config = {}
@@ -114,6 +113,6 @@ config["dataloader_params"] = {"train": {"batch_size": 32,
                                         "pin_memory": False}}
 config["model_params"] = {"net": {}}
 config["model_defs"] = {"net": {"model": Net, "optimizer": "Adam"}}
-config["update_functions"] = {"train": gm.autoloads.ClassificationTrainStep("net", "criterion_ce_loss"),
-                              "val": gm.autoloads.ClassificationTestStep("net", "criterion_ce_loss"),
-                              "test": gm.autoloads.ClassificationTestStep("net", "criterion_ce_loss")}
+config["update_functions"] = {"train": ClassificationTrainStep("net", "criterion_ce_loss"),
+                              "val": ClassificationTestStep("net", "criterion_ce_loss"),
+                              "test": ClassificationTestStep("net", "criterion_ce_loss")}

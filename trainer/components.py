@@ -1,6 +1,7 @@
 from typing import List, Dict, Iterable, Any, Union, Tuple
 import torch
 import logging
+import traceback
 
 
 class Models:
@@ -123,7 +124,7 @@ class Models:
             self._models[model_name].load_state_dict(state_dict)
             return True, None
         except Exception as e:
-            return False, f"{e}"
+            return False, f"{e}" + f"\n{traceback.format_exc()}"
 
     def add(self, model: torch.nn.Module, params: Dict[str, Any]):
         """Add model to self and initialize it according to the params

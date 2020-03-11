@@ -4,28 +4,26 @@ from datetime import datetime
 import unittest
 import sys
 import time
-from _setup import config
+from _setup_local import config
 import torch
 sys.path.append("../")
 from trainer.trainer import Trainer
 
 
 class StateTest(unittest.TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpClass(cls):
         """Setup a simple trainer with MNIST dataset."""
-        self.config = config
+        cls.config = config
         if os.path.exists(".test_dir"):
             shutil.rmtree(".test_dir")
         os.mkdir(".test_dir")
         os.mkdir(".test_dir/test_session")
         time_str = datetime.now().isoformat()
         os.mkdir(f".test_dir/test_session/{time_str}")
-        self.data_dir = f".test_dir/test_session/{time_str}"
-        self.trainer = Trainer(**{"data_dir": self.data_dir, **self.config})
-        self.trainer._init_all()
-
-    # def tearDown(self):
-    #     self.trainer._abort_current()
+        cls.data_dir = f".test_dir/test_session/{time_str}"
+        cls.trainer = Trainer(**{"data_dir": cls.data_dir, **cls.config})
+        cls.trainer._init_all()
 
     def test_main_loop(self):
         # Should have subtest for a set of transitions I guess. I can generate
@@ -45,7 +43,7 @@ class StateTest(unittest.TestCase):
         self.assertTrue(self.trainer._epoch_runner.waiting)
         time.sleep(1)
         # running -> aborted/finished without gathering results
-        self.trainer._abort_current()
+        self.trainer._abort_current("test")
         time.sleep(1)
         self.assertFalse(self.trainer._epoch_runner.running)
         self.assertFalse(self.trainer._epoch_runner.waiting)
@@ -70,7 +68,7 @@ class StateTest(unittest.TestCase):
         time.sleep(2)
         self.assertFalse(self.trainer.paused)
         print("HERE in TEST CASE")
-        self.trainer._abort_current()
+        self.trainer._abort_current("test")
 
     def test_main_adhoc_back(self):
         print(self.trainer._task_runners)
@@ -114,47 +112,16 @@ class StateTest(unittest.TestCase):
         self.assertFalse(self.trainer._task_runners["adhoc"].running)
         self.assertTrue(self.trainer._task_runners["main"].running)
         self.assertEqual(self.trainer.current_state, "main_running_train")
-        self.trainer._abort_current()
+        self.trainer._abort_current("test")
         # import ipdb; ipdb.set_trace()
 
     # def test_user_adhoc_main(self):
     #     pass
 
-    def tearDown(self):
+    @classmethod
+    def tearDownClass(cls):
         if os.path.exists(".test_dir"):
             shutil.rmtree(".test_dir")
-
-    # def test_illegal_states(self):
-    #     results = [False, True, False, True, False, True, True, True, False, True,
-    #                False, True, False, False, True, False, True, True, True,
-    #                True, True, True, True, False]
-    #     for i, x in enumerate([
-    #             ("normal_paused_none", "normal_running_none"),
-    #             ("normal_paused_none", "normal_paused_train"),
-    #             ("normal_paused_train", "normal_paused_train"),
-    #             ("normal_paused_train", "normal_running_train"),
-    #             ("normal_running_train", "normal_running_train"),
-    #             ("normal_running_train", "normal_paused_train"),
-    #             ("normal_paused_none", "normal_paused_train"),
-    #             ("normal_paused_none", "normal_running_train"),
-    #             ("normal_paused_train", "normal_paused_eval"),
-    #             ("normal_finished_train", "normal_paused_eval"),
-    #             ("normal_paused_train", "force_paused_adhoc"),
-    #             ("normal_paused_train", "force_running_adhoc"),
-    #             ("normal_running_train", "force_running_adhoc"),
-    #             ("normal_running_train", "force_running_adhoc"),
-    #             ("normal_paused_train", "force_running_adhoc"),
-    #             ("force_running_adhoc", "normal_paused_train"),
-    #             ("force_finished_adhoc", "normal_paused_train"),
-    #             ("normal_paused_train", "normal_finished_train"),
-    #             ("normal_paused_train", "force_finished_stop"),
-    #             ("force_finished_stop", "normal_running_train"),
-    #             ("normal_running_train", "force_paused_train"),
-    #             ("force_paused_train", "force_finished_stop"),
-    #             ("force_paused_train", "force_running_adhoc"),
-    #             ("normal_running_train", "normal_running_adhoc")]):
-    #         with self.subTest(i=str(x)):
-    #             self.assertEqual(self.trainer._sm.allowed_transition(*x, True), results[i])
 
 
 if __name__ == '__main__':

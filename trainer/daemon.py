@@ -12,6 +12,7 @@ import argparse
 import datetime
 import logging
 import hashlib
+import traceback
 import configparser
 from queue import Queue
 from threading import Thread
@@ -175,7 +176,7 @@ sys.path.append("{self.data_dir}")
                 self.context.load_cert_chain(self.api_crt, self.api_key)
             except Exception as e:
                 sys.exit("Error starting flask server. " +
-                         f"Missing cert or key. Details: {e}")
+                         f"Missing cert or key. Details: {e}" + f"\n{traceback.format_exc()}")
         else:
             self.context = None
 
@@ -353,7 +354,8 @@ sys.path.append("{self.data_dir}")
                                   "r") as f:
                             self._sessions[s]["sessions"][d]["state"] = json.load(f)
                     except Exception as e:
-                        self._sessions[s]["sessions"][d] = "Error " + str(e)
+                        self._sessions[s]["sessions"][d] = "Error " + str(e) +\
+                            "\n" + traceback.format_exc()
 
     def create_session(self, task_id, data):
         """Creates a new training session from given data
@@ -423,8 +425,8 @@ sys.path.append("{self.data_dir}")
                     self._loge(f"Could not read config. {result}")
                     self._task_q.put((task_id, False, f"Could not read config. {result}"))
             except Exception as e:
-                self._loge(f"Exception occurred {e}")
-                self._task_q.put((task_id, False, f"{e}"))
+                self._loge(f"Exception occurred {e}" + "\n" + traceback.format_exc())
+                self._task_q.put((task_id, False, f"{e}" + "\n" + traceback.format_exc()))
         elif load and self._check_config(config):  # create and load
             try:
                 self._logd(f"Config already existed")
@@ -434,15 +436,15 @@ sys.path.append("{self.data_dir}")
                 self._sessions[name]["sessions"][time_str]["data_dir"] = data_dir
                 cmd = f"python if_run.py {self.hostname} {port} {data_dir} {self.production}"
                 cwd = self._root_dir
-                print("CMD", cmd, cwd)
+                # print("CMD", cmd, cwd)
                 p = Popen(shlex.split(cmd), env=os.environ, cwd=cwd)
                 self._sessions[name]["sessions"][time_str]["process"] = p
                 Thread(target=p.communicate).start()
                 # print("Popen?", type(p))
                 self._task_q.put((task_id, True))
             except Exception as e:
-                self._loge(f"Exception occurred {e}")
-                self._task_q.put((task_id, False, f"{e}"))
+                self._loge(f"Exception occurred {e}" + "\n" + traceback.format_exc())
+                self._task_q.put((task_id, False, f"{e}" + "\n" + traceback.format_exc()))
         else:
             self._loge("Check failed on config")
             self._task_q.put((task_id, False, "Check failed on config"))
@@ -477,7 +479,7 @@ sys.path.append("{self.data_dir}")
                     if not self._session_finished_p(state):
                         self.load_session(0, {"session_key": "/".join([name, sub_name])})
             except Exception as e:
-                self._loge(f"Could not load session {name}. Error {e}")
+                self._loge(f"Could not load session {name}. Error {e}" + "\n" + traceback.format_exc())
                 continue
 
     def _session_finished_p(self, state) -> bool:
@@ -558,8 +560,8 @@ sys.path.append("{self.data_dir}")
             self._sessions[name]["sessions"].pop(time_str)
             self._task_q.put((task_id, True, f"Purged session {name}/{time_str}"))
         except Exception as e:
-            self._logd(f"Exceptioni occurred {e}")
-            self._task_q.put((task_id, False, f"{e}"))
+            self._logd(f"Exceptioni occurred {e}" + "\n" + traceback.format_exc())
+            self._task_q.put((task_id, False, f"{e}" + "\n" + traceback.format_exc()))
 
     def unload_session(self, task_id, data):
         """Unloads a training session from memory"""
@@ -576,8 +578,8 @@ sys.path.append("{self.data_dir}")
                     self._unload_helper(session_name, timestamp)
                     self._task_q.put((task_id, True, f"Unloaded session {data['session_key']}"))
                 except Exception as e:
-                    self._logd(f"Exception occurred {e}")
-                    self._task_q.put((task_id, False, f"{e}"))
+                    self._logd(f"Exception occurred {e}" + "\n" + traceback.format_exc())
+                    self._task_q.put((task_id, False, f"{e}" + "\n" + traceback.format_exc()))
         elif "session_name" in data:
             self._logd(f"Trying to unload all sessions of {data['session_name']}")
             session = data["session_name"]
@@ -585,8 +587,8 @@ sys.path.append("{self.data_dir}")
                 self._unload_helper(session)
                 self._task_q.put((task_id, True, f"Unloaded all sessions for session_name"))
             except Exception as e:
-                self._logd(f"Exception occurred {e}")
-                self._task_q.put((task_id, False, f"{e}"))
+                self._logd(f"Exception occurred {e}" + "\n" + traceback.format_exc())
+                self._task_q.put((task_id, False, f"{e}" + "\n" + traceback.format_exc()))
         else:
             self._logd(f"Incorrect data format given")
             self._task_q.put((task_id, False, "Incorrect data format"))
@@ -608,8 +610,8 @@ sys.path.append("{self.data_dir}")
                     self._logd(f"Ok to purge session {data['session_key']}")
                     self._purge_helper(task_id, session_name, timestamp)
                 except Exception as e:
-                    self._logd(f"Exception occurred {e}")
-                    self._task_q.put((task_id, False, f"{e}"))
+                    self._logd(f"Exception occurred {e}" + "\n" + traceback.format_exc())
+                    self._task_q.put((task_id, False, f"{e}" + "\n" + traceback.format_exc()))
         else:
             self._logd(f"Incorrect data format given")
             self._task_q.put((task_id, False, "Incorrect data format"))
@@ -617,7 +619,6 @@ sys.path.append("{self.data_dir}")
     @property
     def _sessions_list(self):
         # return _dump(self._sessions)
-        print(self._sessions)
         retval = {}
         for k, v in self._sessions.items():
             session_stamps = v["sessions"].keys()
@@ -765,7 +766,7 @@ sys.path.append("{self.data_dir}")
                     data = json.loads(request.form["name"])
                     file_bytes = request.files["file"].read()
                 except Exception as e:
-                    return _dump([False, f"{e}"])
+                    return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
             data = {"name": data, "config": file_bytes}
             task_id = self._get_task_id_launch_func(self.create_session, data)
             return _dump({"task_id": task_id,
@@ -818,7 +819,7 @@ sys.path.append("{self.data_dir}")
             try:
                 task_id = int(request.args.get("task_id").strip())
             except Exception as e:
-                return _dump(f"Bad params {e}")
+                return _dump(f"Bad params {e}" + "\n" + traceback.format_exc())
             if task_id not in self.__task_ids:
                 return _dump(f"No such task: {task_id}")
             else:
@@ -884,7 +885,7 @@ sys.path.append("{self.data_dir}")
                     data = json.loads(request.form["name"])
                     file_bytes = request.files["file"].read()
                 except Exception as e:
-                    return _dump([False, f"{e}"])
+                    return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
             data = {"name": data, "data_file": file_bytes}
             task_id = self._get_task_id_launch_func(self._load_module, data)
             return _dump({"task_id": task_id,
@@ -909,7 +910,7 @@ sys.path.append("{self.data_dir}")
                     data = json.loads(request.form["name"])
                     file_bytes = request.files["file"].read()
                 except Exception as e:
-                    return _dump([False, f"{e}"])
+                    return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
             data = {"name": data, "data_file": file_bytes}
             task_id = self._get_task_id_launch_func(self._load_module, data)
             return _dump({"task_id": task_id,
@@ -939,7 +940,7 @@ sys.path.append("{self.data_dir}")
                     data = json.loads(request.form["name"])
                     file_bytes = request.files["file"].read()
                 except Exception as e:
-                    return _dump([False, f"{e}"])
+                    return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
             data = {"name": data, "data_file": file_bytes}
             task_id = self._get_task_id_launch_func(self._load_module, data)
             return _dump({"task_id": task_id,
@@ -966,15 +967,21 @@ sys.path.append("{self.data_dir}")
                     self._modules.pop(mod_name)
                     mods_dir = self.modules_dir
                     if os.path.exists(os.path.join(mods_dir, mod_name)):
-                        shutil.rmtree(os.path.join(mods_dir, mod_name))
+                        if os.path.islink(os.path.join(mods_dir, mod_name)):
+                            os.unlink(os.path.join(mods_dir, mod_name))
+                        else:
+                            shutil.rmtree(os.path.join(mods_dir, mod_name))
                         return _dump([True, f"Removed {mod_name}."])
                     elif os.path.exists(os.path.join(mods_dir, mod_name + ".py")):
-                        os.remove(os.path.join(mods_dir, mod_name + ".py"))
+                        if os.path.islink(os.path.join(mods_dir, mod_name)):
+                            os.unlink(os.path.join(mods_dir, mod_name + ".py"))
+                        else:
+                            os.remove(os.path.join(mods_dir, mod_name + ".py"))
                         return _dump([True, "Removed {mod_name}."])
                     else:
                         return _dump([True, "Module {mod_name} was not on disk"])
                 except Exception as e:
-                    return _dump([False, f"{e}"])
+                    return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
 
         @self.app.route("/list_datasets", methods=["GET"])
         @flask_login.login_required
@@ -1011,7 +1018,7 @@ sys.path.append("{self.data_dir}")
                     data[x] = json.loads(request.form[x])
                 file_bytes = request.files["file"].read()
             except Exception as e:
-                return _dump([False, f"{e}"])
+                return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
             data = {"data_file": file_bytes, **data}
             task_id = self._get_task_id_launch_func(self._load_dataset, data)
             return _dump({"task_id": task_id,
@@ -1041,7 +1048,7 @@ sys.path.append("{self.data_dir}")
                     else:
                         return _dump([True, f"Dataset {name} was not on disk"])
                 except Exception as e:
-                    return _dump([False, f"{e}"])
+                    return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
 
         @self.app.route("/_ping", methods=["GET"])
         def __ping():
@@ -1050,6 +1057,9 @@ sys.path.append("{self.data_dir}")
         @self.app.route("/_shutdown", methods=["GET"])
         @flask_login.login_required
         def __shutdown_server():
+            self._logd("Shutdown called via HTTP. Shutting down.")
+            for k in self._sessions:
+                self._unload_helper(k)
             func = request.environ.get('werkzeug.server.shutdown')
             func()
             return "Shutting down"

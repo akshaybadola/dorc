@@ -104,9 +104,10 @@ def _log_post_batch_hook(epoch: 'Epoch', **kwargs):
 class EpochLoop(LoopTaskWithHooks):
     def __init__(self, func: Callable, signals: Signals,
                  data_iterator: Iterable, hooks: Iterable[Callable[[], None]],
-                 device_mon: DeviceMonitor):
+                 device_mon: DeviceMonitor, max_iters: Union[int, None] = None):
         super().__init__(func, signals, data_iterator, hooks)
         self.device_mon = device_mon
+        self._max_iters = max_iters
         self._aborted = Event()
         self._data_buffer = 20  # batches, will depend actually
         self._data_q: queue.Queue = queue.Queue(maxsize=self._data_buffer)
@@ -115,6 +116,7 @@ class EpochLoop(LoopTaskWithHooks):
         self._data_thread = Thread(target=self._fetch_data)
         self._data_thread.start()
         self._hooks = hooks
+        self._iter_num = 0
         # self._data_proc = mp.Process(target=self._fetch_data)
         # self._data_proc.start()
 
@@ -137,6 +139,11 @@ class EpochLoop(LoopTaskWithHooks):
             #       it'll simply fill up its size
             #
             # self.signals.paused.wait()  # wait if paused
+            if self._max_iters is not None:
+                self._iter_num += 1
+                if self._iter_num > self._max_iters:
+                    self._iter_finished = True
+                    break
             start = time.time()
             try:
                 batch = data_iter.__next__()
@@ -351,7 +358,8 @@ class Epoch:
         self.batch_num = {"train": 0, "val": 0, "test": 0}
         self.batch_vars = BatchVars()
 
-    def run_train(self, train_step, train_loader, loop_type, num_iterations=0, get_raw=False):
+    def run_train(self, train_step, train_loader, loop_type, num_iterations=0,
+                  get_raw=False, callback=None):
         def train_one_batch(batch):
             if get_raw:
                 raw, batch = batch[0], batch[1]
@@ -366,16 +374,19 @@ class Epoch:
         assert train_loader.batch_size, "train_loader has no batch_size"
         self._logd("Starting run_train")
         self._logd(f"Train Loader properties: {len(train_loader)}")
-        if loop_type == "iterations":
-            train_loader.__len__ = lambda: num_iterations
+        if loop_type != "iterations":
+            num_iterations = None
+            # train_loader.__len__ = lambda: num_iterations
         hooks = [*self._post_batch_hooks["train"].values()]
-        self.train_loop = EpochLoop(train_one_batch, self.signals, train_loader,
-                                    hooks, self.device_mon)
+        self.train_loop = EpochLoop(train_one_batch, self.signals, train_loader, hooks,
+                                    self.device_mon, max_iters=num_iterations)
         self.train_loop.name = "train"
         self._current_loop = self.train_loop
         self.train_loop.run_task()
+        # if callback is not None:
+        #     callback()
 
-    def run_val(self, val_step, val_loader, get_raw=False):
+    def run_val(self, val_step, val_loader, get_raw=False, callback=None):
         def val_one_batch(batch):
             if get_raw:
                 raw, batch = batch[0], batch[1]
@@ -394,8 +405,10 @@ class Epoch:
         self.val_loop.name = "val"
         self._current_loop = self.val_loop
         self.val_loop.run_task()
+        # if callback is not None:
+        #     callback()
 
-    def run_test(self, test_step, test_loader, get_raw=False):
+    def run_test(self, test_step, test_loader, get_raw=False, callback=None):
         def test_one_batch(batch):
             if get_raw:
                 raw, batch = batch[0], batch[1]
@@ -415,3 +428,6 @@ class Epoch:
         self.test_loop.name = "test"
         self._current_loop = self.test_loop
         self.test_loop.run_task()
+        # if callback is not None:
+        #     print("RUNNING callback")
+        #     callback()

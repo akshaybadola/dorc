@@ -13,6 +13,9 @@ class TrainerTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Setup a simple trainer with MNIST dataset."""
+        config["trainer_params"]["cuda"] = True
+        config["trainer_params"]["gpus"] = "0"
+        config["dataloader_params"]["train"]["batch_size"] = 512
         cls.config = config
         if os.path.exists(".test_dir"):
             shutil.rmtree(".test_dir")
@@ -49,11 +52,38 @@ class TrainerTest(unittest.TestCase):
         self.assertFalse(self.trainer._have_resumed)
         self.assertTrue(self.trainer.paused)
 
-    # def test_trainer_log(self):
-    #     self.trainer._init_all()
-    #     self.trainer.start()
-    #     time.sleep(5)
-    #     import ipdb; ipdb.set_trace()
+    def test_trainer_log(self):
+        self.trainer._init_all()
+        self.trainer.start()
+        while not self.trainer.epoch:
+            time.sleep(1)
+        self.trainer.pause()
+        time.sleep(2)
+        self.assertTrue(self.trainer.metrics["train"])
+        self.assertIn("loss", self.trainer.metrics["train"])
+        self.assertTrue(self.trainer.metrics["train"]["loss"][0])
+        self.trainer.abort_loop()
+
+    def test_trainer_log_iter(self):
+        self.new_config = self.config.copy()
+        self.new_config["trainer_params"]["training_steps"] = ["iterations"]
+        self.new_config["trainer_params"]["max_iterations"] = 800
+        self.new_config["trainer_params"]["hooks_run_iter_frequency"] = 200
+        self.new_config["dataloader_params"]["train"]["batch_size"] = 64
+        self.new_trainer = Trainer(**{"data_dir": self.data_dir, **self.new_config})
+        self.new_trainer._init_all()
+        self.new_trainer.start()
+        while not self.new_trainer.iterations:
+            time.sleep(1)
+        self.new_trainer.pause()
+        time.sleep(2)
+        self.assertTrue(self.new_trainer.metrics["train"])
+        self.assertIn("loss", self.new_trainer.metrics["train"])
+        self.assertTrue(self.new_trainer.metrics["train"]["loss"][0])
+        self.new_trainer.abort_loop()
+        # if not self.trainer._epoch_runner.train_loop.finished:
+        #     self.trainer.abort_loop()
+        # self.trainer.abort_loop()
 
     # def test_trainer_resume_force(self):
     #     pass

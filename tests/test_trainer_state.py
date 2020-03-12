@@ -70,7 +70,7 @@ class StateTest(unittest.TestCase):
         print("HERE in TEST CASE")
         self.trainer._abort_current("test")
 
-    def test_main_adhoc_back(self):
+    def test_main_adhoc_pause_back(self):
         print(self.trainer._task_runners)
         self.trainer._start_if_not_running()
         time.sleep(.5)
@@ -96,24 +96,79 @@ class StateTest(unittest.TestCase):
         self.assertFalse(self.trainer._epoch_runner.train_loop.init)
         self.assertIsNotNone(self.trainer._task_runners["adhoc"])
         self.assertTrue(len(self.trainer._task_runners["adhoc"].batch_vars) > 0)
-        self.trainer.pause()    # NOTE: pauses adhoc loop now
+        self.trainer.pause()    # NOTE: pauses adhoc loop now, doesn't resume main loop
         time.sleep(.5)
         self.assertTrue(self.trainer._task_runners["adhoc"].test_loop.paused)
         self.assertFalse(self.trainer._task_runners["adhoc"].test_loop.finished)
         self.assertFalse(self.trainer._task_runners["adhoc"].test_loop.init)
-        self.trainer._abort_current_run_cb()
+        self.trainer.abort_loop()  # NOTE: should abort adhoc
+        time.sleep(.1)
+        self.assertTrue(self.trainer._task_runners["adhoc"].test_loop.finished)
+        self.assertTrue(self.trainer._task_runners["adhoc"].aborted.is_set())
+        self.assertFalse(self.trainer._threads["adhoc"].is_alive())
+        self.assertFalse(self.trainer._task_runners["main"].aborted.is_set())
+        self.assertTrue(self.trainer._threads["main"].is_alive())
+        self.trainer.resume()
+        time.sleep(.3)
+        self.assertTrue(self.trainer._epoch_runner.running)
+        self.trainer.abort_loop()       # NOTE: aborts main loop now
+        time.sleep(.3)
+        self.assertTrue(self.trainer._task_runners["main"].train_loop.finished)
+        self.assertTrue(self.trainer._task_runners["main"].aborted.is_set())
+        self.assertFalse(self.trainer._threads["main"].is_alive())
+
+    def test_main_adhoc_abort_back(self):
+        self.trainer._start_if_not_running()
+        time.sleep(.5)
+        self.assertFalse(self.trainer.paused)
+        time.sleep(.5)
+        self.assertFalse(self.trainer._epoch_runner.train_loop.paused)
+        self.assertFalse(self.trainer._epoch_runner.train_loop.finished)
+        self.assertFalse(self.trainer._epoch_runner.train_loop.init)
+        self.assertEqual(self.trainer.current_state, "main_running_train")
+        self.assertTrue(self.trainer._epoch_runner.running)
+        self.assertTrue("main" in self.trainer._threads)
+        self.trainer._user_funcs["test_func"] = lambda: None
+        time.sleep(1)
+        self.trainer.adhoc_eval({"test": {"epoch": "current",
+                                          "num_or_fraction": 100,
+                                          "device": "cpu",
+                                          "data": "test",
+                                          "callback": "test_func"}})
+        time.sleep(.5)
+        self.assertTrue(self.trainer._task_runners["adhoc"].test_loop.running)
+        self.trainer.abort_loop_with_callback()
         time.sleep(.5)
         self.assertTrue(self.trainer._task_runners["adhoc"].test_loop.finished)
-        # self.trainer.pause()
-        # time.sleep(.5)
-        # er = self.trainer._task_runners["main"]
-        # ar = self.trainer._task_runners["adhoc"]
-        # import ipdb; ipdb.set_trace()
         self.assertFalse(self.trainer._task_runners["adhoc"].running)
         self.assertTrue(self.trainer._task_runners["main"].running)
         self.assertEqual(self.trainer.current_state, "main_running_train")
+        self.trainer.abort_loop_with_callback()
+
+    def test_none_to_train(self):
+        self.assertEqual(self.trainer.current_state, "main_paused_none")
+        self.trainer.resume()
+        time.sleep(.5)
+        self.assertEqual(self.trainer.current_state, "main_running_train")
+        self.trainer.pause()
+        self.assertEqual(self.trainer.current_state, "main_paused_train")
         self.trainer._abort_current("test")
-        # import ipdb; ipdb.set_trace()
+
+    def test_none_to_force(self):
+        self.assertEqual(self.trainer.current_state, "main_paused_none")
+        self.trainer.force_test()
+        time.sleep(.5)
+        self.assertEqual(self.trainer.current_state, "adhoc_running_test")
+        # do we go back to main?
+        time.sleep(5)
+        self.trainer._abort_current("test")
+
+    # # TODO: Need to make a tiny train_loader for both of these
+    # def test_ensure_hooks_epoch(self):
+    #     pass
+
+    # def test_ensure_hooks_iterations(self):
+    #     pass
 
     # def test_user_adhoc_main(self):
     #     pass

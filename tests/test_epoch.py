@@ -4,7 +4,7 @@ from datetime import datetime
 import unittest
 import sys
 import time
-from _setup import config
+from _setup_local import config
 from threading import Thread
 sys.path.append("../")
 from trainer.epoch import EpochLoop
@@ -12,18 +12,19 @@ from trainer.trainer import Trainer
 
 
 class EpochTest(unittest.TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpClass(cls):
         """Setup a simple trainer with MNIST dataset."""
-        self.config = config
+        cls.config = config
         if os.path.exists(".test_dir"):
             shutil.rmtree(".test_dir")
         os.mkdir(".test_dir")
         os.mkdir(".test_dir/test_session")
         time_str = datetime.now().isoformat()
         os.mkdir(f".test_dir/test_session/{time_str}")
-        self.data_dir = f".test_dir/test_session/{time_str}"
-        self.trainer = Trainer(**{"data_dir": self.data_dir, **self.config})
-        self.trainer._init_all()
+        cls.data_dir = f".test_dir/test_session/{time_str}"
+        cls.trainer = Trainer(**{"data_dir": cls.data_dir, **cls.config})
+        cls.trainer._init_all()
 
     def test_device_poll(self):
         with self.trainer._epoch_runner.device_poll.monitor():
@@ -108,7 +109,8 @@ class EpochTest(unittest.TestCase):
         self.assertFalse(epoch_runner.running)
         self.assertFalse(epoch_runner.waiting)
 
-    def tearDown(self):
+    @classmethod
+    def tearDownClass(cls):
         if os.path.exists(".test_dir"):
             shutil.rmtree(".test_dir")
 

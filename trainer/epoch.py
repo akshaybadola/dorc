@@ -108,6 +108,7 @@ class EpochLoop(LoopTaskWithHooks):
         super().__init__(func, signals, data_iterator, hooks)
         self.device_mon = device_mon
         self._max_iters = max_iters
+        self._iter_num = 0
         self._aborted = Event()
         self._data_buffer = 20  # batches, will depend actually
         self._data_q: queue.Queue = queue.Queue(maxsize=self._data_buffer)
@@ -116,7 +117,6 @@ class EpochLoop(LoopTaskWithHooks):
         self._data_thread = Thread(target=self._fetch_data)
         self._data_thread.start()
         self._hooks = hooks
-        self._iter_num = 0
         # self._data_proc = mp.Process(target=self._fetch_data)
         # self._data_proc.start()
 

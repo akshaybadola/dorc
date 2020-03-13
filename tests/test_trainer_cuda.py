@@ -81,9 +81,6 @@ class TrainerTest(unittest.TestCase):
         self.assertIn("loss", self.new_trainer.metrics["train"])
         self.assertTrue(self.new_trainer.metrics["train"]["loss"][0])
         self.new_trainer.abort_loop()
-        # if not self.trainer._epoch_runner.train_loop.finished:
-        #     self.trainer.abort_loop()
-        # self.trainer.abort_loop()
 
     # def test_trainer_resume_force(self):
     #     pass

@@ -418,7 +418,6 @@ sys.path.append("{self.data_dir}")
                     # trainer._init_all()
                     status, result = iface.create_trainer()
                     # print("URGH", status, result)
-                    del iface.trainer
                     del iface
                     self._task_q.put((task_id, True))
                 else:

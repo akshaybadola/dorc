@@ -45,14 +45,17 @@ def main():
                         while ")" not in line:
                             line = f.readline()
                 else:
+                    # if "pdb" or "ipdb" in line:
+                    #     str_list.append("# " + line)
+                    # else:
+                    #     str_list.append(line)
                     str_list.append(line)
                 line = f.readline()
     os.mkdir("build")
-    # switch to build dir
-    # os.chdir("build")
     with open("build/trainer.py", "w") as f:
         f.writelines(str_list)
     shutil.copy("setup.py", "build")
+    # NOTE: switch to build dir
     os.chdir("build")
     cmd = "python setup.py build_ext --inplace"
     run(shlex.split(cmd), env=os.environ, cwd=os.curdir)

@@ -230,10 +230,16 @@ class Trainer:
 
     # START: Init Funcs
     def _init_device(self):
-        gpus_str = [x for x in self._trainer_params["gpus"].split(",") if x]
-        if gpus_str:
-            self._gpus = list(map(int, gpus_str))
+        if isinstance(self._trainer_params["gpus"], str):
+            gpus_str = [x for x in self._trainer_params["gpus"].split(",") if x]
+            if gpus_str:
+                self._gpus = list(map(int, gpus_str))
+            else:
+                self._gpus = [-1]
+        elif isinstance(self._trainer_params["gpus"], int):
+            self._gpus = [self._trainer_params["gpus"]]
         else:
+            self._logw("Incorrect GPUS specified. Will run on CPU")
             self._gpus = [-1]
         has_cuda = torch.cuda.is_available()
         gpus_given = self._gpus and (not self._gpus == [-1])
@@ -926,7 +932,6 @@ class Trainer:
             # NOTE: callbacks aren't there right now
             self._threads[loop].join(2)
             if self._threads[loop].is_alive():
-                import ipdb; ipdb.set_trace()
                 self._loge(f"Could not kill task {loop}")
         else:
             self._logd(f"Finished task {loop}")

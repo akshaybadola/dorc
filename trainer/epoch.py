@@ -5,7 +5,7 @@ import queue
 from functools import partial
 from threading import Thread, Event
 import traceback
-import multiprocessing as mp
+# import multiprocessing as mp
 
 from .task import LoopTaskWithHooks, Signals
 from .device import DeviceMonitor
@@ -112,13 +112,10 @@ class EpochLoop(LoopTaskWithHooks):
         self._aborted = Event()
         self._data_buffer = 20  # batches, will depend actually
         self._data_q: queue.Queue = queue.Queue(maxsize=self._data_buffer)
-        # self._data_q = mp.Queue()
         self._iter_finished = False
         self._data_thread = Thread(target=self._fetch_data)
         self._data_thread.start()
         self._hooks = hooks
-        # self._data_proc = mp.Process(target=self._fetch_data)
-        # self._data_proc.start()
 
     def finish(self):
         super().finish()
@@ -375,16 +372,13 @@ class Epoch:
         self._logd("Starting run_train")
         self._logd(f"Train Loader properties: {len(train_loader)}")
         if loop_type != "iterations":
-            num_iterations = None
-            # train_loader.__len__ = lambda: num_iterations
+            num_iterations = len(train_loader)
         hooks = [*self._post_batch_hooks["train"].values()]
         self.train_loop = EpochLoop(train_one_batch, self.signals, train_loader, hooks,
                                     self.device_mon, max_iters=num_iterations)
         self.train_loop.name = "train"
         self._current_loop = self.train_loop
         self.train_loop.run_task()
-        # if callback is not None:
-        #     callback()
 
     def run_val(self, val_step, val_loader, get_raw=False, callback=None):
         def val_one_batch(batch):
@@ -400,13 +394,12 @@ class Epoch:
         self._logd("Starting run_val")
         self._logd(f"Val Loader properties: {len(val_loader)}")
         hooks = [*self._post_batch_hooks["val"].values()]
-        self.val_loop = EpochLoop(val_one_batch, self.signals, val_loader,
-                                  hooks, self.device_mon)
+        num_iterations = len(val_loader)
+        self.val_loop = EpochLoop(val_one_batch, self.signals, val_loader, hooks,
+                                  self.device_mon, max_iters=num_iterations)
         self.val_loop.name = "val"
         self._current_loop = self.val_loop
         self.val_loop.run_task()
-        # if callback is not None:
-        #     callback()
 
     def run_test(self, test_step, test_loader, get_raw=False, callback=None):
         def test_one_batch(batch):
@@ -423,11 +416,9 @@ class Epoch:
         self._logd("Starting run_test")
         self._logd(f"Test Loader properties: {len(test_loader)}")
         hooks = [*self._post_batch_hooks["test"].values()]
-        self.test_loop = EpochLoop(test_one_batch, self.signals, test_loader,
-                                   hooks, self.device_mon)
+        num_iterations = len(test_loader)
+        self.test_loop = EpochLoop(test_one_batch, self.signals, test_loader, hooks,
+                                   self.device_mon, max_iters=num_iterations)
         self.test_loop.name = "test"
         self._current_loop = self.test_loop
         self.test_loop.run_task()
-        # if callback is not None:
-        #     print("RUNNING callback")
-        #     callback()

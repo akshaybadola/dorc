@@ -2936,9 +2936,11 @@ class Trainer:
                 self._epoch_runner.run_train(self.train_step_func, self.train_loader,
                                              loop_type, self._hooks_run_iter_frequency)
                 if not self._epoch_runner.status[0]:
-                    print("ERROR in train_loop")
+                    self._loge(f"Error in train loop {self._epoch_runner.status[1]}")
+                    # TODO: the thread should join on crash
+                    # import ipdb; ipdb.set_trace()
                     self._abort_current(self._epoch_runner.status[1])
-                    print("THIS SHOULD be set", self._current_aborted)
+                    # print("THIS SHOULD be set", self._current_aborted)
                 if self._current_aborted:
                     self._logd("Aborting training")
                     # import ipdb; ipdb.set_trace()
@@ -2952,12 +2954,13 @@ class Trainer:
                 self._epoch_runner.run_train(self.train_step_func, self.train_loader,
                                              loop_type)
                 if not self._epoch_runner.status[0]:
-                    print("ERROR in train_loop")
+                    self._loge(f"Error in train loop {self._epoch_runner.status[1]}")
+                    # TODO: the thread should join on crash
+                    # import ipdb; ipdb.set_trace()
                     self._abort_current(self._epoch_runner.status[1])
-                    print("THIS SHOULD be set", self._current_aborted)
+                    # print("THIS SHOULD be set", self._current_aborted)
                 if self._current_aborted:
                     self._logd("Aborting training")
-                    # import ipdb; ipdb.set_trace()
                     return
                 self._run_post_epoch_hooks()
                 self.epoch += 1
@@ -2965,11 +2968,24 @@ class Trainer:
 
     def validate(self, runner):
         self._logd(f"Validating with {runner.name}")
-        runner.run_val(self.val_step_func, self.val_loader)
+        try:
+            runner.run_val(self.val_step_func, self.val_loader)
+            if not self._epoch_runner.status[0]:
+                self._loge(f"Error in val loop {self._epoch_runner.status[1]}")
+                self._abort_current(self._epoch_runner.status[1])
+        except Exception as e:
+            self._loge(f"Some weird error occured {e}\n{traceback.format_exc()}")
 
     def test(self, runner):
         self._logd(f"Testing with {runner.name}")
-        runner.run_test(self.test_step_func, self.test_loader)
+        try:
+            runner.run_test(self.test_step_func, self.test_loader)
+            if not self._epoch_runner.status[0]:
+                self._loge(f"Error in val loop {self._epoch_runner.status[1]}")
+                self._abort_current(self._epoch_runner.status[1])
+        except Exception as e:
+            self._loge(f"Some weird error occured {e}\n{traceback.format_exc()}")
+
     # END: Training Steps
 
     # START: Stateless Functions

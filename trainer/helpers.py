@@ -110,13 +110,6 @@ class Tag:
         return f
 
 
-control = Tag("control")
-prop = Tag("prop")
-extras = Tag("extras")
-helpers = Tag("helpers")
-internals = Tag("internals")
-
-
 def GET(f):
     if not hasattr(f, "__http_methods__"):
         f.__http_methods__ = ["GET"]

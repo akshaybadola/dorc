@@ -26,10 +26,17 @@ from .components import Models
 from ._log import Log
 from ._checks import (_check_model_params, _check_trainer_params, _check_data_params,
                       _check_resume_or_init_weights)
-from .helpers import (control, prop, extras, helpers, internals, ProxyDataset,
+from .helpers import (Tag, ProxyDataset,
                       get_proxy_dataloader, PropertyProxy, HookDict, HookList,
                       GET, POST, Exposes, _log_metrics_for_step)
 from .version import __version__
+
+
+control = Tag("control")
+prop = Tag("prop")
+extras = Tag("extras")
+helpers = Tag("helpers")
+internals = Tag("internals")
 
 
 # Protocol:
@@ -2231,10 +2238,8 @@ class Trainer:
     # def resume_best(self):
     #     """Resumes from the last best saved checkpoint. By default checks for lowest
     #     `val_acc`
-
     #     :returns: None
     #     :rtype: None
-
     #     """
     #     self._logd("Trying to resume last best checkpoint %s" % self.best_save)
     #     if self.best_save:
@@ -2273,19 +2278,15 @@ class Trainer:
     # @control
     # def abort_current(self):
     #     """Stops training entirely. Does not reset the data and the state.
-
     #     Unlike self.abort`, `self.stop` will force stop the training, gather the
     #     metrics and terminate the running thread.
-
     #     :returns: None
     #     :rtype: None
-
     #     """
     #     self._abort_current()
     #     return True, self._logi("Forced stopped")
     #     # listen for commands
 
-    # Actually a pause, "force_save" and then resume
     @control
     def save(self):
         self._logi("Saving")

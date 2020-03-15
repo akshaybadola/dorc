@@ -1,6 +1,7 @@
 import os
 import sys
 import ssl
+import json
 import atexit
 import logging
 import traceback
@@ -28,7 +29,8 @@ class FlaskInterface:
     trainer. Everything's communicated as JSON.
     """
 
-    def __init__(self, hostname, port, data_dir, bare=True, production=False, no_start=False):
+    def __init__(self, hostname, port, data_dir, bare=True, production=False, no_start=False,
+                 config_overrides=None):
         """
         :param hostname: :class:`str` host over which to serve
         :param port: :class:`int` port over which to serve
@@ -44,6 +46,7 @@ class FlaskInterface:
         self.data_dir = data_dir
         self.bare = bare
         self.production = production
+        self.config_overrides = config_overrides
         self.app = Flask(__name__)
         CORS(self.app, supports_credentials=True)
         self.app.config['TEMPLATES_AUTO_RELOAD'] = True
@@ -94,6 +97,29 @@ class FlaskInterface:
     def state_exists(self):
         return os.path.exists(os.path.join(self.data_dir, "session_state"))
 
+    def _update_config(self, config, overrides):
+        def _check(conf, seq):
+            status = True
+            inner = conf.copy()
+            for s in seq:
+                status = s in inner
+                if status:
+                    inner = inner.__getitem__(s)
+                else:
+                    return False
+            return status
+
+        def _set(conf, seq):
+            c = conf
+            for x in seq[:-2]:
+                print(c, x)
+                c = c[x]
+            c[seq[-2]] = seq[-1]
+
+        for o in overrides:
+            if _check(config, o[:-1]):
+                _set(config, o)
+
     def _create_trainer_helper(self):
         try:
             if self.data_dir not in sys.path:
@@ -102,6 +128,17 @@ class FlaskInterface:
                 sys.path.remove(self.data_dir)
             else:
                 from session_config import config
+            overrides_file = os.path.join(self.data_dir, "config_overrides.json")
+            if self.config_overrides is not None:
+                self._logd(f"Config Overrides given: \n{self.config_overrides}" +
+                           "\nWill write to file")
+                config.update(self.config_overrides)
+                with open(overrides_file, "w") as f:
+                    json.dump(self.config_overrides, f)
+            if os.path.exists(overrides_file):
+                self._logd(f"Config Overrides exist. Loading")
+                with open(overrides_file, "r") as f:
+                    config.update(json.load(f))
             self.trainer = Trainer(**{"data_dir": self.data_dir, "production": self.production,
                                       **config})
             self.trainer._init_all()

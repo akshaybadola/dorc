@@ -19,6 +19,7 @@ from threading import Thread
 import multiprocessing as mp
 from subprocess import Popen, PIPE
 from markupsafe import escape
+from functools import partial
 
 import flask_login
 from flask import Flask, render_template, url_for, redirect, request, Response
@@ -27,10 +28,13 @@ from werkzeug import serving
 
 
 from .mods import Modules
-# from .trainer import Trainer
+from .helpers import Tag
 from .interfaces import FlaskInterface
 from .util import _dump
 from ._log import Log
+
+
+session_method = Tag("session_method")
 
 
 def __inti__(_n):
@@ -305,8 +309,7 @@ sys.path.append("{self.data_dir}")
             else:
                 self._task_q.put((task_id, status, message))
         else:
-            self._loge(f"Could not add dataset. {result}")
-            self._task_q.put((task_id, False, f"Could not add dataset. {result}"))
+            self._error_and_put(task_id, False, f"Could not add dataset. {result}")
 
     def _load_module(self, task_id, data):
         mod_name = data["name"]
@@ -320,8 +323,7 @@ sys.path.append("{self.data_dir}")
             self._modules.update(result)
             self._task_q.put((task_id, True))
         else:
-            self._loge(f"Could not load module. {result}")
-            self._task_q.put((task_id, False, f"Could not load module. {result}"))
+            self._error_and_put(task_id, False, f"Could not load module. {result}")
 
     # The following line should execute in the session env
     # self._read_modules_from_dir(mods_dir)
@@ -393,20 +395,21 @@ sys.path.append("{self.data_dir}")
                 self._logd(f"Loading sessions state")
                 self._sessions[session_name]["sessions"][time_str]["state"] = json.load(f)
         else:
-            self._loge(f"Failed task {task_id}. Cleaning up")
+            self._logd(f"Failed task {task_id}. Cleaning up")
             self._sessions[session_name]["sessions"].pop(time_str)
             shutil.rmtree(data_dir)
 
-    # NOTE: Only load_session sends add=False to _create_trainer
-    # NOTE: `add` Changed to `load`
-    def _create_trainer(self, task_id, name, time_str, data_dir, config, load=False):
+    # NOTE: Only load_session sends load=True to _create_trainer
+    def _create_trainer(self, task_id, name, time_str, data_dir, config,
+                        overrides=None, load=False):
         self._logd(f"Trying to create trainer with data_dir {data_dir}")
         if not os.path.isabs(data_dir):
             data_dir = os.path.abspath(data_dir)
         if not load and self._check_config(config):  # create but don't load
             try:
                 self._logd(f"Adding new config")
-                iface = FlaskInterface(None, None, data_dir, production=self.production)
+                iface = FlaskInterface(None, None, data_dir, production=self.production,
+                                       config_overrides=overrides)
                 status, result = iface.check_config(config, env=self.env_str)
                 # print("IFACE", status, result, data_dir)
                 # print("CONFIG EXISTS", os.path.exists(os.path.join(data_dir)),
@@ -421,11 +424,9 @@ sys.path.append("{self.data_dir}")
                     del iface
                     self._task_q.put((task_id, True))
                 else:
-                    self._loge(f"Could not read config. {result}")
-                    self._task_q.put((task_id, False, f"Could not read config. {result}"))
+                    self._error_and_put(task_id, False, f"Could not read config. {result}")
             except Exception as e:
-                self._loge(f"Exception occurred {e}" + "\n" + traceback.format_exc())
-                self._task_q.put((task_id, False, f"{e}" + "\n" + traceback.format_exc()))
+                self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
         elif load and self._check_config(config):  # create and load
             try:
                 self._logd(f"Config already existed")
@@ -433,20 +434,22 @@ sys.path.append("{self.data_dir}")
                 self._sessions[name]["sessions"][time_str]["config"] = config
                 self._sessions[name]["sessions"][time_str]["port"] = port
                 self._sessions[name]["sessions"][time_str]["data_dir"] = data_dir
-                cmd = f"python if_run.py {self.hostname} {port} {data_dir} {self.production}"
+                if overrides:
+                    with open(os.path.join(data_dir, "config_overrides.json")) as f:
+                        json.dump(overrides, f)
+                cmd = f"python if_run.py {self.hostname} {port} {data_dir} {self.production}" +\
+                    "--config-overrides True"
                 cwd = self._root_dir
-                # print("CMD", cmd, cwd)
+                self._logd(f"Running command {cmd} in {cwd}")
                 p = Popen(shlex.split(cmd), env=os.environ, cwd=cwd)
                 self._sessions[name]["sessions"][time_str]["process"] = p
                 Thread(target=p.communicate).start()
                 # print("Popen?", type(p))
                 self._task_q.put((task_id, True))
             except Exception as e:
-                self._loge(f"Exception occurred {e}" + "\n" + traceback.format_exc())
-                self._task_q.put((task_id, False, f"{e}" + "\n" + traceback.format_exc()))
+                self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
         else:
-            self._loge("Check failed on config")
-            self._task_q.put((task_id, False, "Check failed on config"))
+            self._error_and_put(task_id, False, "Check failed on config")
 
     def _refresh_state(self, session_key):
         name, time_str = session_key.split("/")
@@ -460,7 +463,7 @@ sys.path.append("{self.data_dir}")
         name, time_str = session_key.split("/")
         state = self._sessions[name]["sessions"][time_str]["state"]
         if self._session_finished_p(state):
-            self._unload_helper(name, time_str)
+            self._unload_session_helper(-1, name, time_str)
 
     def _refresh_all_loaded_sessions(self):
         self._logd("Refreshing all loaded sessions' states")
@@ -476,9 +479,10 @@ sys.path.append("{self.data_dir}")
                 for sub_name, sub_sess in session["sessions"].items():
                     state = sub_sess["state"]
                     if not self._session_finished_p(state):
-                        self.load_session(0, {"session_key": "/".join([name, sub_name])})
+                        self._load_session_helper(0, name, sub_name)
             except Exception as e:
-                self._loge(f"Could not load session {name}. Error {e}" + "\n" + traceback.format_exc())
+                self._loge(f"Could not load session {name}. Error {e}" +
+                           "\n" + traceback.format_exc())
                 continue
 
     def _session_finished_p(self, state) -> bool:
@@ -503,117 +507,8 @@ sys.path.append("{self.data_dir}")
         else:
             return True, None
 
-    def load_session(self, task_id, data):
-        """Loads a training session into memory"""
-        self._logd(f"Trying to load session {data['session_key']}")
-        key = data["session_key"]
-        session_name, timestamp = key.split("/")
-        valid, error_str = self._check_session_valid(session_name, timestamp)
-        if not valid:
-            self._logd(f"Invalid session {data['session_key']}")
-            self._task_q.put((task_id, valid, error_str))
-        else:
-            data_dir = os.path.join(self.data_dir, key)
-            config_candidates = [x for x in os.listdir(data_dir)
-                                 if "session_config" in x]
-            if not len(config_candidates) == 1:
-                self._logd(f"Error. More than one config detected for {data['session_key']}")
-                self._task_q.put((task_id, False, f"Error. More than one config detected"))
-            else:
-                # CHECK: How to resolve multiple entries in sys.path having same
-                #        module names Currently I remove dir from sys.path after
-                #        loading.  Not sure if it'll work correctly.
-                # NOTE: I think it's not really causing an issue.
-                self._logd(f"Checks passed. Creating session {session_name}/{timestamp}")
-            self._sessions[session_name]["sessions"][timestamp] = {}
-            self._create_trainer(task_id, session_name, timestamp, data_dir, None, True)
-            with open(os.path.join(self._sessions[session_name]["path"], timestamp,
-                                   "session_state"), "r") as f:
-                self._sessions[session_name]["sessions"][timestamp]["state"] = json.load(f)
-
-    def _unload_helper(self, name, time_str=None):
-        def _unload(name, time_str):
-            self._logd(f"Unloading {name}/{time_str}")
-            if "process" in self._sessions[name]["sessions"][time_str]:
-                self._sessions[name]["sessions"][time_str]["process"].terminate()
-                self._sessions[name]["sessions"][time_str].pop("process")
-            # self._sessions[name]["sessions"][time_str]["trainer"] = None
-            self._sessions[name]["sessions"][time_str]["config"] = None
-            # self._sessions[name]["sessions"][time_str].pop("trainer")
-            self._sessions[name]["sessions"][time_str].pop("config")
-            if "port" in self._sessions[name]["sessions"][time_str]:
-                self._sessions[name]["sessions"][time_str].pop("port")
-            if "iface" in self._sessions[name]["sessions"][time_str]:
-                self._sessions[name]["sessions"][time_str].pop("iface")
-        if time_str is None:
-            for k in self._sessions[name]["sessions"].keys():
-                _unload(name, k)
-        else:
-            _unload(name, time_str)
-
-    def _purge_helper(self, task_id, name, time_str):
-        self._logd(f"Purging {name}/{time_str}")
-        try:
-            self._unload_helper(name, time_str)
-            shutil.rmtree(os.path.join(self.data_dir, name, time_str))
-            self._sessions[name]["sessions"].pop(time_str)
-            self._task_q.put((task_id, True, f"Purged session {name}/{time_str}"))
-        except Exception as e:
-            self._logd(f"Exceptioni occurred {e}" + "\n" + traceback.format_exc())
-            self._task_q.put((task_id, False, f"{e}" + "\n" + traceback.format_exc()))
-
-    def unload_session(self, task_id, data):
-        """Unloads a training session from memory"""
-        if "session_key" in data:
-            self._logd(f"Trying to Unload session {data['session_key']}")
-            session_name, timestamp = data["session_key"].split("/")
-            valid, error_str = self._check_session_valid(session_name, timestamp)
-            if not valid:
-                self._logd(f"Invalid session {data['session_key']}")
-                self._task_q.put((task_id, valid, error_str))
-            else:
-                try:
-                    self._logd(f"Ok to unload session {data['session_key']}")
-                    self._unload_helper(session_name, timestamp)
-                    self._task_q.put((task_id, True, f"Unloaded session {data['session_key']}"))
-                except Exception as e:
-                    self._logd(f"Exception occurred {e}" + "\n" + traceback.format_exc())
-                    self._task_q.put((task_id, False, f"{e}" + "\n" + traceback.format_exc()))
-        elif "session_name" in data:
-            self._logd(f"Trying to unload all sessions of {data['session_name']}")
-            session = data["session_name"]
-            try:
-                self._unload_helper(session)
-                self._task_q.put((task_id, True, f"Unloaded all sessions for session_name"))
-            except Exception as e:
-                self._logd(f"Exception occurred {e}" + "\n" + traceback.format_exc())
-                self._task_q.put((task_id, False, f"{e}" + "\n" + traceback.format_exc()))
-        else:
-            self._logd(f"Incorrect data format given")
-            self._task_q.put((task_id, False, "Incorrect data format"))
-
     def compare_sessions(self):
         pass
-
-    def purge_session(self, task_id, data):
-        """Unloads the session and removes it from disk"""
-        self._logd(f"Trying to purge session {data['session_key']}")
-        if "session_key" in data:
-            session_name, timestamp = data["session_key"].split("/")
-            valid, error_str = self._check_session_valid(session_name, timestamp)
-            if not valid:
-                self._logd(f"Invalid session {data['session_key']}")
-                self._task_q.put((task_id, valid, error_str))
-            else:
-                try:
-                    self._logd(f"Ok to purge session {data['session_key']}")
-                    self._purge_helper(task_id, session_name, timestamp)
-                except Exception as e:
-                    self._logd(f"Exception occurred {e}" + "\n" + traceback.format_exc())
-                    self._task_q.put((task_id, False, f"{e}" + "\n" + traceback.format_exc()))
-        else:
-            self._logd(f"Incorrect data format given")
-            self._task_q.put((task_id, False, "Incorrect data format"))
 
     @property
     def _sessions_list(self):
@@ -641,6 +536,168 @@ sys.path.append("{self.data_dir}")
                 return False, None
         else:
             return False, None
+
+    def _error_and_put(self, task_id, status, message):
+        self._loge(f"Error occured {message}")
+        self._task_q.put((task_id, status, message))
+
+    def _info_and_put(self, task_id, status, message):
+        self._logi(message)
+        self._task_q.put((task_id, status, message))
+
+    def _debug_and_put(self, task_id, status, message):
+        self._logd(message)
+        self._task_q.put((task_id, status, message))
+
+    @property
+    def _session_methods(self):
+        return [x.__name__[1:].replace("_helper", "") for x in session_method.members]
+
+    @session_method
+    def _load_session_helper(self, task_id, name, time_str, data=None):
+        key = name + "/" + time_str
+        data_dir = os.path.join(self.data_dir, name, time_str)
+        config_candidates = [x for x in os.listdir(data_dir)
+                             if "session_config" in x]
+        if not len(config_candidates) == 1:
+            self._logd(f"Error. More than one config detected for {key}")
+            self._task_q.put((task_id, False, f"Error. More than one config detected"))
+        else:
+            self._logd(f"Checks passed. Creating session {key}")
+        self._sessions[name]["sessions"][time_str] = {}
+        self._create_trainer(task_id, name, time_str, data_dir, config=None, load=True)
+        with open(os.path.join(self._sessions[name]["path"], time_str,
+                               "session_state"), "r") as f:
+            self._sessions[name]["sessions"][time_str]["state"] = json.load(f)
+
+    @session_method
+    def _unload_session_helper(self, task_id, name, time_str=None, data=None):
+        def _unload(name, time_str):
+            self._logd(f"Unloading {name}/{time_str}")
+            if "process" in self._sessions[name]["sessions"][time_str]:
+                self._sessions[name]["sessions"][time_str]["process"].terminate()
+                self._sessions[name]["sessions"][time_str].pop("process")
+            self._sessions[name]["sessions"][time_str]["config"] = None
+            self._sessions[name]["sessions"][time_str].pop("config")
+            if "port" in self._sessions[name]["sessions"][time_str]:
+                self._sessions[name]["sessions"][time_str].pop("port")
+            if "iface" in self._sessions[name]["sessions"][time_str]:
+                self._sessions[name]["sessions"][time_str].pop("iface")
+        if time_str is None:
+            for k in self._sessions[name]["sessions"].keys():
+                try:
+                    _unload(name, k)
+                    self._debug_and_put(task_id, True, f"Unloaded all sessions for {name}")
+                except Exception as e:
+                    self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
+        else:
+            try:
+                _unload(name, time_str)
+                self._debug_and_put(task_id, True, f"Unloaded session {name}/{time_str}")
+            except Exception as e:
+                self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
+
+    @session_method
+    def _purge_session_helper(self, task_id, name, time_str, data=None):
+        self._logd(f"Purging {name}/{time_str}")
+        try:
+            self._unload_session_helper(task_id, name, time_str)
+            shutil.rmtree(os.path.join(self.data_dir, name, time_str))
+            self._sessions[name]["sessions"].pop(time_str)
+            self._debug_and_put(task_id, True, f"Purged session {name}/{time_str}")
+        except Exception as e:
+            self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
+
+    @session_method
+    def _archive_session_helper(self, task_id, name, time_str, data=None):
+        # How do I mark a session as archived?
+        if "saves" in data:
+            # keep those files in save
+            pass
+        if "keep_checkpoint" in data:
+            # keep last checkpoint
+            pass
+        if "notes" in data:
+            # insert notes in state
+            pass
+        self._info_and_put(task_id, True, "Archive session helper")
+
+    @session_method
+    def _clone_session_helper(self, task_id, name, time_str, data=None):
+        self._logd(f"Trying to clone session {name}/{time_str} with data {data}")
+        from_data_dir = os.path.join(self.data_dir, name, time_str)
+        if os.path.exists(os.path.join(from_data_dir, "session_config.py")):
+            config_file = os.path.join(from_data_dir, "session_config.py")
+        elif os.path.exists(os.path.join(from_data_dir, "session_config", "__init__.py")):
+            config_file = os.path.join(from_data_dir, "session_config", "__init__.py")
+        with open(config_file, "rb") as f:
+            config = f.read()
+        if "config" in data and data["config"]:
+            overrides = data["config"]
+        else:
+            self._logd(f"No config overrides")
+        time_str = datetime.datetime.now().isoformat()
+        data_dir = os.path.join(self._sessions[name]["path"], time_str)
+        os.mkdir(data_dir)
+        self._sessions[name]["sessions"][time_str] = {}
+        if self._wait_for_task(self._create_trainer, task_id,
+                               args=[name, time_str, data_dir,
+                                     config, overrides]):
+            with open(os.path.join(self._sessions[name]["path"], time_str,
+                                   "session_state")) as f:
+                self._logd(f"Loading sessions state")
+                self._sessions[name]["sessions"][time_str]["state"] = json.load(f)
+            if "saves" in data:
+                self._loge("Cannot copy saves right now")
+                pass
+            self._logd("Cloned session successfully")
+        else:
+            self._logd("Failed to clone with task_id {task_id}")
+
+    @session_method
+    def _reinit_session_helper(self, task_id, name, time_str, data=None):
+        # update params and reinit
+        # Different from update params on the fly (call to trainer)
+        self._info_and_put(task_id, True, "Reinit session helper")
+
+    def _session_method_check(self, task_id, func_name, data):
+        """Calls the appropriate helper based on the url route"""
+        self._logd(f"Trying to {func_name.replace('_', ' ')}: {data['session_key']}")
+        if "session_key" in data:
+            session_name, timestamp = data["session_key"].split("/")
+            valid, error_str = self._check_session_valid(session_name, timestamp)
+            if not valid:
+                error_str = f"Invalid session {data['session_key']}\n{error_str}"
+                self._error_and_put(task_id, valid, error_str)
+            else:
+                try:
+                    self._logd(f"Ok to {func_name.split('_')[0]} session {data['session_key']}")
+                    if not func_name.startswith("_"):
+                        func = getattr(self, "_" + func_name + "_helper")
+                    else:
+                        func = getattr(self, func_name + "_helper")
+                    func(task_id, session_name, timestamp, data=data)
+                except Exception as e:
+                    self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
+        else:
+            self._error_and_put(task_id, False, "Incorrect data format given")
+
+    def _session_check_get(self, func_name):
+        func = getattr(self, func_name)
+        return _dump(func())
+
+    def _session_check_post(self, func_name):
+        if not flask_login.current_user.is_authenticated:
+            return self.login_manager.unauthorized()
+        if isinstance(request.json, dict):
+            data = request.json
+        else:
+            data = json.loads(request.json)
+        if "session_key" not in data:
+            return _dump(f"Invalid data {data}")
+        else:
+            task_id = self._get_task_id_launch_func(self._session_method_check, func_name, data)
+            return _dump({"task_id": task_id, "message": f"{func_name.split('_')[0]}ing {data}"})
 
     # NOTE: Main entry point for the server
     def start(self):
@@ -715,10 +772,10 @@ sys.path.append("{self.data_dir}")
         @self.app.route("/update_given_name", methods=["POST"])
         @flask_login.login_required
         def __update_given_name():
-            print("JSON?", request.json)
-            if hasattr(request, "data"):
-                print("DATA", request.data)
-            print("FORM", [*request.form.keys()])
+            # print("JSON?", request.json)
+            # if hasattr(request, "data"):
+            #     print("DATA", request.data)
+            # print("FORM", [*request.form.keys()])
             if isinstance(request.json, dict):
                 data = request.json
             else:
@@ -754,6 +811,8 @@ sys.path.append("{self.data_dir}")
                 else:
                     return _dump([False, f"Could not assign name"])
 
+        # FIXME: no provision to load config as JSON? Everything can't be bytes
+        #        can it?
         @self.app.route("/create_session", methods=["POST"])
         @flask_login.login_required
         def __new_session():
@@ -770,47 +829,6 @@ sys.path.append("{self.data_dir}")
             task_id = self._get_task_id_launch_func(self.create_session, data)
             return _dump({"task_id": task_id,
                           "message": "Creating session with whatever data given"})
-
-        @self.app.route("/load_session", methods=["POST"])
-        @flask_login.login_required
-        def __load_session():
-            if isinstance(request.json, dict):
-                data = request.json
-            else:
-                data = json.loads(request.json)
-            if "session_key" not in data:
-                return _dump(f"Invalid data {data}")
-            else:
-                task_id = self._get_task_id_launch_func(self.load_session, data)
-                return _dump({"task_id": task_id, "message": f"Loading session with {data}"})
-
-        @self.app.route("/unload_session", methods=["POST"])
-        @flask_login.login_required
-        def __unload_session():
-            if isinstance(request.json, dict):
-                data = request.json
-            else:
-                data = json.loads(request.json)
-            if not ("session_key" in data or "session_name" in data):
-                return _dump(f"Invalid data {data}")
-            else:
-                task_id = self._get_task_id_launch_func(self.unload_session, data)
-                return _dump({"task_id": task_id,
-                              "message": f"Unloading session: {data['session_key']}"})
-
-        # TODO: Fix design issues. Should only return return json, not "False, json"
-        @self.app.route("/purge_session", methods=["POST"])
-        @flask_login.login_required
-        def __purge_session():
-            if isinstance(request.json, dict):
-                data = request.json
-            else:
-                data = json.loads(request.json)
-            if "session_key" not in data:
-                return _dump(f"Invalid data {data}")
-            else:
-                task_id = self._get_task_id_launch_func(self.purge_session, data)
-                return _dump({"task_id": task_id, "message": f"Purging session {data}"})
 
         @self.app.route("/check_task", methods=["GET"])
         @flask_login.login_required
@@ -1058,7 +1076,7 @@ sys.path.append("{self.data_dir}")
         def __shutdown_server():
             self._logd("Shutdown called via HTTP. Shutting down.")
             for k in self._sessions:
-                self._unload_helper(k)
+                self._unload_session_helper(-1, k)
             func = request.environ.get('werkzeug.server.shutdown')
             func()
             return "Shutting down"
@@ -1071,10 +1089,15 @@ sys.path.append("{self.data_dir}")
             # only views the progress and parameters. No trainer is started
             return _dump("Doesn't do anything")
 
+        # NOTE: Adding session_methods. Avoid copy/paste
+        for x in self._session_methods:
+            self.app.add_url_rule("/" + x, x, partial(self._session_check_post, x),
+                                  methods=["POST"])
+
         @atexit.register
         def unload_all():
             for k in self._sessions:
-                self._unload_helper(k)
+                self._unload_session_helper(-1, k)
 
         serving.run_simple(self.hostname, self.port, self.app, ssl_context=self.context)
 

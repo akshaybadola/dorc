@@ -49,7 +49,7 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
             responses.append(response)
         time.sleep(1)
         response = requests.request("GET", self.host + "sessions",
-                                        cookies=self.cookies)
+                                    cookies=self.cookies)
         sessions = json.loads(response.content)
         # shutdown the daemon
         response = self.shutdown_daemon(self.host)

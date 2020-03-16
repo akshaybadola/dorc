@@ -1,4 +1,5 @@
 import torch
+from torch.utils.data import Dataset
 import numpy as np
 from collections import OrderedDict
 from .overrides import MyDataLoader
@@ -126,7 +127,7 @@ def POST(f):
     return f
 
 
-class ProxyDataset(torch.utils.data.Dataset):
+class ProxyDataset(Dataset):
     def __init__(self, dataset, indices):
         self._indices = indices
         self._dataset = dataset

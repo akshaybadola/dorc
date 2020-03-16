@@ -58,7 +58,6 @@ class CloneArchiveHTTPTest(unittest.TestCase):
         task_id = json.loads(response.content)["task_id"]
         pprint.pprint(requests.request("GET", self.host + f"check_task?task_id={task_id}",
                                        cookies=self.cookies).content)
-        import ipdb; ipdb.set_trace()
         keys = [*self.daemon._sessions["meh_session"]["sessions"].keys()]
         keys.sort()
         response = requests.request("POST", self.host + "load_session",
@@ -68,7 +67,10 @@ class CloneArchiveHTTPTest(unittest.TestCase):
         task_id = json.loads(response.content)["task_id"]
         pprint.pprint(requests.request("GET", self.host + f"check_task?task_id={task_id}",
                                        cookies=self.cookies).content)
-        import ipdb; ipdb.set_trace()
+        port = self.daemon._sessions["meh_session"]["sessions"][keys[-1]]["port"]
+        response = requests.request("GET", f"http://{self.hostname}:{port}/props/all_params")
+        bleh = json.loads(response.content)
+        self.assertEqual(bleh["trainer_params"]["seed"], 2222)
 
     @classmethod
     def shutdown_daemon(cls, host):
@@ -78,6 +80,7 @@ class CloneArchiveHTTPTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        cls.shutdown_daemon(cls.host)
         if os.path.exists(cls.data_dir):
             shutil.rmtree(cls.data_dir)
 

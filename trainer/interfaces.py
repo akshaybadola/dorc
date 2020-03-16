@@ -132,13 +132,15 @@ class FlaskInterface:
             if self.config_overrides is not None:
                 self._logd(f"Config Overrides given: \n{self.config_overrides}" +
                            "\nWill write to file")
-                config.update(self.config_overrides)
+                self._update_config(config, self.config_overrides)
                 with open(overrides_file, "w") as f:
                     json.dump(self.config_overrides, f)
             if os.path.exists(overrides_file):
                 self._logd(f"Config Overrides exist. Loading")
                 with open(overrides_file, "r") as f:
-                    config.update(json.load(f))
+                    config_overrides = json.load(f)
+                    self._update_config(config, config_overrides)
+            self._current_config = config
             self.trainer = Trainer(**{"data_dir": self.data_dir, "production": self.production,
                                       **config})
             self.trainer._init_all()
@@ -289,6 +291,14 @@ class FlaskInterface:
         def __destroy():
             self._logi("Destroying")
             self._logi("Does nothing for now")
+
+        @self.app.route("/config", methods=["GET"])
+        def __config():
+            return _dump(self._current_config)
+
+        @self.app.route("/update_restart", methods=["POST"])
+        def __update_restart():
+            return _dump("Does nothing for now")
 
         # NOTE: Props
         for x in self.trainer.props:

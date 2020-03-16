@@ -389,7 +389,6 @@ sys.path.append("{self.data_dir}")
         if self._wait_for_task(self._create_trainer, task_id,
                                args=[session_name, time_str, data_dir,
                                      data["config"]]):
-            # self._create_trainer(task_id, session_name, time_str, data_dir, data["config"])
             with open(os.path.join(self._sessions[session_name]["path"], time_str,
                                    "session_state")) as f:
                 self._logd(f"Loading sessions state")
@@ -649,7 +648,6 @@ sys.path.append("{self.data_dir}")
                 self._sessions[name]["sessions"][time_str]["state"] = json.load(f)
             if "saves" in data:
                 self._loge("Cannot copy saves right now")
-                pass
             self._logd("Cloned session successfully")
         else:
             self._logd("Failed to clone with task_id {task_id}")

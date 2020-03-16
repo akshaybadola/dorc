@@ -2428,7 +2428,7 @@ class Trainer:
         else:
             self._session_aborted_event.set()
 
-    def _abort_session(self):
+    def _abort_session(self, cause: str):
         # any -> force_finished_none with aborted_session True
         self._toggle_session_aborted()
         self._transition(self.current_state, "force_finshed_none")

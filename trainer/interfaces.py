@@ -1,3 +1,4 @@
+from typing import Dict, Iterable, Union
 import os
 import sys
 import ssl
@@ -97,7 +98,7 @@ class FlaskInterface:
     def state_exists(self):
         return os.path.exists(os.path.join(self.data_dir, "session_state"))
 
-    def _update_config(self, config, overrides):
+    def _update_config(self, config: Dict, overrides: Iterable[Union[int, float, str]]):
         def _check(conf, seq):
             status = True
             inner = conf.copy()

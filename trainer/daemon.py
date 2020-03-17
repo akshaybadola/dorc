@@ -436,7 +436,7 @@ sys.path.append("{self.data_dir}")
                 if overrides:
                     with open(os.path.join(data_dir, "config_overrides.json")) as f:
                         json.dump(overrides, f)
-                cmd = f"python if_run.py {self.hostname} {port} {data_dir} {self.production}" +\
+                cmd = f"python if_run.py {self.hostname} {port} {data_dir} {self.production} " +\
                     "--config-overrides True"
                 cwd = self._root_dir
                 self._logd(f"Running command {cmd} in {cwd}")
@@ -632,7 +632,10 @@ sys.path.append("{self.data_dir}")
         with open(config_file, "rb") as f:
             config = f.read()
         if "config" in data and data["config"]:
-            overrides = data["config"]
+            overrides = []
+            for k, v in data["config"].items():
+                overrides.append(k.split(":") + [v])
+            self._logd(f"Config overrides given {overrides}")
         else:
             self._logd(f"No config overrides")
         time_str = datetime.datetime.now().isoformat()
@@ -662,7 +665,12 @@ sys.path.append("{self.data_dir}")
         """Calls the appropriate helper based on the url route"""
         self._logd(f"Trying to {func_name.replace('_', ' ')}: {data['session_key']}")
         if "session_key" in data:
-            session_name, timestamp = data["session_key"].split("/")
+            try:
+                session_name, timestamp = data["session_key"].split("/")
+            except Exception as e:
+                self._error_and_put(task_id, False, f"Invalid session key {e}" +
+                                    traceback.format_exc())
+                return
             valid, error_str = self._check_session_valid(session_name, timestamp)
             if not valid:
                 error_str = f"Invalid session {data['session_key']}\n{error_str}"

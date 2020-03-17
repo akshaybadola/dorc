@@ -536,6 +536,17 @@ sys.path.append("{self.data_dir}")
         else:
             return False, None
 
+    def _get_config_file(self, name, time_str=None):
+        if time_str is not None:
+            data_dir = os.path.join(self.data_dir, name, time_str)
+        else:
+            data_dir = os.path.join(self.data_dir, name)
+        if os.path.exists(os.path.join(data_dir, "session_config.py")):
+            config_file = os.path.join(data_dir, "session_config.py")
+        elif os.path.exists(os.path.join(data_dir, "session_config", "__init__.py")):
+            config_file = os.path.join(data_dir, "session_config", "__init__.py")
+        return config_file
+
     def _error_and_put(self, task_id, status, message):
         self._loge(f"Error occured {message}")
         self._task_q.put((task_id, status, message))
@@ -559,15 +570,19 @@ sys.path.append("{self.data_dir}")
         config_candidates = [x for x in os.listdir(data_dir)
                              if "session_config" in x]
         if not len(config_candidates) == 1:
-            self._logd(f"Error. More than one config detected for {key}")
-            self._task_q.put((task_id, False, f"Error. More than one config detected"))
+            self._error_and_put(task_id, False, f"More than one config detected for {key}")
         else:
             self._logd(f"Checks passed. Creating session {key}")
-        self._sessions[name]["sessions"][time_str] = {}
-        self._create_trainer(task_id, name, time_str, data_dir, config=None, load=True)
-        with open(os.path.join(self._sessions[name]["path"], time_str,
-                               "session_state"), "r") as f:
-            self._sessions[name]["sessions"][time_str]["state"] = json.load(f)
+        try:
+            self._sessions[name]["sessions"][time_str] = {}
+            self._create_trainer(task_id, name, time_str, data_dir, config=None, load=True)
+            with open(os.path.join(self._sessions[name]["path"], time_str,
+                                   "session_state"), "r") as f:
+                self._sessions[name]["sessions"][time_str]["state"] = json.load(f)
+            self._debug_and_put(task_id, True, f"Loaded Session for {key}")
+        except Exception as e:
+            self._error_and_put(task_id, False, f"Could not load Session for {key}. {e}"
+                                + "\n" + traceback.format_exc())
 
     @session_method
     def _unload_session_helper(self, task_id, name, time_str=None, data=None):
@@ -624,15 +639,11 @@ sys.path.append("{self.data_dir}")
     @session_method
     def _clone_session_helper(self, task_id, name, time_str, data=None):
         self._logd(f"Trying to clone session {name}/{time_str} with data {data}")
-        from_data_dir = os.path.join(self.data_dir, name, time_str)
-        if os.path.exists(os.path.join(from_data_dir, "session_config.py")):
-            config_file = os.path.join(from_data_dir, "session_config.py")
-        elif os.path.exists(os.path.join(from_data_dir, "session_config", "__init__.py")):
-            config_file = os.path.join(from_data_dir, "session_config", "__init__.py")
+        config_file = self._get_config_file(name, time_str)
         with open(config_file, "rb") as f:
             config = f.read()
+        overrides = []
         if "config" in data and data["config"]:
-            overrides = []
             for k, v in data["config"].items():
                 overrides.append(k.split(":") + [v])
             self._logd(f"Config overrides given {overrides}")
@@ -657,9 +668,30 @@ sys.path.append("{self.data_dir}")
 
     @session_method
     def _reinit_session_helper(self, task_id, name, time_str, data=None):
-        # update params and reinit
-        # Different from update params on the fly (call to trainer)
-        self._info_and_put(task_id, True, "Reinit session helper")
+        config_file = self._get_config_file(name, time_str)
+        with open(config_file, "rb") as f:
+            config = f.read()
+        overrides = []
+        if "config" in data and data["config"]:
+            for k, v in data["config"].items():
+                overrides.append(k.split(":") + [v])
+            self._logd(f"Config overrides given {overrides}")
+        else:
+            self._logd(f"No config overrides. Will only reinitialize.")
+        data_dir = os.path.join(self.data_dir, name, time_str)
+        self._logd(f"Removing logs and saves")
+        shutil.rmtree(os.path.join(data_dir, "logs"))
+        shutil.rmtree(os.path.join(data_dir, "savedir"))
+        if self._wait_for_task(self._create_trainer, task_id,
+                               args=[name, time_str, data_dir,
+                                     config, overrides]):
+            with open(os.path.join(self._sessions[name]["path"], time_str,
+                                   "session_state")) as f:
+                self._logd(f"Loading sessions state")
+                self._sessions[name]["sessions"][time_str]["state"] = json.load(f)
+            self._logd("Reinitialized session successfully")
+        else:
+            self._logd("Failed to reinitialize with task_id {task_id}")
 
     def _session_method_check(self, task_id, func_name, data):
         """Calls the appropriate helper based on the url route"""

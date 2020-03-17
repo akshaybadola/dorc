@@ -4,6 +4,7 @@ import sys
 import ssl
 import json
 import atexit
+import shutil
 import logging
 import traceback
 from functools import partial
@@ -69,6 +70,8 @@ class FlaskInterface:
         self._logw = log._logw
         self._modules = Modules(self.data_dir, self._logd, self._loge,
                                 self._logi, self._logw)
+        self._current_config = None
+        self._current_overrides = None
         if (self.api_host and self.api_port and self.config_exists):
             self._logi("Creating Trainer")
             status, message = self.create_trainer()
@@ -137,11 +140,14 @@ class FlaskInterface:
                 with open(overrides_file, "w") as f:
                     json.dump(self.config_overrides, f)
             if os.path.exists(overrides_file):
-                self._logd(f"Config Overrides exist. Loading")
+                self._logd(f"Config Overrides File exists. Loading")
                 with open(overrides_file, "r") as f:
                     config_overrides = json.load(f)
                     self._update_config(config, config_overrides)
+            else:
+                config_overrides = None
             self._current_config = config
+            self._current_overrides = config_overrides
             self.trainer = Trainer(**{"data_dir": self.data_dir, "production": self.production,
                                       **config})
             self.trainer._init_all()
@@ -163,9 +169,6 @@ class FlaskInterface:
 
     def check_config(self, config, env=None):
         status, result = self._modules.add_config(self.data_dir, config, env=env)
-        # print("CHECK CONFIG", self.data_dir,
-        #       (os.path.exists(self.data_dir + "/session_config")
-        #        or os.path.exists(self.data_dir + "/session_config.py")))
         if status:
             return status, None
         else:
@@ -295,7 +298,30 @@ class FlaskInterface:
 
         @self.app.route("/config", methods=["GET"])
         def __config():
-            return _dump(self._current_config)
+            return _dump({"config": self._current_config,
+                          "overrides": self._current_overrides})
+
+        # TODO: Should restart self also, but we can't restart self, only daemon can. LOL
+        @self.app.route("/config_file", methods=["GET", "POST"])
+        def __config_file():
+            config_file = os.path.join(self.data_dir, "session_config.py")
+            if not os.path.exists(config_file):
+                config_file = os.path.join(config_file[:-3], "__init__.py")
+            if request.method == "GET":
+                with open(config_file, "rb") as f:
+                    config = f.read()
+                return config
+            elif request.method == "POST":
+                try:
+                    file_bytes = request.files["file"].read()
+                    shutil.copy(config_file, config_file + ".bak")
+                    with open(config_file, "w") as f:
+                        f.write(file_bytes.decode("utf-8"))
+                    return self._logi("Updated Config")
+                except Exception as e:
+                    shutil.copy(config_file + ".bak", config_file)
+                    return self._loge(f"Exception Occured Config {e}. Reverted to earlier." +
+                                      "\n" + traceback.format_exc())
 
         @self.app.route("/update_restart", methods=["POST"])
         def __update_restart():

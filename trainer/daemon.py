@@ -796,9 +796,17 @@ sys.path.append("{self.data_dir}")
         # NOTE: Simplest way would be to proxy it
         #       Although a better way would be to get the function
         #       for the url rule and return value from it
-        @self.app.route("/trainer/<trainer>/<endpoint>")
-        def __trainer(trainer=None, endpoint=None):
-            return "Not Implemented"
+        @self.app.route("/trainer/<int:port>/<endpoint>", methods=["GET", "POST"])
+        @flask_login.login_required
+        def __trainer(port=None, endpoint=None):
+            import ipdb; ipdb.set_trace()
+            resp = requests.request(request.method, "http://localhost:{port}/{endpoint}")
+            excluded_headers = ["content-encoding", "content-length",
+                                "transfer-encoding", "connection"]
+            headers = [(name, value) for (name, value) in resp.raw.headers.items()
+                       if name.lower() not in excluded_headers]
+            response = Response(resp.content, resp.status_code, headers)
+            return response
 
         @self.app.route("/sessions", methods=["GET"])
         @flask_login.login_required
@@ -1058,6 +1066,7 @@ sys.path.append("{self.data_dir}")
             Type of data should also be mentioned.
 
             """
+            import ipdb; ipdb.set_trace()
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
                 return _dump([False, "Name not in request or empty name"])

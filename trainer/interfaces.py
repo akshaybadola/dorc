@@ -94,8 +94,8 @@ class FlaskInterface:
 
     @property
     def config_exists(self):
-        return (os.path.exists(os.path.join(self.data_dir, "session_config"))
-                or os.path.exists(os.path.join(self.data_dir, "session_config.py")))
+        return (os.path.exists(os.path.join(self.data_dir, "session_config")) or
+                os.path.exists(os.path.join(self.data_dir, "session_config.py")))
 
     @property
     def state_exists(self):
@@ -189,8 +189,8 @@ class FlaskInterface:
                 self.context.load_cert_chain(self.api_crt, self.api_key)
             except Exception as e:
                 sys.exit("Error starting flask server. " +
-                         f"Missing cert or key. Details: {e}"
-                         + "\n" + traceback.format_exc())
+                         f"Missing cert or key. Details: {e}" +
+                         "\n" + traceback.format_exc())
         else:
             self.context = None
 

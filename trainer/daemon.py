@@ -799,13 +799,42 @@ sys.path.append("{self.data_dir}")
         @self.app.route("/trainer/<int:port>/<endpoint>", methods=["GET", "POST"])
         @flask_login.login_required
         def __trainer(port=None, endpoint=None):
-            import ipdb; ipdb.set_trace()
-            resp = requests.request(request.method, "http://localhost:{port}/{endpoint}")
+            self._logd(f"Request {endpoint} to {port}")
+            _json = _data = _files = None
+            if request.json:
+                _json = request.json if isinstance(request.json, dict) else json.loads(request.json)
+            if request.form:
+                _data = dict(request.form)
+            if request.files:
+                _files = request.files
+            response = requests.request(request.method, f"http://localhost:{port}/{endpoint}",
+                                        files=_files, json=_json, data=_data)
             excluded_headers = ["content-encoding", "content-length",
                                 "transfer-encoding", "connection"]
-            headers = [(name, value) for (name, value) in resp.raw.headers.items()
+            headers = [(name, value) for (name, value) in response.raw.headers.items()
                        if name.lower() not in excluded_headers]
-            response = Response(resp.content, resp.status_code, headers)
+            response = Response(response.content, response.status_code, headers)
+            return response
+
+        @self.app.route("/trainer/<int:port>/<category>/<endpoint>", methods=["GET", "POST"])
+        @flask_login.login_required
+        def __trainer_one(port=None, category=None, endpoint=None):
+            self._logd(f"Request {category}/{endpoint} to {port}")
+            _json = _data = _files = None
+            if request.json:
+                _json = request.json if isinstance(request.json, dict) else json.loads(request.json)
+            if request.form:
+                _data = dict(request.form)
+            if request.files:
+                _files = request.files
+            response = requests.request(request.method,
+                                        f"http://localhost:{port}/{category}/{endpoint}",
+                                        files=_files, json=_json, data=_data)
+            excluded_headers = ["content-encoding", "content-length",
+                                "transfer-encoding", "connection"]
+            headers = [(name, value) for (name, value) in response.raw.headers.items()
+                       if name.lower() not in excluded_headers]
+            response = Response(response.content, response.status_code, headers)
             return response
 
         @self.app.route("/sessions", methods=["GET"])

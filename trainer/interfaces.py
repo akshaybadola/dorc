@@ -2,6 +2,7 @@ from typing import Dict, Iterable, Union
 import os
 import sys
 import ssl
+import glob
 import json
 import atexit
 import shutil
@@ -301,6 +302,44 @@ class FlaskInterface:
             return _dump({"config": self._current_config,
                           "overrides": self._current_overrides})
 
+        @self.app.route("/list_files", methods=["GET"])
+        def __list_files():
+            if os.path.exists(os.path.join(self.data_dir, "session_config.py")):
+                files = ["/session_config.py"]
+            else:
+                files = [f.replace(self.data_dir, "") for f in
+                         glob.glob(os.path.join(self.data_dir, "session_config", "**/*.py"),
+                                   recursive=True)]
+            return _dump(files)
+
+        @self.app.route("/get_file", methods=["POST"])
+        def __get_file():
+            filepath = request.json["filepath"].strip()
+            if os.path.exists(os.path.join(self.data_dir, filepath)):
+                with open(os.path.join(self.data_dir, filepath), "rb") as f:
+                    data = f.read()
+                return data
+            else:
+                return Response("File not Found", status=404)
+
+        @self.app.route("/put_file", methods=["POST"])
+        def __put_file():
+            if not request.files:
+                return Response(self._loge("File not sent with request"), status=405)
+            elif "filepath" not in request.form or not request.form["filepath"]:
+                return Response(self._loge("Filepath not sent with request"), status=405)
+            else:
+                try:
+                    filepath = request.form["filepath"]
+                    file_bytes = request.files["file"].read()
+                    filepath = os.path.exists(self.data_dir, filepath)
+                    with open(filepath, "w") as f:
+                        f.write(file_bytes.decode("utf-8"))
+                    return self._logi(f"Updated file {filepath}")
+                except Exception as e:
+                    return self._loge(f"Exception Occured Config {e}. Reverted to earlier." +
+                                      "\n" + traceback.format_exc())
+
         # TODO: Should restart self also, but we can't restart self, only daemon can. LOL
         @self.app.route("/config_file", methods=["GET", "POST"])
         def __config_file():
@@ -313,11 +352,14 @@ class FlaskInterface:
                 return config
             elif request.method == "POST":
                 try:
-                    file_bytes = request.files["file"].read()
-                    shutil.copy(config_file, config_file + ".bak")
-                    with open(config_file, "w") as f:
-                        f.write(file_bytes.decode("utf-8"))
-                    return self._logi("Updated Config")
+                    if not request.files:
+                        return Response("File not sent with request", status=405)
+                    else:
+                        file_bytes = request.files["file"].read()
+                        shutil.copy(config_file, config_file + ".bak")
+                        with open(config_file, "w") as f:
+                            f.write(file_bytes.decode("utf-8"))
+                        return self._logi("Updated Config")
                 except Exception as e:
                     shutil.copy(config_file + ".bak", config_file)
                     return self._loge(f"Exception Occured Config {e}. Reverted to earlier." +

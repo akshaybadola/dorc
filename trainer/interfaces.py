@@ -315,12 +315,16 @@ class FlaskInterface:
         @self.app.route("/get_file", methods=["POST"])
         def __get_file():
             filepath = request.json["filepath"].strip()
-            if os.path.exists(os.path.join(self.data_dir, filepath)):
-                with open(os.path.join(self.data_dir, filepath), "rb") as f:
+            if filepath.startswith("/"):
+                filepath = filepath[1:]
+            filepath = os.path.join(self.data_dir, filepath)
+            if os.path.exists(filepath):
+                self._logd(f"Sending file {filepath}")
+                with open(filepath, "rb") as f:
                     data = f.read()
                 return data
             else:
-                return Response("File not Found", status=404)
+                return Response(self._loge(f"File not Found {filepath}"), status=404)
 
         @self.app.route("/put_file", methods=["POST"])
         def __put_file():

@@ -336,7 +336,9 @@ class FlaskInterface:
                 try:
                     filepath = request.form["filepath"]
                     file_bytes = request.files["file"].read()
-                    filepath = os.path.exists(self.data_dir, filepath)
+                    if filepath.startswith("/"):
+                        filepath = filepath[1:]
+                    filepath = os.path.join(self.data_dir, filepath)
                     with open(filepath, "w") as f:
                         f.write(file_bytes.decode("utf-8"))
                     return self._logi(f"Updated file {filepath}")

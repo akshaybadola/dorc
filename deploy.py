@@ -39,7 +39,8 @@ def deploy(host, _init=True):
         init(host)
     run(f"scp build/trainer.cpython-37m-x86_64-linux-gnu.so {host}:~/trainer/", shell=True)
     run(f"scp trainer/autoloads.py {host}:~/trainer/", shell=True)
-    run(f"scp dist/* {host}:~/trainer/dist/", shell=True)
+    if _init:
+        run(f"scp dist/* {host}:~/trainer/dist/", shell=True)
 
 
 def update_venv(host):

@@ -7,7 +7,7 @@ from build import main as build
 
 
 def _exists(host, filename, switch):
-    p = Popen(f"ssh {host}  [[ {switch} {filename} ]] ; echo $?",
+    p = Popen(f"ssh {host}  '[[ {switch} {filename} ]] ; echo $?'",
               shell=True, stdout=PIPE, stderr=PIPE)
     out, err = p.communicate()
     return "0" in out.decode("utf-8").split("\n")[0] and not len(err.decode("utf-8"))
@@ -22,14 +22,14 @@ def dir_exists(host, filename):
 
 
 def create_dir(host, dirname):
-    p = Popen(shlex.split(f"ssh {host} mkdir -p {dirname}"),
+    p = Popen(shlex.split(f"ssh {host} 'mkdir -p {dirname}'"),
               stdout=PIPE, stderr=PIPE)
     out, err = p.communicate()
     return not len(err.decode("utf-8"))
 
 
 def exec_cmd(host, cmd):
-    p = Popen(f"ssh {host} {cmd}", shell=True, stdout=PIPE, stderr=PIPE)
+    p = Popen(f"ssh {host} '{cmd}'", shell=True, stdout=PIPE, stderr=PIPE)
     out, err = p.communicate()
     return out, err
 

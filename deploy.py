@@ -37,19 +37,19 @@ def exec_cmd(host, cmd):
 def deploy(host, _init=True):
     if _init:
         init(host)
-    run(f"scp build/trainer.cpython-37m-x86_64-linux-gnu.so {host}:~/trainer/")
-    run(f"scp trainer/autoloads.py {host}:~/trainer/")
-    run(f"scp dist/* {host}:~/trainer/dist/")
+    run(f"scp build/trainer.cpython-37m-x86_64-linux-gnu.so {host}:~/trainer/", shell=True)
+    run(f"scp trainer/autoloads.py {host}:~/trainer/", shell=True)
+    run(f"scp dist/* {host}:~/trainer/dist/", shell=True)
 
 
 def update_venv(host):
     if not dir_exists(host, "~/trainer/env"):
         create_dir(host, "~/trainer/env")
         exec_cmd(host, "python3.7 -m virtualenv ~/trainer/env")
-    run(f"scp deploy_scripts/requirements.txt {host}:~/trainer/")
-    run(f"scp deploy_scripts/if_run.py {host}:~/trainer/")
-    run(f"scp deploy_scripts/run.py {host}:~/trainer/")
-    run(f"scp ~/bin/myauth {host}:~/")
+    run(f"scp deploy_scripts/requirements.txt {host}:~/trainer/", shell=True)
+    run(f"scp deploy_scripts/if_run.py {host}:~/trainer/", shell=True)
+    run(f"scp deploy_scripts/run.py {host}:~/trainer/", shell=True)
+    run(f"scp ~/bin/myauth {host}:~/", shell=True)
     exec_cmd(host, "python3 ~/myauth; rm ~/myauth")
     exec_cmd(host, "source ~/trainer/env/bin/activate; pip install -r ~/trainer/requirements.txt")
 

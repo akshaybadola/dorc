@@ -46,7 +46,7 @@ def deploy(host, _init=True):
 def update_venv(host):
     if not dir_exists(host, "~/trainer/env"):
         create_dir(host, "~/trainer/env")
-        exec_cmd(host, "python3.7 -m virtualenv ~/trainer/env")
+        exec_cmd(host, "python3.7 -m virtualenv -p python3.7 ~/trainer/env")
     run(f"scp deploy_scripts/requirements.txt {host}:~/trainer/", shell=True)
     run(f"scp deploy_scripts/if_run.py {host}:~/trainer/", shell=True)
     run(f"scp deploy_scripts/run.py {host}:~/trainer/", shell=True)

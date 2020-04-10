@@ -75,10 +75,10 @@ def main():
     parser.add_argument("--clean-env", action="store_true")
     parser.add_argument("--copy-js", action="store_true")
     parser.add_argument("--force-init", action="store_true")
-    parser.add_argument("--update", action="store_true")
+    parser.add_argument("--compile", action="store_true")
     args = parser.parse_args()
     curdir = os.path.abspath(os.curdir)
-    if args.update:
+    if args.compile:
         build()
     os.chdir(curdir)
     for host in args.hosts:

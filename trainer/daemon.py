@@ -1423,8 +1423,8 @@ sys.path.append("{self.data_dir}")
             for k in self._sessions:
                 self._unload_session_helper(-1, k)
 
-        serving.run_simple(self.hostname, self.port, self.app, threaded=True,
-                           processes=10, ssl_context=self.context)
+        serving.run_simple(self.hostname, self.port, self.app, processes=10,
+                           ssl_context=self.context)
 
 
 def create_daemon(test=False, params=None):

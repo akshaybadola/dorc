@@ -118,10 +118,14 @@ def register_with_tracker(tracker, host, port):
     p = Popen(f"ssh -N -L 11111:localhost:11111 {tracker}",
               shell=True, stdout=PIPE, stderr=PIPE)
     time.sleep(2)
-    resp = requests.request("POST", "http://localhost:11111/",
-                            json={"put": True,
-                                  "hostname": host,
-                                  "port": port}).content
+    try:
+        resp = requests.request("POST", "http://localhost:11111/",
+                                json={"put": True,
+                                      "hostname": host,
+                                      "port": port}).content
+    except Exception as e:
+        print(e)
+        resp = None
     p.kill()
     return resp
 
@@ -137,7 +141,7 @@ class Daemon:
         self.port = port
         self.daemon_name = daemon_name
         # NOTE: fwd_hosts and fwd_ports are hard coded
-        self.fwd_port_start = 8080    # starts with 8080
+        self.fwd_port_start = 8181    # starts with 8181
         if "droid" in get_hostname().lower():
             self.fwd_hosts = ["joe@13.232.207.179", "joe@149.129.189.46",
                               "15mcpc15@mars.uohyd.ac.in"]

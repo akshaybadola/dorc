@@ -1,6 +1,7 @@
 import os
 import sys
 import ssl
+import glob
 import json
 import time
 import socket
@@ -14,10 +15,11 @@ import logging
 import hashlib
 import traceback
 import configparser
+import zipfile
 from queue import Queue
 from threading import Thread
 import multiprocessing as mp
-from subprocess import Popen, PIPE
+from subprocess import Popen, PIPE, run
 from markupsafe import escape
 from functools import partial
 
@@ -26,24 +28,27 @@ from flask import Flask, render_template, url_for, redirect, request, Response
 from flask_cors import CORS
 from werkzeug import serving
 
-
+from .version import __daemon__version__
 from .mods import Modules
 from .helpers import Tag
 from .interfaces import FlaskInterface
 from .util import _dump
 from ._log import Log
+from .auth import __inti__, User
 
 
 session_method = Tag("session_method")
 
 
-def __inti__(_n):
-    if _n == hashlib.sha1(("2ads;fj4sak#)" + "joe").encode("utf-8")).hexdigest():
-        return "Monkey$20"
-    elif _n == hashlib.sha1(("2ads;fj4sak#)" + "taruna").encode("utf-8")).hexdigest():
-        return "Donkey_02"
-    else:
-        return None
+# def __inti__(_n):
+#     if _n == hashlib.sha1(("2ads;fj4sak#)" + "admin").encode("utf-8")).hexdigest():
+#         return "AdminAdmin_33"
+#     elif _n == hashlib.sha1(("2ads;fj4sak#)" + "joe").encode("utf-8")).hexdigest():
+#         return "Monkey$20"
+#     elif _n == hashlib.sha1(("2ads;fj4sak#)" + "taruna").encode("utf-8")).hexdigest():
+#         return "Donkey_02"
+#     else:
+#         return None
 
 
 def __unti__(_n):
@@ -53,28 +58,103 @@ def __unti__(_n):
         return None
 
 
-class User(flask_login.UserMixin):
-    def __init__(self, id, name):
-        self.id = id
-        self.name = name
+def get_hostname():
+    p = Popen("hostname", stdout=PIPE, stderr=PIPE)
+    out, err = p.communicate()
+    return out.decode("utf-8")
 
-    def __repr__(self):
-        return f"{self.id}_{self.name}"
+
+def check_ssh_port(host, port):
+    def check_stderr(p, q):
+        q.put(p.stderr.read(4))
+
+    while True:
+        p = Popen(f"ssh -N -R {port}:localhost:20202 {host}", shell=True, stdout=PIPE, stderr=PIPE)
+        q = Queue()
+        t = Thread(target=check_stderr, args=[p, q])
+        t.start()
+        time.sleep(2)
+        p.terminate()
+        if q.empty():
+            break
+        else:
+            port += 101
+    return port
+
+
+def have_internet():
+    auth_cmd = ('curl -L -k -d username="15mcpc15" -d password="unmission@123"' +
+                ' -d mode=191 http://192.168.56.2:8090/login.xml')
+
+    def communicate(p, vals):
+        vals['out'], vals['err'] = p.communicate()
+
+    def connect(auth_cmd):
+        vals = {'out': None, 'err': None}
+        p = Popen(auth_cmd, shell=True, stdout=PIPE, stderr=PIPE)
+        t = Thread(target=communicate, args=[p, vals])
+        t.start()
+        t.join(timeout=5)
+        p.kill()
+        if vals['out'] and "You have successfully logged in" in vals['out'].decode('utf-8'):
+            return True
+        else:
+            return False
+
+    while True:
+        vals = {'out': None, 'err': None}
+        p = Popen("curl google.com".split(), stdout=PIPE, stderr=PIPE)
+        t = Thread(target=communicate, args=[p, vals])
+        t.start()
+        t.join(timeout=5)
+        p.kill()
+        if vals['out']:
+            if "the document has moved" not in vals['out'].decode('utf-8').lower():
+                connect(auth_cmd)
+        time.sleep(60)
+
+
+def register_with_tracker(tracker, host, port):
+    p = Popen(f"ssh -N -L 11111:localhost:11111 {tracker}",
+              shell=True, stdout=PIPE, stderr=PIPE)
+    time.sleep(2)
+    resp = requests.request("POST", "http://localhost:11111/",
+                            json={"put": True,
+                                  "hostname": host,
+                                  "port": port}).content
+    p.terminate()
+    return resp
+
 
 
 class Daemon:
-    version = "0.2.0"
+    __version__ = __daemon__version__
 
     def __init__(self, hostname, port, data_dir, production=False,
-                 template_dir=None, static_dir=None, root_dir=None):
+                 template_dir=None, static_dir=None, root_dir=None, daemon_name=None):
         self.ctx = mp.get_context("spawn")
         self.hostname = hostname
         self.port = port
+        self.daemon_name = daemon_name
+        # NOTE: fwd_hosts and fwd_ports are hard coded
+        self.fwd_port_start = 8080    # starts with 8080
+        if "droid" in get_hostname().lower():
+            self.fwd_hosts = ["joe@13.232.207.179", "joe@149.129.189.46",
+                              "15mcpc15@mars.uohyd.ac.in"]
+        else:
+            self.fwd_hosts = ["joe@13.232.207.179", "joe@149.129.189.46",
+                              "15mcpc15@10.5.0.107"]
+        if get_hostname().lower() not in {"droid.badola", "data"}:
+            Thread(target=have_internet).start()
         self.data_dir = os.path.abspath(data_dir)
-        self.production = production
         # NOTE: init data_dir
         if not os.path.exists(self.data_dir):
             os.mkdir(self.data_dir)
+        self.tmp_dir = os.path.join(self.data_dir, ".tmp")
+        if os.path.exists(self.tmp_dir):
+            shutil.rmtree(self.tmp_dir)
+        os.mkdir(self.tmp_dir)
+        self.production = production
         # FIXME: Code duplication here
         # NOTE: init modules_dir
         self.modules_dir = os.path.join(self.data_dir, "global_modules")
@@ -96,6 +176,11 @@ sys.path.append("{self.data_dir}")
         if not os.path.exists(os.path.join(self.datasets_dir, "__init__.py")):
             with open(os.path.join(self.datasets_dir, "__init__.py"), "w") as f:
                 f.write("")
+        # NOTE: Set exclude_dirs
+        self._exclude_dirs = [*map(os.path.basename,
+                                   [self.modules_dir, self.datasets_dir,
+                                    self.tmp_dir])]
+        self._session_exclude_dirs = ["modules", "datasets"]
         # NOTE: init template and static dirs
         if template_dir is None:
             self._template_dir = os.path.join(os.path.dirname(os.path.dirname(
@@ -164,8 +249,32 @@ sys.path.append("{self.data_dir}")
         self.login_manager.init_app(self.app)
         self.login_manager.login_view = "__login"
         self._ids = {0: "admin", 1: "joe"}
-        self._users = {"admin": User(0, "admin"), "joe": User(1, "joe")}
+        try:
+            self._users = __users__
+        except NameError:
+            self._users = {"admin": User(0, "admin"),
+                           "joe": User(1, "joe")}
         self._passwords = lambda x: __inti__(x)     # {"admin": "admin", "joe": "admin"}
+        self.fwd_ports = {}
+        self.fwd_procs = {}
+        self._fwd_ports()
+
+    def _fwd_ports(self):
+        # NOTE: Authenticate only if not droid
+        if "droid" not in get_hostname().lower():
+            run('curl -L -k -d username="15mcpc15" -d password="unmission@123"' +
+                ' -d mode=191 http://192.168.56.2:8090/login.xml', shell=True,
+                stdout=PIPE, stderr=PIPE)
+        if self.daemon_name is not None:
+            for host in self.fwd_hosts:
+                print(f"Finding ssh port for {host}")
+                self.fwd_ports[host] = port = check_ssh_port(host, self.fwd_port_start)
+                if host in self.fwd_procs:
+                    self.fwd_procs[host].terminate()
+                self.fwd_procs[host] = Popen(f"ssh -N -R {port}:localhost:20202 {host}",
+                                             shell=True, stdout=PIPE, stderr=PIPE)
+                resp = register_with_tracker(host, self.daemon_name, port)
+                self._logi(f"Forwarded port {port} to {host}. Response is {resp}")
 
     def _init_context(self):
         self.api_crt = "res/server.crt"
@@ -340,14 +449,13 @@ sys.path.append("{self.data_dir}")
         self._logd("Scanning Sessions")
         session_names = [x for x in os.listdir(self.data_dir) if
                          os.path.isdir(os.path.join(self.data_dir, x))
-                         and x not in {os.path.basename(self.modules_dir),
-                                       os.path.basename(self.datasets_dir)}]
+                         and x not in self._exclude_dirs]
         for s in session_names:
             self._sessions[s] = {}
             self._sessions[s]["path"] = os.path.join(self.data_dir, s)
             self._sessions[s]["sessions"] = {}
             for d in os.listdir(self._sessions[s]["path"]):
-                if d not in {"modules", "datasets"}:
+                if d not in self._session_exclude_dirs:
                     try:
                         data_dir = os.path.join(self._sessions[s]["path"], d)
                         self._sessions[s]["sessions"][d] = {}
@@ -386,13 +494,25 @@ sys.path.append("{self.data_dir}")
         data_dir = os.path.join(self._sessions[session_name]["path"], time_str)
         os.mkdir(data_dir)
         self._sessions[session_name]["sessions"][time_str] = {}
+        overrides = None
+        if "overrides" in data:
+            overrides = data["overrides"]
         if self._wait_for_task(self._create_trainer, task_id,
                                args=[session_name, time_str, data_dir,
-                                     data["config"]]):
+                                     data["config"], overrides]):
             with open(os.path.join(self._sessions[session_name]["path"], time_str,
                                    "session_state")) as f:
                 self._logd(f"Loading sessions state")
                 self._sessions[session_name]["sessions"][time_str]["state"] = json.load(f)
+            # NOTE: For cloning/migrating sessions
+            if "saves" in data and data["saves"]:
+                self._logd(f"Copying save files: {data['saves'].keys()}")
+                savedir = os.path.join(data_dir, "savedir")
+                if not os.path.exists(savedir):
+                    os.mkdir(savedir)
+                for fname, fbytes in data["saves"].items():
+                    with open(os.path.join(savedir, fname), "wb") as f:
+                        f.write(fbytes)
         else:
             self._logd(f"Failed task {task_id}. Cleaning up")
             self._sessions[session_name]["sessions"].pop(time_str)
@@ -544,7 +664,13 @@ sys.path.append("{self.data_dir}")
         if os.path.exists(os.path.join(data_dir, "session_config.py")):
             config_file = os.path.join(data_dir, "session_config.py")
         elif os.path.exists(os.path.join(data_dir, "session_config", "__init__.py")):
-            config_file = os.path.join(data_dir, "session_config", "__init__.py")
+            root_dir = os.path.join(data_dir, "session_config/")
+            config_file = os.path.join(self.tmp_dir, "_".join([name, time_str]) + ".zip")
+            zf = zipfile.ZipFile(config_file, "w", compression=zipfile.ZIP_STORED)
+            for x in glob.glob(os.path.join(root_dir, "**"), recursive=True):
+                if not x.endswith(".pyc") and x.replace(root_dir, ""):
+                    zf.write(x, arcname=x.replace(root_dir, ""))
+            zf.close()
         return config_file
 
     def _error_and_put(self, task_id, status, message):
@@ -637,7 +763,83 @@ sys.path.append("{self.data_dir}")
         self._info_and_put(task_id, True, "Archive session helper")
 
     @session_method
+    def _clone_to_helper(self, task_id, name, time_str, data=None):
+        """Clones the session to a given server"""
+        self._logd(f"Trying to clone session {name}/{time_str} with data {data}")
+        # NOTE: no need to read file, name is enough
+
+        def _valid_server(server):
+            splits = server.split(":")
+            a = len(splits) == 2
+            try:
+                int(splits[1])
+                b = True
+            except ValueError:
+                b = False
+            return a and b
+        try:
+            if "server" not in data:
+                self._error_and_put(task_id, False, "server not in data")
+            elif "server" in data and not _valid_server(data["server"]):
+                self._error_and_put(task_id, False, f"Given server: {data['server']}" +
+                                    "not a combination of host and port")
+            else:
+                print(self._logd(f"DATA: {data}"))
+                server = data["server"]
+                config_file = self._get_config_file(name, time_str)
+                overrides = []
+                _files = {"config_file": open(config_file, "rb")}
+                _data = {"name": json.dumps(name)}
+                if "config" in data and data["config"]:
+                    for k, v in data["config"].items():
+                        overrides.append(k.split(":") + [v])
+                    self._logd(f"Config overrides given {overrides}")
+                    _data["overrides"] = json.dumps(overrides)
+                else:
+                    self._logd(f"No config overrides")
+                warn_str_list = []
+                if "saves" in data:
+                    savedir = os.path.join(self.data_dir, name, time_str, "savedir")
+                    savefiles = os.listdir(savedir)
+                    self._logd(f"Savefiles: {savefiles}")
+                    _data["saves"] = []
+                    if isinstance(data["saves"], bool) and data["saves"]:
+                        for f in savefiles:
+                            _files[f] = open(os.path.join(savedir, f), "rb")
+                            _data["saves"].append(f)
+                    else:
+                        for f in data["saves"]:
+                            if f in savefiles:
+                                _files[f] = open(os.path.join(savedir, f), "rb")
+                                _data["saves"].append(f)
+                            else:
+                                warn_str_list.append(self._logd(f"File {f} not in saves"))
+                if not _data["saves"]:
+                    self._logd(f"NULL Save?")
+                    _data.pop("saves")
+                _data["saves"] = json.dumps(_data["saves"])
+                if "modules" in data:
+                    self._loge("Cannot copy modules right now")
+                cookies = requests.request("POST", f"http://{server}/login",
+                                           data={"username": "admin",
+                                                 "password": "AdminAdmin_33"}).cookies
+                print(self._logd(f"SENDING DATA: {_data}"))
+                response = requests.request("POST", f"http://{server}/upload_session",
+                                            files=_files, data=_data, cookies=cookies)
+                if "task_id" in str(response.content):
+                    self._debug_and_put(task_id, True, "Sent clone request successfully" +
+                                        f"Response: {response.content}" +
+                                        "\n".join(warn_str_list))
+                else:
+                    self._error_and_put(task_id, False, f"Bad cloning response from {server}" +
+                                        f"Response: {response.content}")
+        except Exception as e:
+            self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
+
+    @session_method
     def _clone_session_helper(self, task_id, name, time_str, data=None):
+        """Clones the session with optional given config differences.
+        """
         self._logd(f"Trying to clone session {name}/{time_str} with data {data}")
         config_file = self._get_config_file(name, time_str)
         with open(config_file, "rb") as f:
@@ -747,7 +949,6 @@ sys.path.append("{self.data_dir}")
 
         @self.login_manager.user_loader
         def load_user(userid):
-            print("USERID", self._ids)
             if not isinstance(userid, int):
                 userid = int(userid)
             return self._users[self._ids[userid]]
@@ -905,6 +1106,39 @@ sys.path.append("{self.data_dir}")
             return _dump({"task_id": task_id,
                           "message": "Creating session with whatever data given"})
 
+        @self.app.route("/upload_session", methods=["POST"])
+        @flask_login.login_required
+        def __upload_session():
+            form = request.form
+            if form is None:
+                return _dump([False, "Bad data in request"])
+            elif "name" not in form or ("name" in form
+                                        and not len(form["name"])):
+                return _dump([False, "Name not in request or empty name"])
+            if "config_file" not in request.files:
+                return _dump([False, "Config file not in request"])
+            try:
+                data = {}
+                for k, v in form.items():
+                    data[k] = json.loads(v)
+                name = data["name"]
+                config_file = request.files["config_file"].read()
+                saves = {}
+                if "saves" in data:
+                    print("FILES: ", request.files.keys())
+                    for f in data["saves"]:
+                        saves[f] = request.files[f].read()
+                overrides = []
+                if "overrides" in data:
+                    overrides = data["overrides"]
+            except Exception as e:
+                return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
+            data = {"name": name, "config": config_file, "saves": saves,
+                    "overrides": overrides}
+            task_id = self._get_task_id_launch_func(self.create_session, data)
+            return _dump({"task_id": task_id,
+                          "message": "Creating session with whatever data given"})
+
         @self.app.route("/check_task", methods=["GET"])
         @flask_login.login_required
         def __check_task():
@@ -930,8 +1164,9 @@ sys.path.append("{self.data_dir}")
 
         @self.app.route("/_version", methods=["GET"])
         def __version():
-            return _dump(self.version)
+            return _dump(self.__version__)
 
+        # I think I have to update the user.id on each login
         @self.app.route("/login", methods=["POST"])
         def __login():
             if "username" not in request.form or "password" not in request.form:
@@ -1143,6 +1378,12 @@ sys.path.append("{self.data_dir}")
                 except Exception as e:
                     return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
 
+        @self.app.route("/fwd_ports", methods=["GET"])
+        @flask_login.login_required
+        def __fwd_ports():
+            self._fwd_ports()
+            return _dump("Forwarded Ports again")
+
         @self.app.route("/_ping", methods=["GET"])
         def __ping():
             return "pong"
@@ -1165,17 +1406,25 @@ sys.path.append("{self.data_dir}")
             # only views the progress and parameters. No trainer is started
             return _dump("Doesn't do anything")
 
-        # NOTE: Adding session_methods. Avoid copy/paste
+        # NOTE: Add session_methods.
+        #       Routes are added by removing "_" prefix and "_helper" suffix
+        #       from self._session_methods
+        # FIXME: Check if login is required for these routes. I'm not sure
         for x in self._session_methods:
             self.app.add_url_rule("/" + x, x, partial(self._session_check_post, x),
                                   methods=["POST"])
 
         @atexit.register
-        def unload_all():
+        def cleanup():
+            # NOTE: kill the fwd ports
+            for p in self.fwd_procs.values():
+                p.terminate()
+            # NOTE: Unload the sessions
             for k in self._sessions:
                 self._unload_session_helper(-1, k)
 
-        serving.run_simple(self.hostname, self.port, self.app, ssl_context=self.context)
+        serving.run_simple(self.hostname, self.port, self.app, threaded=True,
+                           processes=10, ssl_context=self.context)
 
 
 def create_daemon(test=False, params=None):
@@ -1214,9 +1463,10 @@ def create_daemon(test=False, params=None):
 
 
 def _start_daemon(hostname, port, data_dir, production=False,
-                  template_dir=None, static_dir=None, root_dir=None):
+                  template_dir=None, static_dir=None, root_dir=None,
+                  daemon_name=None):
     daemon = Daemon(hostname, port, data_dir, production, template_dir,
-                    static_dir, root_dir)
+                    static_dir, root_dir, daemon_name)
     Thread(target=daemon.start).start()
     return daemon
 

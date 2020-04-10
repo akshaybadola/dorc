@@ -29,7 +29,7 @@ from ._checks import (_check_model_params, _check_trainer_params, _check_data_pa
 from .helpers import (Tag, ProxyDataset,
                       get_proxy_dataloader, PropertyProxy, HookDict, HookList,
                       GET, POST, Exposes, _log_metrics_for_step)
-from .version import __version__
+from .version import __trainer__version__
 
 
 control = Tag("control")
@@ -99,7 +99,7 @@ class Trainer:
     and any backend should be feasible.
 
     """
-    __version__ = __version__
+    __version__ = __trainer__version__
 
     def __init__(self, model_params, criteria, optimizer, model_defs, update_functions,
                  extra_metrics, trainer_params, data, dataloader_params, data_dir,

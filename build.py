@@ -1,11 +1,11 @@
 import os
 import shlex
-import sys
 import shutil
 from subprocess import run
 
 
 file_list = ["version.py",
+             "auth.py",
              "_log.py",
              "mods.py",
              "util.py",
@@ -27,10 +27,6 @@ def clobberize(entry_file):
 
 
 def main():
-    # if len(sys.argv) < 2:
-    #     print("Need file to coalesce")
-    # else:
-    #     clobberize(sys.argv[1])
     if os.path.exists("build"):
         print("Cleaning build directory")
         shutil.rmtree("build")

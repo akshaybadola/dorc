@@ -1,3 +1,4 @@
+import os
 from setuptools import setup
 from distutils.extension import Extension
 from Cython.Build import cythonize
@@ -33,6 +34,7 @@ from Cython.Build import cythonize
 #     ext_modules=cythonize(extensions, compiler_directives={"language_level": "3"})
 # )
 
+os.environ["CFLAGS"] = "-fno-var-tracking-assignments"
 setup(
     ext_modules=cythonize('trainer.py', compiler_directives={"language_level": "3"})
 )

@@ -405,4 +405,5 @@ class FlaskInterface:
         for x, y in self.trainer._internals.items():
             self.app.add_url_rule("/_internals/" + x, x, partial(self.trainer_internals, x),
                                   methods=["POST"])
-        serving.run_simple(self.api_host, self.api_port, self.app, ssl_context=self.context)
+        serving.run_simple(self.api_host, self.api_port, self.app, threaded=True,
+                           processes=10, ssl_context=self.context)

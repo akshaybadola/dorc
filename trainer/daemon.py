@@ -122,7 +122,7 @@ def register_with_tracker(tracker, host, port):
                             json={"put": True,
                                   "hostname": host,
                                   "port": port}).content
-    p.terminate()
+    p.kill()
     return resp
 
 
@@ -144,8 +144,11 @@ class Daemon:
         else:
             self.fwd_hosts = ["joe@13.232.207.179", "joe@149.129.189.46",
                               "15mcpc15@10.5.0.107"]
-        if get_hostname().lower() not in {"droid.badola", "data"}:
-            Thread(target=have_internet).start()
+        if "droid" not in get_hostname().lower():
+            self._have_internet = mp.Process(target=have_internet)
+            self._have_internet.start()
+        else:
+            self._have_internet = None
         self.data_dir = os.path.abspath(data_dir)
         # NOTE: init data_dir
         if not os.path.exists(self.data_dir):
@@ -270,7 +273,7 @@ sys.path.append("{self.data_dir}")
                 print(f"Finding ssh port for {host}")
                 self.fwd_ports[host] = port = check_ssh_port(host, self.fwd_port_start)
                 if host in self.fwd_procs:
-                    self.fwd_procs[host].terminate()
+                    self.fwd_procs[host].kill()
                 self.fwd_procs[host] = Popen(f"ssh -N -R {port}:localhost:20202 {host}",
                                              shell=True, stdout=PIPE, stderr=PIPE)
                 resp = register_with_tracker(host, self.daemon_name, port)
@@ -1418,10 +1421,13 @@ sys.path.append("{self.data_dir}")
         def cleanup():
             # NOTE: kill the fwd ports
             for p in self.fwd_procs.values():
-                p.terminate()
+                p.kill()
             # NOTE: Unload the sessions
             for k in self._sessions:
                 self._unload_session_helper(-1, k)
+            # NOTE: Kill the have_internet process if it exists
+            if self._have_internet is not None:
+                self._have_internet.kill()
 
         serving.run_simple(self.hostname, self.port, self.app, processes=10,
                            ssl_context=self.context)

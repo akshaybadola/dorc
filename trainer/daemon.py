@@ -266,7 +266,7 @@ sys.path.append("{self.data_dir}")
         self.fwd_procs = {}
         self._fwd_ports()
 
-    def _fwd_ports(self):
+    def _fwd_ports(self, hosts):
         # NOTE: Authenticate only if not droid
         if "droid" not in get_hostname().lower():
             run('curl -L -k -d username="15mcpc15" -d password="unmission@123"' +
@@ -1385,10 +1385,16 @@ sys.path.append("{self.data_dir}")
                 except Exception as e:
                     return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
 
-        @self.app.route("/fwd_ports", methods=["GET"])
+        @self.app.route("/fwd_ports", methods=["GET", "POST"])
         @flask_login.login_required
         def __fwd_ports():
-            self._fwd_ports()
+            data = []
+            if request.method == "POST":
+                if request.json and isinstance(request.json, dict):
+                    data = request.json
+                else:
+                    data = json.loads(request.json)
+            self._fwd_ports(data)
             return _dump("Forwarded Ports again")
 
         @self.app.route("/_ping", methods=["GET"])

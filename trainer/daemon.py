@@ -268,13 +268,14 @@ sys.path.append("{self.data_dir}")
 
     def _fwd_ports(self):
         # NOTE: Authenticate only if not droid
-        if "droid" not in get_hostname().lower():
-            run('curl -L -k -d username="15mcpc15" -d password="unmission@123"' +
-                ' -d mode=191 http://192.168.56.2:8090/login.xml', shell=True,
-                stdout=PIPE, stderr=PIPE)
+        #       Commenting as have_internet already runs
+        # if "droid" not in get_hostname().lower():
+        #     run('curl -L -k -d username="15mcpc15" -d password="unmission@123"' +
+        #         ' -d mode=191 http://192.168.56.2:8090/login.xml', shell=True,
+        #         stdout=PIPE, stderr=PIPE)
         if self.daemon_name is not None:
             for host in self.fwd_hosts:
-                print(f"Finding ssh port for {host}")
+                self._logi(f"Finding ssh port for {host}")
                 self.fwd_ports[host] = port = check_ssh_port(host, self.fwd_port_start)
                 if host in self.fwd_procs:
                     self.fwd_procs[host].kill()
@@ -1395,16 +1396,6 @@ sys.path.append("{self.data_dir}")
         def __ping():
             return "pong"
 
-        @self.app.route("/_shutdown", methods=["GET"])
-        @flask_login.login_required
-        def __shutdown_server():
-            self._logd("Shutdown called via HTTP. Shutting down.")
-            for k in self._sessions:
-                self._unload_session_helper(-1, k)
-            func = request.environ.get('werkzeug.server.shutdown')
-            func()
-            return "Shutting down"
-
         # NOTE: This should be disabled for now. Only if the number of sessions
         #       gets too large should I use this, as otherwise all the session
         #       data should be sent to the client.
@@ -1424,14 +1415,26 @@ sys.path.append("{self.data_dir}")
         @atexit.register
         def cleanup():
             # NOTE: kill the fwd ports
+            self._logi("Killing fwd_procs")
             for p in self.fwd_procs.values():
                 p.kill()
             # NOTE: Unload the sessions
+            self._logi("Unloading sessions")
             for k in self._sessions:
                 self._unload_session_helper(-1, k)
             # NOTE: Kill the have_internet process if it exists
+            self._logi("Killing have_internet")
             if self._have_internet is not None:
                 self._have_internet.kill()
+
+        @self.app.route("/_shutdown", methods=["GET"])
+        @flask_login.login_required
+        def __shutdown_server():
+            self._logd("Shutdown called via HTTP. Shutting down.")
+            cleanup()
+            func = request.environ.get('werkzeug.server.shutdown')
+            func()
+            return "Shutting down"
 
         serving.run_simple(self.hostname, self.port, self.app, processes=10,
                            ssl_context=self.context)

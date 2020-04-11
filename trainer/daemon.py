@@ -69,7 +69,8 @@ def check_ssh_port(host, port):
         q.put(p.stderr.read(4))
 
     while True:
-        p = Popen(f"ssh -N -R {port}:localhost:20202 {host}", shell=True, stdout=PIPE, stderr=PIPE)
+        p = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {host}"),
+                  stdout=PIPE, stderr=PIPE)
         q = Queue()
         t = Thread(target=check_stderr, args=[p, q])
         t.start()
@@ -115,8 +116,8 @@ def have_internet():
 
 
 def register_with_tracker(tracker, host, port):
-    p = Popen(f"ssh -N -L 11111:localhost:11111 {tracker}",
-              shell=True, stdout=PIPE, stderr=PIPE)
+    p = Popen(shlex.split(f"ssh -N -L 11111:localhost:11111 {tracker}"),
+              stdout=PIPE, stderr=PIPE)
     time.sleep(2)
     try:
         resp = requests.request("POST", "http://localhost:11111/",
@@ -128,7 +129,6 @@ def register_with_tracker(tracker, host, port):
         resp = None
     p.kill()
     return resp
-
 
 
 class Daemon:
@@ -278,8 +278,8 @@ sys.path.append("{self.data_dir}")
                 self.fwd_ports[host] = port = check_ssh_port(host, self.fwd_port_start)
                 if host in self.fwd_procs:
                     self.fwd_procs[host].kill()
-                self.fwd_procs[host] = Popen(f"ssh -N -R {port}:localhost:20202 {host}",
-                                             shell=True, stdout=PIPE, stderr=PIPE)
+                self.fwd_procs[host] = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {host}"),
+                                             stdout=PIPE, stderr=PIPE)
                 resp = register_with_tracker(host, self.daemon_name, port)
                 self._logi(f"Forwarded port {port} to {host}. Response is {resp}")
 

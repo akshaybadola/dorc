@@ -178,6 +178,7 @@ class Trainer:
         self._init_property_vars()
         self._check_exports()
         if trainer_params["resume"] or "init_weights" in trainer_params:
+            self._init_device()
             self._init_models()
             _check_resume_or_init_weights(self)
 
@@ -193,8 +194,8 @@ class Trainer:
 
     def _init_all(self):
         self._logi("Initializing trainer")
+        self._init_device()
         self._init_models()
-        self._init_nvml()
         self._init_dataloaders()
         # self._init_criteria_optimizers()
         self._init_metrics()
@@ -237,6 +238,8 @@ class Trainer:
 
     # START: Init Funcs
     def _init_device(self):
+        # if self._devices_initialized:
+        #     return
         if isinstance(self._trainer_params["gpus"], str):
             gpus_str = [x for x in self._trainer_params["gpus"].split(",") if x]
             if gpus_str:
@@ -292,6 +295,8 @@ class Trainer:
                 self._logw(f"Tried overwriting attribute {t}! Denied.")
             elif t != "gpus":
                 self.__dict__[t] = v
+        self.__init_nvml()
+        self._devices_initialized = True
 
     def _init_static_vars(self):
         self.adhoc_error_dict = {"required_oneof_[function]": ["train", "val", "test", "user_func_name"],
@@ -380,10 +385,11 @@ class Trainer:
         # NOTE: _log_metrics is a function so "metrics" defines a way to log it
         #       rather than just copying the values.
         self._items_to_log_dict = {"metrics": self._log_metrics}
+        # CHECK: Why am I initializing device again?
         self._init_device()
         self._epoch = 0
         self._iterations = 0
-        self._init_nvml()
+        # self._init_nvml()
         steps = self._trainer_params["training_steps"]
         # NOTE: In theory user func can be a task, but not right now
         if "iterations" in steps:
@@ -445,7 +451,7 @@ class Trainer:
                                       "test_loader": self.test_loader,
                                       "torch": torch}
 
-    def _init_nvml(self):
+    def __init_nvml(self):
         """Initializes the Nvidia monitoring library. It's called by _init_state_vars so
         needn't be called again.
 
@@ -453,12 +459,13 @@ class Trainer:
         :rtype: None
 
         """
-        self._logi("Initializing nvml")
+        self._logi(f"Initializing nvml for gpus {self._gpus}")
         # CHECK: I don't remember how the order is printed.
         # Assumes torch.cuda devices are of the same order as PCI BUS for
         # getting correct info with pynvml
         if self._gpus[0] != -1:
             self._device_handles = init_nvml(self._gpus)
+            print("INITIAL handles", self._device_handles)
         else:
             self._device_handles = None
 
@@ -475,7 +482,9 @@ class Trainer:
             devices = {m: self._device for m in self._model_params}
         else:
             # TODO: Model parallel and sharding
-            self._init_device()
+            # CHECK: if the device isn't specified in traine params, how can
+            #        it be loaded by the model?
+            # self._init_device()
             devices = {m: self._device for m in self._model_params}
         for model_name, model_params in self._model_params.items():
             models[model_name] = self._model_defs[model_name]["model"](**model_params)
@@ -2160,7 +2169,7 @@ class Trainer:
         self._sanity_check()
         # FIXME: Init models again only if model or model parameters have changed
         self._init_models()
-        self._init_nvml()
+        self._init_device()
         self._init_dataloaders()
 
         # Only if criteria and/or optimizer have changed.  In fact, there might

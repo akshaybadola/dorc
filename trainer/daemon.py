@@ -65,21 +65,22 @@ def get_hostname():
 
 
 def check_ssh_port(host, port):
-    def check_stderr(p, q):
-        q.put(p.stderr.read(4))
-
+    timeout = 2
     while True:
-        p = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {host}"),
+        print(f"Checking port {port}")
+        out, err = b"", b""
+        p = Popen(shlex.split(f"ssh -R {port}:localhost:20202 {host} hostname"),
                   stdout=PIPE, stderr=PIPE)
-        q = Queue()
-        t = Thread(target=check_stderr, args=[p, q])
-        t.start()
-        time.sleep(2)
-        p.terminate()
-        if q.empty():
-            break
-        else:
+        try:
+            out, err = p.communicate(timeout=timeout)
+        except Exception:
+            pass
+        print(f"Got values {out}, {err}")
+        if out.decode("utf-8") and "warn" in err.decode("utf-8").lower():
             port += 101
+        elif out.decode("utf-8") and not err.decode("utf-8").lower():
+            break
+        p.terminate()
     return port
 
 
@@ -116,18 +117,25 @@ def have_internet():
 
 
 def register_with_tracker(tracker, host, port):
-    p = Popen(shlex.split(f"ssh -N -L 11111:localhost:11111 {tracker}"),
-              stdout=PIPE, stderr=PIPE)
-    time.sleep(2)
-    try:
-        resp = requests.request("POST", "http://localhost:11111/",
-                                json={"put": True,
-                                      "hostname": host,
-                                      "port": port}).content
-    except Exception as e:
-        print(e)
-        resp = None
-    p.kill()
+    status = False
+    fwd_port = 11111
+    procs = []
+    while not status:
+        procs.append(Popen(f"ssh -N -L {fwd_port}:localhost:11111 {tracker}",
+                           shell=True, stdout=PIPE, stderr=PIPE))
+        time.sleep(3)
+        try:
+            print(f"Registering port {port} at {tracker}")
+            resp = requests.request("POST", f"http://localhost:{fwd_port}/",
+                                    json={"put": True,
+                                          "hostname": host,
+                                          "port": port}).content
+            status = True
+        except Exception as e:
+            print(f"Register request at port {fwd_port} with {tracker} failed {e}. Trying again")
+            resp = None
+    for p in procs:
+        p.terminate()
     return resp
 
 
@@ -266,7 +274,7 @@ sys.path.append("{self.data_dir}")
         self.fwd_procs = {}
         self._fwd_ports()
 
-    def _fwd_ports(self, hosts):
+    def _fwd_ports(self, hosts=[]):
         # NOTE: Authenticate only if not droid
         #       Commenting as have_internet already runs
         # if "droid" not in get_hostname().lower():
@@ -274,7 +282,9 @@ sys.path.append("{self.data_dir}")
         #         ' -d mode=191 http://192.168.56.2:8090/login.xml', shell=True,
         #         stdout=PIPE, stderr=PIPE)
         if self.daemon_name is not None:
-            for host in self.fwd_hosts:
+            if not hosts:
+                hosts = self.fwd_hosts
+            for host in hosts:
                 self._logi(f"Finding ssh port for {host}")
                 self.fwd_ports[host] = port = check_ssh_port(host, self.fwd_port_start)
                 if host in self.fwd_procs:
@@ -283,6 +293,30 @@ sys.path.append("{self.data_dir}")
                                              stdout=PIPE, stderr=PIPE)
                 resp = register_with_tracker(host, self.daemon_name, port)
                 self._logi(f"Forwarded port {port} to {host}. Response is {resp}")
+
+    def _register_with_trackers(self, trackers=[]):
+        print(f"Registering with {trackers}")
+        if not trackers:
+            trackers = [*self.fwd_hosts]
+        for tracker in trackers:
+            if tracker in self.fwd_ports:
+                port = self.fwd_ports[tracker]
+            else:
+                print(f"Checking port {self.fwd_port_start}")
+                self.fwd_ports[tracker] = port = check_ssh_port(tracker, self.fwd_port_start)
+                self.fwd_procs[tracker] = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {tracker}"),
+                                                stdout=PIPE, stderr=PIPE)
+            if self.daemon_name is None:
+                try:
+                    with open("daemon_name", "r") as f:
+                        daemon_name = f.read().split("\n")[0].strip()
+                except Exception:
+                    daemon_name = "No Nmae"
+            else:
+                daemon_name = self.daemon_name
+            resp = register_with_tracker(tracker, daemon_name, port)
+            self._logi(f"Forwarded port {port}, with name {daemon_name} to {tracker}." +
+                       f"Response is {resp}")
 
     def _init_context(self):
         self.api_crt = "res/server.crt"
@@ -1398,9 +1432,33 @@ sys.path.append("{self.data_dir}")
             self._fwd_ports(data)
             return _dump("Forwarded Ports again")
 
+        @self.app.route("/register_with_trackers", methods=["POST"])
+        @flask_login.login_required
+        def __register_with_trackers():
+            data = []
+            if request.json and isinstance(request.json, dict):
+                data = request.json
+            else:
+                data = json.loads(request.json)
+            self._register_with_trackers(data)
+            return _dump("Registered with Trackers")
+
         @self.app.route("/_ping", methods=["GET"])
         def __ping():
             return "pong"
+
+        @self.app.route("/_name", methods=["GET"])
+        def __name():
+            # only views the progress and parameters. No trainer is started
+            if self.daemon_name is not None:
+                return self.daemon_name
+            else:
+                try:
+                    with open("daemon_name", "r") as f:
+                        daemon_name = f.read().split("\n")[0].strip()
+                except Exception:
+                    return "No Name"
+                return daemon_name
 
         # NOTE: This should be disabled for now. Only if the number of sessions
         #       gets too large should I use this, as otherwise all the session

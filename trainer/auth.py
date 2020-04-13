@@ -26,6 +26,7 @@ def __inti__(_n):
         return None
 
 
+__ids__ = {0: "admin", 1: "joe", 2: "taruna"}
 __users__ = {"admin": User(0, "admin"),
              "joe": User(1, "joe"),
              "taruna": User(2, "taruna")}

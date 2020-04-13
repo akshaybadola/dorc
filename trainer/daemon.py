@@ -121,8 +121,8 @@ def register_with_tracker(tracker, host, port):
     fwd_port = 11111
     procs = []
     while not status:
-        procs.append(Popen(f"ssh -N -L {fwd_port}:localhost:11111 {tracker}",
-                           shell=True, stdout=PIPE, stderr=PIPE))
+        procs.append(Popen(shlex.split(f"ssh -N -L {fwd_port}:localhost:11111 {tracker}"),
+                           stdout=PIPE, stderr=PIPE))
         time.sleep(3)
         try:
             print(f"Registering port {port} at {tracker}")
@@ -263,10 +263,11 @@ sys.path.append("{self.data_dir}")
         self.login_manager = flask_login.LoginManager()
         self.login_manager.init_app(self.app)
         self.login_manager.login_view = "__login"
-        self._ids = {0: "admin", 1: "joe"}
         try:
+            self._ids = __ids__
             self._users = __users__
         except NameError:
+            self._ids = {0: "admin", 1: "joe"}
             self._users = {"admin": User(0, "admin"),
                            "joe": User(1, "joe")}
         self._passwords = lambda x: __inti__(x)     # {"admin": "admin", "joe": "admin"}

@@ -98,7 +98,7 @@ def restart(host):
     p.start()
     time.sleep(1)
     p.terminate()
-    
+
 
 def main():
     parser = argparse.ArgumentParser()

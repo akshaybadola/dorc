@@ -40,13 +40,17 @@ def exec_cmd(host, cmd):
 
 def deploy(host, _init=False, copy_js=False, clean_env=False, _restart=False):
     print(f"Deploying to host {host}")
-    if _init or not dir_exists(host, "~/trainer"):
+    if not dir_exists(host, "~/trainer"):
+        print(f"Trainer directory doesn't exist on {host}. Initializing")
+        _init = True
+    if _init:
         init(host, clean_env)
     run(f"scp build/trainer.cpython-37m-x86_64-linux-gnu.so {host}:~/trainer/", shell=True)
     run(f"scp trainer/autoloads.py {host}:~/trainer/", shell=True)
     run(f"scp deploy_scripts/if_run.py {host}:~/trainer/", shell=True)
     run(f"scp deploy_scripts/run.py {host}:~/trainer/", shell=True)
     if _init or copy_js:
+        print(f"Copying js files to {host}")
         run(f"scp dist/* {host}:~/trainer/dist/", shell=True)
     exec_cmd(host, f"echo '{host}' > ~/trainer/daemon_name")
     if _restart:
@@ -55,13 +59,16 @@ def deploy(host, _init=False, copy_js=False, clean_env=False, _restart=False):
 
 def update_venv(host, delete=False):
     if delete:
+        print(f"Removing env dir on {host}")
         shutil.rmtree("~/trainer/env")
     if not dir_exists(host, "~/trainer/env"):
         create_dir(host, "~/trainer/env")
+        print(f"Creating virtualenv on {host}")
         print(exec_cmd(host, "python3.7 -m virtualenv -p python3.7 ~/trainer/env"))
     run(f"scp deploy_scripts/requirements.txt {host}:~/trainer/", shell=True)
     run(f"scp ~/bin/myauth {host}:~/", shell=True)
     print(exec_cmd(host, "python3 ~/myauth; rm ~/myauth"))
+    print(f"Installing requirements on {host}. Might take a while.")
     print(exec_cmd(host, "source ~/trainer/env/bin/activate; pip install -r ~/trainer/requirements.txt"))
 
 
@@ -103,7 +110,7 @@ def restart(host):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--hosts", type=lambda x: x.split(","),
-                        default="mc15pc15@10.5.0.96,prototype@10.5.1.93,user@10.5.0.92")
+                        default="mc15pc15@10.5.0.96,prototype@10.5.1.93,user@10.5.0.92,taruna@10.5.1.3")
     parser.add_argument("--clean-env", action="store_true")
     parser.add_argument("--copy-js", action="store_true")
     parser.add_argument("--force-init", action="store_true")

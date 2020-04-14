@@ -17,7 +17,7 @@ import traceback
 import configparser
 import zipfile
 from queue import Queue
-from threading import Thread, Event
+from threading import Thread
 import multiprocessing as mp
 from subprocess import Popen, PIPE, run, TimeoutExpired
 from markupsafe import escape
@@ -273,9 +273,9 @@ sys.path.append("{self.data_dir}")
         self._passwords = lambda x: __inti__(x)     # {"admin": "admin", "joe": "admin"}
         self.fwd_ports = {}
         self.fwd_procs = {}
-        self._fwd_ports_event = Event()
+        self._fwd_ports_event = mp.Event()
         self._fwd_ports_event.set()
-        self._fwd_ports_thread = Thread(target=self._fwd_ports_func)
+        self._fwd_ports_thread = mp.Process(target=self._fwd_ports_func)
         self._fwd_ports_thread.start()
         # self._fwd_ports()
 
@@ -283,7 +283,8 @@ sys.path.append("{self.data_dir}")
         while self._fwd_ports_event.is_set():
             self._check_and_register_with_trackers()
             if not self._fwd_ports_event.is_set():
-                break
+                self._logi("Exiting from _fwd_ports_func")
+                return
             else:
                 time.sleep(60)
 
@@ -332,7 +333,8 @@ sys.path.append("{self.data_dir}")
                 return False
 
         def _fwd_port(host):
-            self.fwd_procs[host].kill()
+            if host in self.fwd_procs:
+                self.fwd_procs[host].kill()
             self.fwd_ports[host] = port = check_ssh_port(host, self.fwd_port_start)
             self.fwd_procs[host] = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {host}"),
                                          stdout=PIPE, stderr=PIPE)
@@ -1532,7 +1534,7 @@ sys.path.append("{self.data_dir}")
             self._fwd_ports_event.clear()
             self._logi("Waiting for the fwd_ports_thread to join")
             self._fwd_ports_thread.join()
-            self._logi("Joined thread")
+            self._logi("Joined fwd_ports thread")
             # NOTE: kill the fwd ports
             self._logi("Killing fwd_procs")
             for p in self.fwd_procs.values():
@@ -1542,20 +1544,21 @@ sys.path.append("{self.data_dir}")
             for k in self._sessions:
                 self._unload_session_helper(-1, k)
             # NOTE: Kill the have_internet process if it exists
-            self._logi("Killing have_internet")
+            self._logi("Killing have_internet process")
             if self._have_internet is not None:
                 self._have_internet.kill()
+            self._logi("Killed have_internet process")
 
         @self.app.route("/_shutdown", methods=["GET"])
         @flask_login.login_required
         def __shutdown_server():
             self._logd("Shutdown called via HTTP. Shutting down.")
-            cleanup()
+            Thread(target=cleanup).start()
             func = request.environ.get('werkzeug.server.shutdown')
             func()
             return "Shutting down"
 
-        serving.run_simple(self.hostname, self.port, self.app, processes=10,
+        serving.run_simple(self.hostname, self.port, self.app, threaded=True,
                            ssl_context=self.context)
 
 

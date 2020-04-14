@@ -17,9 +17,9 @@ import traceback
 import configparser
 import zipfile
 from queue import Queue
-from threading import Thread
+from threading import Thread, Event
 import multiprocessing as mp
-from subprocess import Popen, PIPE, run
+from subprocess import Popen, PIPE, run, TimeoutExpired
 from markupsafe import escape
 from functools import partial
 
@@ -273,51 +273,100 @@ sys.path.append("{self.data_dir}")
         self._passwords = lambda x: __inti__(x)     # {"admin": "admin", "joe": "admin"}
         self.fwd_ports = {}
         self.fwd_procs = {}
-        self._fwd_ports()
+        self._fwd_ports_event = Event()
+        self._fwd_ports_event.set()
+        self._fwd_ports_thread = Thread(target=self._fwd_ports_func)
+        self._fwd_ports_thread.start()
+        # self._fwd_ports()
 
-    def _fwd_ports(self, hosts=[]):
-        # NOTE: Authenticate only if not droid
-        #       Commenting as have_internet already runs
-        # if "droid" not in get_hostname().lower():
-        #     run('curl -L -k -d username="15mcpc15" -d password="unmission@123"' +
-        #         ' -d mode=191 http://192.168.56.2:8090/login.xml', shell=True,
-        #         stdout=PIPE, stderr=PIPE)
-        if self.daemon_name is not None:
-            if not hosts:
-                hosts = self.fwd_hosts
-            for host in hosts:
-                self._logi(f"Finding ssh port for {host}")
-                self.fwd_ports[host] = port = check_ssh_port(host, self.fwd_port_start)
-                if host in self.fwd_procs:
-                    self.fwd_procs[host].kill()
-                self.fwd_procs[host] = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {host}"),
-                                             stdout=PIPE, stderr=PIPE)
-                resp = register_with_tracker(host, self.daemon_name, port)
-                self._logi(f"Forwarded port {port} to {host}. Response is {resp}")
+    def _fwd_ports_func(self):
+        while self._fwd_ports_event.is_set():
+            self._check_and_register_with_trackers()
+            if not self._fwd_ports_event.is_set():
+                break
+            else:
+                time.sleep(60)
 
-    def _register_with_trackers(self, trackers=[]):
-        print(f"Registering with {trackers}")
-        if not trackers:
-            trackers = [*self.fwd_hosts]
-        for tracker in trackers:
-            if tracker in self.fwd_ports:
-                port = self.fwd_ports[tracker]
+    # def _fwd_ports(self, hosts=[]):
+    #     # NOTE: Authenticate only if not droid
+    #     #       Commenting as have_internet already runs
+    #     # if "droid" not in get_hostname().lower():
+    #     #     run('curl -L -k -d username="15mcpc15" -d password="unmission@123"' +
+    #     #         ' -d mode=191 http://192.168.56.2:8090/login.xml', shell=True,
+    #     #         stdout=PIPE, stderr=PIPE)
+    #     if self.daemon_name is not None:
+    #         if not hosts:
+    #             hosts = self.fwd_hosts
+    #         for host in hosts:
+    #             self._logi(f"Finding ssh port for {host}")
+    #             self.fwd_ports[host] = port = check_ssh_port(host, self.fwd_port_start)
+    #             if host in self.fwd_procs:
+    #                 self.fwd_procs[host].kill()
+    #             self.fwd_procs[host] = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {host}"),
+    #                                          stdout=PIPE, stderr=PIPE)
+    #             resp = register_with_tracker(host, self.daemon_name, port)
+    #             self._logi(f"Forwarded port {port} to {host}. Response is {resp}")
+
+    # FIXME: This thing will start in a thread and if this is available to call
+    #        from an endpoint then there could be race conditions
+    def _check_and_register_with_trackers(self, trackers=[]):
+        if self.daemon_name is None:
+            try:
+                with open("daemon_name", "r") as f:
+                    daemon_name = f.read().split("\n")[0].strip()
+            except Exception:
+                daemon_name = "No Nmae"
+        else:
+            daemon_name = self.daemon_name
+
+        def _check_fwd_port(host, port):
+            try:
+                p = Popen(shlex.split(f"ssh {host} \"curl http://localhost:{port}/_ping\""),
+                          stdout=PIPE, stderr=PIPE)
+                out, err = p.communicate(timeout=3)
+            except TimeoutExpired:
+                p.terminate()
+            if "pong" in out.decode("utf-8"):
+                return True
             else:
-                print(f"Checking port {self.fwd_port_start}")
-                self.fwd_ports[tracker] = port = check_ssh_port(tracker, self.fwd_port_start)
-                self.fwd_procs[tracker] = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {tracker}"),
-                                                stdout=PIPE, stderr=PIPE)
-            if self.daemon_name is None:
-                try:
-                    with open("daemon_name", "r") as f:
-                        daemon_name = f.read().split("\n")[0].strip()
-                except Exception:
-                    daemon_name = "No Nmae"
-            else:
-                daemon_name = self.daemon_name
+                return False
+
+        def _fwd_port(host):
+            self.fwd_procs[host].kill()
+            self.fwd_ports[host] = port = check_ssh_port(host, self.fwd_port_start)
+            self.fwd_procs[host] = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {host}"),
+                                         stdout=PIPE, stderr=PIPE)
+            return port
+
+        def _register(host, daemon_name, port):
             resp = register_with_tracker(tracker, daemon_name, port)
             self._logi(f"Forwarded port {port}, with name {daemon_name} to {tracker}." +
                        f"Response is {resp}")
+
+        if not trackers:
+            trackers = [*self.fwd_hosts]
+            _check = self._fwd_ports_event.is_set()
+        else:
+            _check = True
+        print(f"Checking ports and Registering with {trackers}")
+        if _check:
+            for tracker in trackers:
+                if tracker in self.fwd_ports:
+                    port = self.fwd_ports[tracker]
+                    if _check_fwd_port(tracker, port):
+                        resp = register_with_tracker(tracker, daemon_name, port)
+                        self._logi(f"Forwarded port {port}, with name {daemon_name} to {tracker}." +
+                                   f"Response is {resp}")
+                    else:
+                        self._logi(f"Stale port {port}, with {daemon_name} to {tracker}.")
+                        new_port = _fwd_port(tracker)
+                        _register(tracker, daemon_name, new_port)
+                else:
+                    print(f"Finding new port for {tracker}")
+                    port = _fwd_port(tracker)
+                    resp = register_with_tracker(tracker, daemon_name, port)
+                    self._logi(f"Forwarded port {port}, with name {daemon_name} to {tracker}." +
+                               f"Response is {resp}")
 
     def _init_context(self):
         self.api_crt = "res/server.crt"
@@ -1421,28 +1470,28 @@ sys.path.append("{self.data_dir}")
                 except Exception as e:
                     return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
 
-        @self.app.route("/fwd_ports", methods=["GET", "POST"])
-        @flask_login.login_required
-        def __fwd_ports():
-            data = []
-            if request.method == "POST":
-                if request.json and isinstance(request.json, dict):
-                    data = request.json
-                else:
-                    data = json.loads(request.json)
-            self._fwd_ports(data)
-            return _dump("Forwarded Ports again")
+        # @self.app.route("/fwd_ports", methods=["GET", "POST"])
+        # @flask_login.login_required
+        # def __fwd_ports():
+        #     data = []
+        #     if request.method == "POST":
+        #         if request.json and isinstance(request.json, dict):
+        #             data = request.json
+        #         else:
+        #             data = json.loads(request.json)
+        #     self._fwd_ports(data)
+        #     return _dump("Forwarded Ports again")
 
-        @self.app.route("/register_with_trackers", methods=["POST"])
-        @flask_login.login_required
-        def __register_with_trackers():
-            data = []
-            if request.json and isinstance(request.json, dict):
-                data = request.json
-            else:
-                data = json.loads(request.json)
-            self._register_with_trackers(data)
-            return _dump("Registered with Trackers")
+        # @self.app.route("/register_with_trackers", methods=["POST"])
+        # @flask_login.login_required
+        # def __register_with_trackers():
+        #     data = []
+        #     if request.json and isinstance(request.json, dict):
+        #         data = request.json
+        #     else:
+        #         data = json.loads(request.json)
+        #     self._register_with_trackers(data)
+        #     return _dump("Registered with Trackers")
 
         @self.app.route("/_ping", methods=["GET"])
         def __ping():
@@ -1479,6 +1528,11 @@ sys.path.append("{self.data_dir}")
 
         @atexit.register
         def cleanup():
+            # NOTE: clear the _fwd_ports_event
+            self._fwd_ports_event.clear()
+            self._logi("Waiting for the fwd_ports_thread to join")
+            self._fwd_ports_thread.join()
+            self._logi("Joined thread")
             # NOTE: kill the fwd ports
             self._logi("Killing fwd_procs")
             for p in self.fwd_procs.values():

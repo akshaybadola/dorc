@@ -146,6 +146,7 @@ class Connector:
 
     def main(self):
         remote_ports = self.get_ports_info()
+        print(f"Remote ports are {remote_ports}")
         local_port = self.start_port
         if self.parallel:
             raise NotImplementedError

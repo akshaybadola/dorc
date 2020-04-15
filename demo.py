@@ -15,6 +15,6 @@ if __name__ == "__main__":
     else:
         print("WILL NOT register with trackers")
         daemon_name = None
-    daemon = _start_daemon("0.0.0.0", 20202, ".demo_dir", os.path.abspath("dist"),
-                           os.path.abspath("dist"), os.path.abspath("."),
-                           daemon_name=daemon_name)
+    daemon = _start_daemon("0.0.0.0", 20202, ".demo_dir", False,
+                           os.path.abspath("dist"), os.path.abspath("dist"),
+                           os.path.abspath("."), daemon_name=daemon_name)

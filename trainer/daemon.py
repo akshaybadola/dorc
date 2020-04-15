@@ -80,7 +80,7 @@ def check_ssh_port(host, port):
             port += 101
         elif out.decode("utf-8") and not err.decode("utf-8").lower():
             break
-        p.terminate()
+        p.kill()
     return port
 
 
@@ -135,7 +135,7 @@ def register_with_tracker(tracker, host, port):
             print(f"Register request at port {fwd_port} with {tracker} failed {e}. Trying again")
             resp = None
     for p in procs:
-        p.terminate()
+        p.kill()
     return resp
 
 
@@ -281,6 +281,7 @@ sys.path.append("{self.data_dir}")
 
     def _fwd_ports_func(self):
         while self._fwd_ports_event.is_set():
+            self._logi("Checking port forwards")
             self._check_and_register_with_trackers()
             if not self._fwd_ports_event.is_set():
                 self._logi("Exiting from _fwd_ports_func")
@@ -322,14 +323,16 @@ sys.path.append("{self.data_dir}")
 
         def _check_fwd_port(host, port):
             try:
-                p = Popen(shlex.split(f"ssh {host} \"curl http://localhost:{port}/_ping\""),
+                self._logd(f"Checking {host}:{port}")
+                p = Popen(shlex.split(f"ssh {host} \"curl http://localhost:{port}/_name\""),
                           stdout=PIPE, stderr=PIPE)
                 out, err = p.communicate(timeout=3)
+                if daemon_name == out.decode("utf-8"):
+                    return True
+                else:
+                    return False
             except TimeoutExpired:
-                p.terminate()
-            if "pong" in out.decode("utf-8"):
-                return True
-            else:
+                p.kill()
                 return False
 
         def _fwd_port(host):
@@ -1094,7 +1097,6 @@ sys.path.append("{self.data_dir}")
         @self.app.route("/trainer/<int:port>/<endpoint>", methods=["GET", "POST"])
         @flask_login.login_required
         def __trainer(port=None, endpoint=None):
-            self._logd(f"Request {endpoint} to {port}")
             _json = _data = _files = None
             if request.json:
                 _json = request.json if isinstance(request.json, dict) else json.loads(request.json)
@@ -1114,7 +1116,6 @@ sys.path.append("{self.data_dir}")
         @self.app.route("/trainer/<int:port>/<category>/<endpoint>", methods=["GET", "POST"])
         @flask_login.login_required
         def __trainer_one(port=None, category=None, endpoint=None):
-            self._logd(f"Request {category}/{endpoint} to {port}")
             _json = _data = _files = None
             if request.json:
                 _json = request.json if isinstance(request.json, dict) else json.loads(request.json)
@@ -1494,6 +1495,10 @@ sys.path.append("{self.data_dir}")
         #         data = json.loads(request.json)
         #     self._register_with_trackers(data)
         #     return _dump("Registered with Trackers")
+
+        # @self.app.before_request
+        # def __before_request_func():
+        #     self._logd(f"FWD ports thread is alive? {self._fwd_ports_thread.is_alive()}")
 
         @self.app.route("/_ping", methods=["GET"])
         def __ping():

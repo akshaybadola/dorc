@@ -330,6 +330,7 @@ sys.path.append("{self.data_dir}")
                 if daemon_name == out.decode("utf-8"):
                     return True
                 else:
+                    self._logd(f"Incorrect port registerd with tracker {host}")
                     return False
             except TimeoutExpired:
                 p.kill()
@@ -360,10 +361,10 @@ sys.path.append("{self.data_dir}")
                     port = self.fwd_ports[tracker]
                     if _check_fwd_port(tracker, port):
                         resp = register_with_tracker(tracker, daemon_name, port)
-                        self._logi(f"Forwarded port {port}, with name {daemon_name} to {tracker}." +
+                        self._logi(f"Port {port} is working fine. Registered with {tracker}." +
                                    f"Response is {resp}")
                     else:
-                        self._logi(f"Stale port {port}, with {daemon_name} to {tracker}.")
+                        self._logi(f"Bad port {port}, with {daemon_name} to {tracker}.")
                         new_port = _fwd_port(tracker)
                         _register(tracker, daemon_name, new_port)
                 else:

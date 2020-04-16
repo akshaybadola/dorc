@@ -92,7 +92,7 @@ python run.py
 
 
 def restart(host):
-    print(f"Restarting {host}")
+    print(f"Restarting daemon for {host}")
     exec_cmd(host, "killall ssh")
     time.sleep(1)
     out, err = exec_cmd(host, "ps -ef | grep -i \"python run.py\"")

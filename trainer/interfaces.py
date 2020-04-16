@@ -2,6 +2,7 @@ from typing import Dict, Iterable, Union
 import os
 import sys
 import ssl
+import copy
 import glob
 import json
 import atexit
@@ -71,6 +72,7 @@ class FlaskInterface:
         self._logw = log._logw
         self._modules = Modules(self.data_dir, self._logd, self._loge,
                                 self._logi, self._logw)
+        self._orig_config = None
         self._current_config = None
         self._current_overrides = None
         if (self.api_host and self.api_port and self.config_exists):
@@ -133,6 +135,7 @@ class FlaskInterface:
                 sys.path.remove(self.data_dir)
             else:
                 from session_config import config
+            self._orig_config = copy.deepcopy(config)
             overrides_file = os.path.join(self.data_dir, "config_overrides.json")
             if self.config_overrides is not None:
                 self._logd(f"Config Overrides given: \n{self.config_overrides}" +
@@ -300,6 +303,7 @@ class FlaskInterface:
         @self.app.route("/config", methods=["GET"])
         def __config():
             return _dump({"config": self._current_config,
+                          "orig_config": self._orig_config,
                           "overrides": self._current_overrides})
 
         @self.app.route("/list_files", methods=["GET"])

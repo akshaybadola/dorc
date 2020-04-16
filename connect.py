@@ -3,6 +3,7 @@ import json
 import time
 import shlex
 import atexit
+import datetime
 import argparse
 import requests
 from queue import Queue
@@ -11,6 +12,10 @@ from subprocess import Popen, run, PIPE, TimeoutExpired
 
 
 hosts = ["joe@13.232.207.179", "joe@149.129.189.46", "15mcpc15@mars.uohyd.ac.in"]
+
+
+def _log(msg):
+    print(f"{datetime.datetime.now().ctime()} {msg}")
 
 
 def check_servers(host):
@@ -71,46 +76,97 @@ class Connector:
         self.procs = {}
 
     def forward_port(self, port, fwd_port):
-        if not isinstance(port, tuple) and not isinstance(port, list):
-            while True:
-                print(f"Forwarding remote port {port} to local port {fwd_port}")
-                p = Popen(f"ssh -L {fwd_port}:localhost:{port} {self.server}" +
-                          " \"hostname && /bin/bash \"",
-                          shell=True, stdout=PIPE, stderr=PIPE)
-                q = Queue()
-                t = Thread(target=check_output, args=[p, q])
-                t.start()
-                print(f"Waiting {self.latency} seconds for {port}")
-                time.sleep(self.latency)
-                if not q.empty():
-                    print(f"Output from ssh: {q.get()}")
-                    self.proc_q.put(p)
-                    print(f"Successfully forwarded {fwd_port} from {self.server}:{port}")
-                    break
-                else:
-                    p.kill()
-                t.join()
-                time.sleep(1)
+        while True:
+            _log(f"Forwarding remote port {port} to local port {fwd_port}")
+            p = Popen(f"ssh -L {fwd_port}:localhost:{port} {self.server}" +
+                      " \"hostname && /bin/bash \"",
+                      shell=True, stdout=PIPE, stderr=PIPE)
+            q = Queue()
+            t = Thread(target=check_output, args=[p, q])
+            t.start()
+            _log(f"Waiting {self.latency} seconds for {port}")
+            time.sleep(self.latency)
+            if not q.empty():
+                _log(f"Output from ssh: {q.get()}")
+                self.proc_q.put(p)
+                _log(f"Successfully forwarded {fwd_port} from {self.server}:{port}")
+                break
+            else:
+                p.kill()
+            t.join()
+            time.sleep(1)
 
     def ping(self):
+        def forward(local_port, remote_port):
+            _log(f"Trying to forwarding port now")
+            self.forward_port(remote_port, local_port)
+            self.procs[host] = {"proc": self.proc_q.get(),
+                                "remote_port": remote_port,
+                                "local_port": local_port}
+
+        def kill_proc_and_forward(proc, local_port, remote_port):
+            _log(f"Killing old process")
+            proc.kill()
+            forward(local_port, remote_port)
+
         while True:
+            _log(f"Checking remote ports")
+            all_fine = True
             for host, info in self.procs.items():
-                port = info["local_port"]
-                try:
-                    requests.request("GET", f"http://localhost:{port}/_ping",
-                                     timeout=5)
-                except Exception:
-                    print(f"Ping failed on host, port: {host}, {port}")
-                    ports_info = self.get_ports_info()
+                local_port = info["local_port"]
+                remote_port = info["remote_port"]
+                if remote_port is None:
+                    try:
+                        ports_info = self.get_ports_info()
+                    except Exception:
+                        time.sleep(5)
+                        continue
+                    _log(f"Got new ports info")
                     remote_port = ports_info[host]
-                    if remote_port != info["remote_port"]:
-                        print(f"Remote port changed forwarding again")
-                    info["proc"].kill()
-                    self.forward_port(remote_port, port)
-                    self.procs[host] = {"proc": self.proc_q.get(),
-                                        "remote_port": remote_port,
-                                        "local_port": port}
-            time.sleep(10)
+                    if isinstance(remote_port, tuple) or isinstance(remote_port, list):
+                        _log(f"Invalid remote port {remote_port}")
+                    else:
+                        forward(local_port, remote_port)
+                else:
+                    try:
+                        requests.request("GET", f"http://localhost:{local_port}/_ping",
+                                         timeout=5)
+                    except Exception:
+                        all_fine = False
+                        _log(f"Ping failed on host, port: {host}, {local_port}")
+                        try:
+                            ports_info = self.get_ports_info()
+                        except Exception:
+                            time.sleep(5)
+                            continue
+                        _log(f"Got new ports info")
+                        remote_port = ports_info[host]
+                        if isinstance(remote_port, tuple) or isinstance(remote_port, list):
+                            _log(f"Invalid remote port {remote_port}")
+                            info["proc"].kill()
+                            self.procs[host] = {"proc": None,
+                                                "remote_port": None,
+                                                "local_port": local_port}
+                        else:
+                            if remote_port != info["remote_port"]:
+                                _log(f"Remote port changed forwarding again")
+                                kill_proc_and_forward(info["proc"],
+                                                      local_port,
+                                                      remote_port)
+                            else:
+                                _log(f"Checking same port again")
+                                try:
+                                    requests.request("GET", f"http://localhost:{local_port}/_ping",
+                                                     timeout=5)
+                                    _log(f"It was ok this time")
+                                except Exception:
+                                    _log(f"Forwarding same port again")
+                                    kill_proc_and_forward(info["proc"],
+                                                          local_port,
+                                                          remote_port)
+            if all_fine:
+                _log("It's all fine for now.")
+            time.sleep(30)
 
     def get_ports_info(self):
         if self.use_paramiko:
@@ -128,17 +184,17 @@ class Connector:
             return json.loads(lines[0])
         else:
             while True:
-                print(f"Trying to forward port {self.server_port} from {self.server}")
+                _log(f"Trying to forward port {self.server_port} from {self.server}")
                 p = Popen(f"ssh -L {self.server_port}:localhost:{self.server_port} {self.server}" +
                           " \"hostname && /bin/bash \"", shell=True, stdout=PIPE, stderr=PIPE)
                 time.sleep(2)
                 out = p.stdout.read(4).decode("utf-8")
                 if out:
-                    print("Getting the hosts and ports")
+                    _log("Getting the hosts and ports")
                     resp = requests.request("POST", f"http://localhost:{self.server_port}/",
                                             json={"get": True})
                     ports = json.loads(resp.content)
-                    print(f"Got ports info {ports}")
+                    _log(f"Got ports info {ports}")
                     p.kill()
                     return ports
                 p.kill()
@@ -146,7 +202,7 @@ class Connector:
 
     def main(self):
         remote_ports = self.get_ports_info()
-        print(f"Remote ports are {remote_ports}")
+        _log(f"Remote ports are {remote_ports}")
         local_port = self.start_port
         if self.parallel:
             raise NotImplementedError
@@ -163,11 +219,14 @@ class Connector:
             #     self.procs.append(proc_q.get())
         else:
             for host, port in remote_ports.items():
-                self.forward_port(port, local_port)
-                self.procs[host] = {"proc": self.proc_q.get(),
-                                    "remote_port": port,
-                                    "local_port": local_port}
-                local_port += 101
+                if isinstance(port, tuple) or isinstance(port, list):
+                    _log(f"Port {port} not valid")
+                else:
+                    self.forward_port(port, local_port)
+                    self.procs[host] = {"proc": self.proc_q.get(),
+                                        "remote_port": port,
+                                        "local_port": local_port}
+                    local_port += 101
         # ping_thread = Thread(target=self.ping)
         # ping_thread.start()
         self.ping()
@@ -192,7 +251,7 @@ if __name__ == '__main__':
     parser.add_argument("--server-port", type=int, default=11111)
     args = parser.parse_args()
     if args.all_servers:
-        print("Forwarding from all servers is not implemented yet")
+        _log("Forwarding from all servers is not implemented yet")
     connector = Connector(args.server, args.start_port, args.latency,
                           args.parallel, args.server_port, args.use_paramiko)
     connector.main()

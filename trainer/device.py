@@ -21,6 +21,15 @@ def gpu_util(handles):
     return {gpu_id: _get_util(h) for gpu_id, h in handles.items()}
 
 
+def gpu_temp(handles):
+    def _get_temp(h):
+        temp = pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU)
+        thresh = pynvml.nvmlDeviceGetTemperatureThreshold(
+            h, pynvml.NVML_TEMPERATURE_THRESHOLD_SLOWDOWN)
+        return {"temp": temp, "thresh": thresh}
+    return {gpu_id: _get_temp(h) for gpu_id, h in handles.items()}
+
+
 def init_nvml(gpus):
     pynvml.nvmlInit()
     return {x: pynvml.nvmlDeviceGetHandleByIndex(x) for x in gpus}
@@ -69,7 +78,7 @@ class DeviceMonitor:
                 self._data["memory_info"].append(memory_info())
                 self._data["time"] += self._interval
                 time.sleep(self._interval)
-
+ 
     def _start(self):
         self._running_event.set()
         self._t = Thread(target=self._monitor_func)
@@ -87,6 +96,13 @@ class DeviceMonitor:
             for k in all_keys:
                 util[k] = [x[k]["gpu"] for x in self._data["gpu_info"]]
             return util
+        else:
+            return None
+
+    @property
+    def gpu_temp(self):
+        if self._handles:
+            return gpu_temp(self._handles)
         else:
             return None
 

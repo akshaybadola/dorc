@@ -64,7 +64,7 @@ class BatchVars:
             return None
 
 
-def _log_post_batch_hook(epoch: 'Epoch', **kwargs):
+def _log_post_batch_hook(epoch: "Epoch", **kwargs):
     step = kwargs["step"]
     metric_names = epoch.metrics[step]
     for m in metric_names:
@@ -84,12 +84,16 @@ def _log_post_batch_hook(epoch: 'Epoch', **kwargs):
         # print("LOGGING device_mon in kwargs", dm.__dict__)
         gpu_util = dm.gpu_util
         gpu_mem_util = dm.gpu_mem_util
+        gpu_temp = dm.gpu_temp
         if gpu_util is not None:
             epoch.batch_vars.append((step, epoch.batch_num[step], "gpu_util",
                                      [(k, np.mean(v)) for k, v in gpu_util.items()]))
         if gpu_mem_util is not None:
             epoch.batch_vars.append((step, epoch.batch_num[step], "gpu_mem_util",
                                      [(k, np.mean(v)) for k, v in gpu_mem_util.items()]))
+        if gpu_temp is not None:
+            epoch.batch_vars.append((step, epoch.batch_num[step], "gpu_temp",
+                                     [(k, v["temp"], v["thresh"]) for k, v in gpu_temp.items()]))
         epoch.batch_vars.append((step, epoch.batch_num[step], "cpu_util", np.mean(dm.cpu_util)))
         epoch.batch_vars.append((step, epoch.batch_num[step], "mem_util", np.mean(dm.mem_util)))
         epoch.batch_vars.append((step, epoch.batch_num[step], "time", dm.time))
@@ -99,6 +103,22 @@ def _log_post_batch_hook(epoch: 'Epoch', **kwargs):
         for x in epoch.extra_reportables[step]:
             epoch.batch_vars.append((step, epoch.batch_num[step], x, kwargs[x]))
     epoch.total_samples[step] += kwargs["total"]  # always there
+
+
+def _pause_at_high_temperature_post_batch_hook(epoch: "Epoch", **kwargs):
+    if hasattr(epoch, "device_mon"):
+        dm = epoch.device_mon
+    elif "device_mon" in kwargs:
+        dm = kwargs["device_mon"]
+    else:
+        return False
+    try:
+        for k, v in dm.gpu_temp.items():
+            if v["temp"] > (v["thresh"] - 4):
+                # pause()
+                pass
+    except Exception as e:
+        return(True, f"{e}" + "\n" + traceback.format_exc())
 
 
 class EpochLoop(LoopTaskWithHooks):
@@ -331,6 +351,9 @@ class Epoch:
         return {{k: v.keys()} for k, v in self._post_batch_hooks.items()}
 
     def add_post_batch_hook(self, step: str, name: str, hook: Callable):
+        """Add a post batch hook to Epoch to run for a given \"step\"
+        Hook is a callable which accepts only an instance of Epoch and kwargs
+        """
         if step in {"train", "val", "test"} and callable(hook):
             try:
                 self._all_post_batch_hooks[step][name] = partial(hook, self)

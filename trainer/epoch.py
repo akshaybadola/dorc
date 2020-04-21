@@ -65,60 +65,75 @@ class BatchVars:
 
 
 def _log_post_batch_hook(epoch: "Epoch", **kwargs):
-    step = kwargs["step"]
-    metric_names = epoch.metrics[step]
-    for m in metric_names:
-        if m in kwargs:
-            epoch.batch_vars.append((step, epoch.batch_num[step], m, kwargs[m]))
-        elif step in epoch.extra_metrics and m in epoch.extra_metrics[step] and\
-                epoch.extra_metrics[step][m]["when"] == "batch":
-            em_func = epoch.extra_metrics[step][m]["function"]
-            em_inputs = epoch.extra_metrics[step][m]["inputs"]
-            f_inputs = dict((x, kwargs[x]) for x in em_inputs)
-            epoch.batch_vars.append((step, epoch.batch_num[step], m, em_func(**f_inputs)))
-    # NOTE: Deprecated, commented
-    # if hasattr(epoch, "keep_time") and epoch.keep_time[step]:
-    #     epoch.batch_vars.append((step, epoch.batch_num[step], "time", kwargs["time"]))
-    if "device_mon" in kwargs:
-        dm = kwargs["device_mon"]
-        # print("LOGGING device_mon in kwargs", dm.__dict__)
-        gpu_util = dm.gpu_util
-        gpu_mem_util = dm.gpu_mem_util
-        gpu_temp = dm.gpu_temp
-        if gpu_util is not None:
-            epoch.batch_vars.append((step, epoch.batch_num[step], "gpu_util",
-                                     [(k, np.mean(v)) for k, v in gpu_util.items()]))
-        if gpu_mem_util is not None:
-            epoch.batch_vars.append((step, epoch.batch_num[step], "gpu_mem_util",
-                                     [(k, np.mean(v)) for k, v in gpu_mem_util.items()]))
-        if gpu_temp is not None:
-            epoch.batch_vars.append((step, epoch.batch_num[step], "gpu_temp",
-                                     [(k, v["temp"], v["thresh"]) for k, v in gpu_temp.items()]))
-        epoch.batch_vars.append((step, epoch.batch_num[step], "cpu_util", np.mean(dm.cpu_util)))
-        epoch.batch_vars.append((step, epoch.batch_num[step], "mem_util", np.mean(dm.mem_util)))
-        epoch.batch_vars.append((step, epoch.batch_num[step], "time", dm.time))
-    if "batch_time" in kwargs:
-        epoch.batch_vars.append((step, epoch.batch_num[step], "batch_time", kwargs["batch_time"]))
-    if epoch.extra_reportables[step]:
-        for x in epoch.extra_reportables[step]:
-            epoch.batch_vars.append((step, epoch.batch_num[step], x, kwargs[x]))
-    epoch.total_samples[step] += kwargs["total"]  # always there
+    try:
+        step = kwargs["step"]
+        metric_names = epoch.metrics[step]
+        for m in metric_names:
+            if m in kwargs:
+                epoch.batch_vars.append((step, epoch.batch_num[step], m, kwargs[m]))
+            elif step in epoch.extra_metrics and m in epoch.extra_metrics[step] and\
+                    epoch.extra_metrics[step][m]["when"] == "batch":
+                em_func = epoch.extra_metrics[step][m]["function"]
+                em_inputs = epoch.extra_metrics[step][m]["inputs"]
+                f_inputs = dict((x, kwargs[x]) for x in em_inputs)
+                epoch.batch_vars.append((step, epoch.batch_num[step], m, em_func(**f_inputs)))
+        # NOTE: Deprecated, commented
+        # if hasattr(epoch, "keep_time") and epoch.keep_time[step]:
+        #     epoch.batch_vars.append((step, epoch.batch_num[step], "time", kwargs["time"]))
+        if "device_mon" in kwargs:
+            dm = kwargs["device_mon"]
+            # print("LOGGING device_mon in kwargs", dm.__dict__)
+            gpu_util = dm.gpu_util
+            gpu_mem_util = dm.gpu_mem_util
+            gpu_temp = dm.gpu_temp
+            if gpu_util is not None:
+                epoch.batch_vars.append((step, epoch.batch_num[step], "gpu_util",
+                                         [(k, np.mean(v)) for k, v in gpu_util.items()]))
+            if gpu_mem_util is not None:
+                epoch.batch_vars.append((step, epoch.batch_num[step], "gpu_mem_util",
+                                         [(k, np.mean(v)) for k, v in gpu_mem_util.items()]))
+            if gpu_temp is not None:
+                epoch.batch_vars.append((step, epoch.batch_num[step], "gpu_temp",
+                                         [(k, v["temp"], v["thresh"]) for k, v in gpu_temp.items()]))
+            epoch.batch_vars.append((step, epoch.batch_num[step], "cpu_util", np.mean(dm.cpu_util)))
+            epoch.batch_vars.append((step, epoch.batch_num[step], "mem_util", np.mean(dm.mem_util)))
+            epoch.batch_vars.append((step, epoch.batch_num[step], "time", dm.time))
+        if "batch_time" in kwargs:
+            epoch.batch_vars.append((step, epoch.batch_num[step], "batch_time",
+                                     kwargs["batch_time"]))
+        if epoch.extra_reportables[step]:
+            for x in epoch.extra_reportables[step]:
+                epoch.batch_vars.append((step, epoch.batch_num[step], x, kwargs[x]))
+        epoch.total_samples[step] += kwargs["total"]  # always there
+        return True, None
+    except Exception as e:
+        return False, f"{e}" + "\n" + traceback.format_exc()
 
 
-def _pause_at_high_temperature_post_batch_hook(epoch: "Epoch", **kwargs):
+def _wait_for_gpu_cooldown_post_batch_hook(epoch: "Epoch", **kwargs):
     if hasattr(epoch, "device_mon"):
         dm = epoch.device_mon
+        if hasattr(epoch, "_logd"):
+            _log = epoch._logd
+        else:
+            _log = lambda x: print(x)
     elif "device_mon" in kwargs:
         dm = kwargs["device_mon"]
+        _log = lambda x: print(x)
     else:
-        return False
+        return False, "Could not wait for cooldown. Bad arguments."
+    if "wait_time" in kwargs:
+        wait_time = kwargs["wait_time"]
+    else:
+        wait_time = 1
     try:
         for k, v in dm.gpu_temp.items():
-            if v["temp"] > (v["thresh"] - 4):
-                # pause()
-                pass
+            while v["temp"] > (v["thresh"] - 4):
+                time.sleep(wait_time)
+                _log(f"Temperature high for device {k}. Waiting for {wait_time}")
+        return True, None
     except Exception as e:
-        return(True, f"{e}" + "\n" + traceback.format_exc())
+        return False, f"{e}" + "\n" + traceback.format_exc()
 
 
 class EpochLoop(LoopTaskWithHooks):

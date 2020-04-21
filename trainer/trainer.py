@@ -810,6 +810,7 @@ class Trainer:
         #     else:
         #         self._transition(self.current_state, "_".join(["normal", "running", step]))
 
+    # FIXME: This doesn't do anything
     def _abort_on_error(self):
         self._abort_current
     # END: Internal Controls
@@ -943,6 +944,10 @@ class Trainer:
                 callback()
             else:
                 self._logd(f"not calling callback {callback} for {loop}, {step}")
+        if self._current_aborted:
+            # NOTE: Reset current_aborted_event
+            print("Resetting current_aborted")
+            self._toggle_current_aborted()
         if join_thread and self._threads[loop].is_alive():
             # FIXME: join is called while callback is running, LOL
             # NOTE: callbacks aren't there right now
@@ -2446,7 +2451,7 @@ class Trainer:
         if not self._current_aborted:
             self._toggle_current_aborted()
         self._finish_if_paused_or_running()
-        # self._toggle_current_aborted()
+        # self._toggle_current_aborted() is called in _ensure_finished
         print("ABORTED flag", self._current_aborted)
         self._aborted.append([self.current_state.split("_")[-1], cause])
 
@@ -2454,7 +2459,7 @@ class Trainer:
         if not self._current_aborted:
             self._toggle_current_aborted()
         self._finish_if_paused_or_running(True)
-        # self._toggle_current_aborted()
+        # self._toggle_current_aborted() is called in _ensure_finished
         print("ABORTED flag", self._current_aborted)
         self._aborted.append([self.current_state.split("_")[-1], cause])
     # END: Flags

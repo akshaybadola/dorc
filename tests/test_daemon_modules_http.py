@@ -141,6 +141,8 @@ class DaemonModulesTest(unittest.TestCase):
                                         data={"name": json.dumps("bleh_session")},
                                         cookies=cls.cookies)
             print(response.content)
+        cls.daemon._fwd_ports_thread.kill()
+        time.sleep(1)
         print("Initialized daemon and created sessions")
 
     def test_list_modules(self):
@@ -165,7 +167,7 @@ class DaemonModulesTest(unittest.TestCase):
                                     cookies=self.cookies)
         result = json.loads(response.content)
         self.assertTrue(result["result"])
-        self.assertIn("test_module_a", self.daemon._modules)
+        self.assertIn("_module_test_module_a", self.daemon._modules)
         with open("./._test_py_file.py", "rb") as f:
             response = requests.request("POST", self.host + "add_global_module",
                                         files={"file": f},
@@ -178,13 +180,13 @@ class DaemonModulesTest(unittest.TestCase):
                                     cookies=self.cookies)
         result = json.loads(response.content)
         self.assertTrue(result["result"])
-        self.assertIn("test_module_b", self.daemon._modules)
+        self.assertIn("_module_test_module_b", self.daemon._modules)
         requests.request("POST", self.host + "delete_global_module",
                          data={"name": "test_module_a"},
                          cookies=self.cookies)
         time.sleep(.3)
         self.assertTrue(result["result"])
-        self.assertNotIn("test_module_a", self.daemon._modules)
+        self.assertNotIn("_module_test_module_a", self.daemon._modules)
 
     def test_add_delete_dataset(self):
         py_string = """
@@ -199,7 +201,9 @@ class MnistDataset:
     def __getitem__(self, idx):
         return self.data[0][idx], self.data[1][idx]
 
-dataset = MnistDataset("training.pt")
+import os
+file_dir = os.path.abspath(os.path.dirname(__file__))
+dataset = MnistDataset(os.path.join(file_dir, "training.pt"))
 """
         if not os.path.exists("./.test_data_dir"):
             os.mkdir("./.test_data_dir")
@@ -214,7 +218,9 @@ dataset = MnistDataset("training.pt")
         with open("./.test.zip", "rb") as f:
             response = requests.request("POST", self.host + "upload_dataset",
                                         files={"file": f},
-                                        data={"name": json.dumps("MNIST")},
+                                        data={"name": "MNIST",
+                                              "description": "MNIST Image dataset",
+                                              "type": "image"},
                                         cookies=self.cookies)
         self.assertIsInstance(json.loads(response.content), dict)
         meh = json.loads(response.content)
@@ -224,7 +230,7 @@ dataset = MnistDataset("training.pt")
                                     cookies=self.cookies)
         result = json.loads(response.content)
         self.assertTrue(result["result"])
-        self.assertIn("MNIST_data", self.daemon._datasets)
+        self.assertIn("_dataset_MNIST", self.daemon._datasets)
         py_string_2 = """
 class MnistDataset:
     def __init__(self, pt_file):
@@ -237,14 +243,16 @@ class MnistDataset:
     def __getitem__(self, idx):
         return self.data[0][idx], self.data[1][idx]
 
-dataset = MnistDataset("/home/joe/projects/test_show_attend/trainer/.data/MNIST/processed/training.pt")
+dataset = MnistDataset("/home/joe/projects/trainer/.data/MNIST/processed/training.pt")
 """
         with open("./.data_file.py", "w") as f:
             f.write(py_string_2)
         with open("./.data_file.py", "rb") as f:
             response = requests.request("POST", self.host + "upload_dataset",
                                         files={"file": f},
-                                        data={"name": json.dumps("MNIST_2")},
+                                        data={"name": "MNIST_2",
+                                              "description": "MNIST Image dataset",
+                                              "type": "image"},
                                         cookies=self.cookies)
         self.assertIsInstance(json.loads(response.content), dict)
         meh = json.loads(response.content)
@@ -254,7 +262,13 @@ dataset = MnistDataset("/home/joe/projects/test_show_attend/trainer/.data/MNIST/
                                     cookies=self.cookies)
         result = json.loads(response.content)
         self.assertTrue(result["result"])
-        self.assertIn("MNIST_2_data", self.daemon._datasets)
+        self.assertIn("_dataset_MNIST_2", self.daemon._datasets)
+        requests.request("POST", self.host + "delete_dataset",
+                         data={"name": "MNIST_2"},
+                         cookies=self.cookies)
+        time.sleep(.3)
+        self.assertTrue(result["result"])
+        self.assertNotIn("_dataset_MNIST_2", self.daemon._datasets)
 
     @classmethod
     def shutdown_daemon(cls, host):

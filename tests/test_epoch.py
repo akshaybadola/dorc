@@ -53,7 +53,6 @@ class EpochTest(unittest.TestCase):
         t.start()
         self.trainer._running_event.set()
         time.sleep(2)
-        # import ipdb; ipdb.set_trace()
         self.assertTrue(epoch_runner.running)
         self.assertFalse(epoch_runner.waiting)
         self.trainer._running_event.clear()
@@ -73,6 +72,8 @@ class EpochTest(unittest.TestCase):
         time.sleep(.5)
         self.assertFalse(epoch_runner.running)
         self.assertFalse(epoch_runner.waiting)
+        self.trainer._current_aborted_event.clear()
+        self.trainer._running_event.clear()
 
     def test_epoch_test(self):
         def _debug():
@@ -89,9 +90,11 @@ class EpochTest(unittest.TestCase):
         t.start()
         self.trainer._running_event.set()
         time.sleep(2)
+        # import ipdb; ipdb.set_trace()
         self.assertTrue(epoch_runner.running)
         self.assertFalse(epoch_runner.waiting)
         self.trainer._running_event.clear()
+        self.trainer.pause()
         time.sleep(.5)
         self.assertTrue(epoch_runner.running)
         self.assertTrue(epoch_runner.waiting)
@@ -108,6 +111,8 @@ class EpochTest(unittest.TestCase):
         time.sleep(.5)
         self.assertFalse(epoch_runner.running)
         self.assertFalse(epoch_runner.waiting)
+        self.trainer._current_aborted_event.clear()
+        self.trainer._running_event.clear()
 
     @classmethod
     def tearDownClass(cls):

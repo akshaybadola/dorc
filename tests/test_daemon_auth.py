@@ -30,6 +30,10 @@ class DaemonHTTPTest(unittest.TestCase):
         response = requests.request("POST", self.host + "login",
                                     data={"username": "admin", "password": "admin"})
         self.assertEqual(response.status_code, 200)
+        self.assertFalse(json.loads(response.content)[0])
+        response = requests.request("POST", self.host + "login",
+                                    data={"username": "admin", "password": "AdminAdmin_33"})
+        self.assertEqual(response.status_code, 200)
         self.assertTrue(json.loads(response.content)[0])
         cookies = response.cookies
         response = requests.request("GET", self.host + "sessions", allow_redirects=False,
@@ -38,13 +42,15 @@ class DaemonHTTPTest(unittest.TestCase):
 
     @classmethod
     def shutdown_daemon(cls, host):
-        cookies = requests.request("POST", cls.host + "login",
-                                   data={"username": "admin", "password": "admin"}).cookies
+        cookies = requests.request("POST", host + "login",
+                                   data={"username": "admin",
+                                         "password": "AdminAdmin_33"}).cookies
         response = requests.request("GET", host + "_shutdown", cookies=cookies, timeout=2)
         return response
 
     @classmethod
     def tearDownClass(cls):
+        cls.daemon._fwd_ports_thread.kill()
         cls.shutdown_daemon(cls.host)
         if os.path.exists(cls.data_dir):
             shutil.rmtree(cls.data_dir)

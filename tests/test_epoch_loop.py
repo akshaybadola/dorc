@@ -5,7 +5,7 @@ from datetime import datetime
 import unittest
 import sys
 import time
-from _setup import config
+from _setup_local import config
 sys.path.append("../")
 from trainer.epoch import EpochLoop
 from trainer.trainer import Trainer

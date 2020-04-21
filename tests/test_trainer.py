@@ -22,6 +22,7 @@ class TrainerTest(unittest.TestCase):
         os.mkdir(f".test_dir/test_session/{time_str}")
         cls.data_dir = f".test_dir/test_session/{time_str}"
         cls.trainer = Trainer(**{"data_dir": cls.data_dir, **cls.config})
+        cls.trainer._init_all()
 
     # TODO: Tweak config's various parameters and check for errors
     #       Would have to be subtests.
@@ -44,8 +45,8 @@ class TrainerTest(unittest.TestCase):
     # 14. Test controls, return values also
     # 15. All stateless funcs
     # 16. Fixes and tests for broken funcs
+
     def test_trainer_init(self):
-        self.trainer._init_all()
         self.assertFalse(self.trainer._have_resumed)
         self.assertTrue(self.trainer.paused)
 

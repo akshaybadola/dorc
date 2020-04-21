@@ -23,7 +23,8 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
         cls.host = "http://" + ":".join([cls.hostname, str(cls.port) + "/"])
         time.sleep(.5)
         cls.cookies = requests.request("POST", cls.host + "login",
-                                       data={"username": "admin", "password": "admin"}).cookies
+                                       data={"username": "admin",
+                                             "password": "AdminAdmin_33"}).cookies
 
     def test_load_unfinished_sessions(self):
         """Restart daemon without removing all directories. Make sure unfinished
@@ -65,6 +66,7 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
             json.dump(state, f)
         # start new daemon
         daemon = _start_daemon(self.hostname, self.port + 5, ".test_dir")
+        daemon._fwd_ports_thread.kill()
         host = "http://" + ":".join([self.hostname, str(self.port + 5) + "/"])
         time.sleep(1)
         response = requests.request("GET", host + "sessions", cookies=self.cookies)
@@ -81,22 +83,21 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
         time.sleep(1)
         for r in responses:
             task_id = json.loads(r.content)["task_id"]
-            print(requests.request("GET", host + f"check_task?task_id={task_id}",
-                                   cookies=self.cookies).content)
+            with self.subTest(i=str(task_id)):
+                content = requests.request("GET", host + f"check_task?task_id={task_id}",
+                                           cookies=self.cookies).content
+                self.assertTrue(json.loads(content)["result"])
+        # import ipdb; ipdb.set_trace()
         self.shutdown_daemon(host)
         # And some time to shutdown
         time.sleep(1)
 
     @classmethod
     def shutdown_daemon(cls, host):
+        cls.daemon._fwd_ports_thread.kill()
         response = requests.request("GET", host + "_shutdown", timeout=2,
                                     cookies=cls.cookies)
         return response
-
-    @classmethod
-    def tearDownClass(cls):
-        if os.path.exists(cls.data_dir):
-            shutil.rmtree(cls.data_dir)
 
 
 if __name__ == '__main__':

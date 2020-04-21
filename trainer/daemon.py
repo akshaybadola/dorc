@@ -475,8 +475,10 @@ sys.path.append("{self.data_dir}")
             exec(f"import {mod_name}", globals(), ldict)
             dataset = ldict[mod_name]
             if not hasattr(dataset, "dataset"):
-                return False, f"'dataset' not in {mod_name}"
+                del dataset, ldict
+                return False, f"variable 'dataset' not in {mod_name}"
             else:
+                del dataset, ldict
                 return True, f"Added dataset {mod_name}"
             # check for splits?
             # NOTE: Old code which checks for __len__ and __getitem__
@@ -494,12 +496,20 @@ sys.path.append("{self.data_dir}")
             # else:
             #     return True, f"Added dataset {mod_name}"
 
+    def _get_with_prefix(self, name, prefix):
+        name = name.lstrip("_")
+        return f"_{prefix}_" + name.lstrip(prefix).lstrip("_")
+
+    def _get_module_name(self, mod_name):
+        return self._get_with_prefix(mod_name, "module")
+
+    def _get_dataset_name(self, mod_name):
+        return self._get_with_prefix(mod_name, "dataset")
+
     def _load_dataset(self, task_id, data):
-        name = data["name"]
+        name = self._get_dataset_name(data["name"])
         desc = data["description"]
         dtype = data["type"]
-        if not name.endswith("_data"):
-            name = name + "_data"
         file_bytes = data["data_file"]
         data_dir = self.datasets_dir
         result = self._module_loader.add_named_module(data_dir, file_bytes, name)
@@ -519,9 +529,7 @@ sys.path.append("{self.data_dir}")
             self._error_and_put(task_id, False, f"Could not add dataset. {result}")
 
     def _load_module(self, task_id, data):
-        mod_name = data["name"]
-        if not mod_name.startswith("_module_"):
-            mod_name = "_module_" + mod_name
+        mod_name = self._get_module_name(data["name"])
         mod_file = data["data_file"]
         print("MODULE name", mod_name)
         mods_dir = self.modules_dir
@@ -1037,6 +1045,26 @@ sys.path.append("{self.data_dir}")
             task_id = self._get_task_id_launch_func(self._session_method_check, func_name, data)
             return _dump({"task_id": task_id, "message": f"{func_name.split('_')[0]}ing {data}"})
 
+    def stop(self):
+        # NOTE: clear the _fwd_ports_event
+        self._fwd_ports_event.clear()
+        self._logi("Waiting for the fwd_ports_thread to join")
+        self._fwd_ports_thread.join()
+        self._logi("Joined fwd_ports thread")
+        # NOTE: kill the fwd ports
+        self._logi("Killing fwd_procs")
+        for p in self.fwd_procs.values():
+            p.kill()
+        # NOTE: Unload the sessions
+        self._logi("Unloading sessions")
+        for k in self._sessions:
+            self._unload_session_helper(-1, k)
+        # NOTE: Kill the have_internet process if it exists
+        self._logi("Killing have_internet process")
+        if self._have_internet is not None:
+            self._have_internet.kill()
+        self._logi("Killed have_internet process")
+
     # NOTE: Main entry point for the server
     def start(self):
         # FIXME: Cache isn't used as of now
@@ -1378,33 +1406,35 @@ sys.path.append("{self.data_dir}")
             NOTE: Make sure that the imports are reloaded if there's an update
             NOTE: What if a function relied on some deleted module? It should
                   no longer work. Not sure how to handle that.
+            NOTE: Module names start with _module_ internally and the module name
+                  itself shouldn't start with _
             """
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
                 return _dump([False, "Name not in request or empty name"])
-            elif request.form["name"] not in self._modules:
-                return _dump([False, "No such module"])
             else:
-                try:
-                    mod_name = request.form["name"]
-                    self._modules.pop(mod_name)
-                    mods_dir = self.modules_dir
-                    if os.path.exists(os.path.join(mods_dir, mod_name)):
-                        if os.path.islink(os.path.join(mods_dir, mod_name)):
-                            os.unlink(os.path.join(mods_dir, mod_name))
-                        else:
-                            shutil.rmtree(os.path.join(mods_dir, mod_name))
-                        return _dump([True, f"Removed {mod_name}."])
-                    elif os.path.exists(os.path.join(mods_dir, mod_name + ".py")):
-                        if os.path.islink(os.path.join(mods_dir, mod_name)):
-                            os.unlink(os.path.join(mods_dir, mod_name + ".py"))
-                        else:
-                            os.remove(os.path.join(mods_dir, mod_name + ".py"))
-                        return _dump([True, "Removed {mod_name}."])
+                mod_name = self._get_module_name(request.form["name"])
+                if mod_name not in self._modules:
+                    return _dump([False, f"No such module {request.form['name']}"])
+            try:
+                self._modules.pop(mod_name)
+                mods_dir = self.modules_dir
+                if os.path.exists(os.path.join(mods_dir, mod_name)):
+                    if os.path.islink(os.path.join(mods_dir, mod_name)):
+                        os.unlink(os.path.join(mods_dir, mod_name))
                     else:
-                        return _dump([True, "Module {mod_name} was not on disk"])
-                except Exception as e:
-                    return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
+                        shutil.rmtree(os.path.join(mods_dir, mod_name))
+                    return _dump([True, f"Removed {mod_name}."])
+                elif os.path.exists(os.path.join(mods_dir, mod_name + ".py")):
+                    if os.path.islink(os.path.join(mods_dir, mod_name)):
+                        os.unlink(os.path.join(mods_dir, mod_name + ".py"))
+                    else:
+                        os.remove(os.path.join(mods_dir, mod_name + ".py"))
+                    return _dump([True, f"Removed {mod_name}."])
+                else:
+                    return _dump([True, f"Module {mod_name} was not on disk"])
+            except Exception as e:
+                return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
 
         @self.app.route("/list_datasets", methods=["GET"])
         @flask_login.login_required
@@ -1426,7 +1456,6 @@ sys.path.append("{self.data_dir}")
             Type of data should also be mentioned.
 
             """
-            import ipdb; ipdb.set_trace()
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
                 return _dump([False, "Name not in request or empty name"])
@@ -1439,7 +1468,7 @@ sys.path.append("{self.data_dir}")
             try:
                 data = {}
                 for x in ["name", "description", "type"]:
-                    data[x] = json.loads(request.form[x])
+                    data[x] = request.form[x]
                 file_bytes = request.files["file"].read()
             except Exception as e:
                 return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
@@ -1455,24 +1484,24 @@ sys.path.append("{self.data_dir}")
                                               and not len(request.form["name"])):
                 return _dump([False, "Name not in request or empty name"])
             else:
-                name = request.form["name"]
-                if not name.endswith("_data"):
-                    name = name + "_data"
+                name = self._get_dataset_name(request.form["name"])
                 if name not in self._datasets:
-                    return _dump([False, "No such dataset"])
-                try:
-                    self._datasets.pop(name)
-                    data_dir = self.datasets_dir
-                    if os.path.exists(os.path.join(data_dir, name)):
-                        shutil.rmtree(os.path.join(data_dir, name))
-                        return _dump([True, f"Removed {name}."])
-                    elif os.path.exists(os.path.join(data_dir, name + ".py")):
-                        os.remove(os.path.join(data_dir, name + ".py"))
-                        return _dump([True, f"Removed {name}."])
-                    else:
-                        return _dump([True, f"Dataset {name} was not on disk"])
-                except Exception as e:
-                    return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
+                    return _dump([False, f"No such dataset {request.form['name']}"])
+            try:
+                self._datasets.pop(name)
+                data_dir = self.datasets_dir
+                if os.path.exists(os.path.join(data_dir, name)):
+                    shutil.rmtree(os.path.join(data_dir, name))
+                    os.remove(os.path.join(data_dir, name) + ".json")
+                    return _dump([True, f"Removed {name}."])
+                elif os.path.exists(os.path.join(data_dir, name + ".py")):
+                    os.remove(os.path.join(data_dir, name + ".py"))
+                    os.remove(os.path.join(data_dir, name) + ".json")
+                    return _dump([True, f"Removed {name}."])
+                else:
+                    return _dump([True, f"Dataset {name} was not on disk"])
+            except Exception as e:
+                return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
 
         # @self.app.route("/fwd_ports", methods=["GET", "POST"])
         # @flask_login.login_required
@@ -1536,25 +1565,8 @@ sys.path.append("{self.data_dir}")
 
         @atexit.register
         def cleanup():
-            # NOTE: clear the _fwd_ports_event
-            self._fwd_ports_event.clear()
-            self._logi("Waiting for the fwd_ports_thread to join")
-            self._fwd_ports_thread.join()
-            self._logi("Joined fwd_ports thread")
-            # NOTE: kill the fwd ports
-            self._logi("Killing fwd_procs")
-            for p in self.fwd_procs.values():
-                p.kill()
-            # NOTE: Unload the sessions
-            self._logi("Unloading sessions")
-            for k in self._sessions:
-                self._unload_session_helper(-1, k)
-            # NOTE: Kill the have_internet process if it exists
-            self._logi("Killing have_internet process")
-            if self._have_internet is not None:
-                self._have_internet.kill()
-            self._logi("Killed have_internet process")
-
+            self.stop()
+            
         @self.app.route("/_shutdown", methods=["GET"])
         @flask_login.login_required
         def __shutdown_server():

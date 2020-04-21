@@ -49,9 +49,6 @@ class DaemonTest(unittest.TestCase):
                 self.assertIsInstance(v, dict)
                 self.assertFalse("process" in v)
 
-    # def test_load_unload_session(self):
-    #     pass
-
     @classmethod
     def terminate_live_sessions(cls):
         for s in cls.daemon._sessions.values():
@@ -62,16 +59,11 @@ class DaemonTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        cls.daemon._fwd_ports_thread.kill()
+        cls.daemon.stop()
         cls.terminate_live_sessions()
         if os.path.exists(cls.data_dir):
             shutil.rmtree(cls.data_dir)
-
-    # def test_purge_session(self):
-    #     pass
-
-    # def test_auth(self):
-    #     "auth is not yet available"
-    #     pass
 
 
 if __name__ == '__main__':

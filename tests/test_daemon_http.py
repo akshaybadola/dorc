@@ -23,7 +23,8 @@ class DaemonHTTPTest(unittest.TestCase):
         cls.host = "http://" + ":".join([cls.hostname, str(cls.port) + "/"])
         time.sleep(.5)
         cls.cookies = requests.request("POST", cls.host + "login",
-                                       data={"username": "admin", "password": "admin"}).cookies
+                                       data={"username": "admin",
+                                             "password": "AdminAdmin_33"}).cookies
 
     # def test_daemon_started(self):
     #     response = requests.request("GET", self.host)
@@ -128,6 +129,7 @@ class DaemonHTTPTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        cls.daemon._fwd_ports_thread.kill()
         cls.shutdown_daemon(cls.host)
         if os.path.exists(cls.data_dir):
             shutil.rmtree(cls.data_dir)

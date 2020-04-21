@@ -95,7 +95,7 @@ module_exports = {"A": A, "B": B, "f": f, "g": g}
                                                       "module_exports")
 
     def test_add_config(self):
-        with open("_setup.py", "rb") as f:
+        with open("_setup_local.py", "rb") as f:
             meh = f.read()
         status, result = self._modules._load_python_file(meh, [], "_meh.py",
                                                          "from _meh import config",
@@ -178,7 +178,7 @@ module_exports = {"cls": A, "f": func}
         os.mkdir(os.path.join(mods_dir, "temp_mod"))
         for fname in self.fnames.values():
             shutil.copy(fname, os.path.join(mods_dir, "temp_mod"))
-        modules = self._modules.read_modules_from_dir(mods_dir)
+        modules = self._modules.read_modules_from_dir(mods_dir, excludes=[])
         print(modules)
         self.assertTrue("temp_mod" in modules)
         self.assertTrue("test_symbols" in modules)

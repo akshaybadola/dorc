@@ -69,6 +69,13 @@ def check_ssh_port(host, port):
     while True:
         print(f"Checking port {port}")
         out, err = b"", b""
+        ip_addr = host.split("@")[1]
+        p = Popen(shlex.split(f"nc -z -v {ip_addr} 22"), shell=True, stdout=PIPE, stderr=PIPE)
+        try:
+            out, err = p.communicate(timeout=timeout)
+        except TimeoutExpired:
+            port = "UNREACHABLE"
+            break
         p = Popen(shlex.split(f"ssh -R {port}:localhost:20202 {host} hostname"),
                   stdout=PIPE, stderr=PIPE)
         try:
@@ -130,6 +137,10 @@ def register_with_tracker(tracker, host, port):
                                     json={"put": True,
                                           "hostname": host,
                                           "port": port}).content
+            status = True
+        except requests.ConnectionError as e:
+            print(f"Connection refused from server")
+            resp = None
             status = True
         except Exception as e:
             print(f"Register request at port {fwd_port} with {tracker} failed {e}. Trying again")
@@ -289,26 +300,6 @@ sys.path.append("{self.data_dir}")
             else:
                 time.sleep(60)
 
-    # def _fwd_ports(self, hosts=[]):
-    #     # NOTE: Authenticate only if not droid
-    #     #       Commenting as have_internet already runs
-    #     # if "droid" not in get_hostname().lower():
-    #     #     run('curl -L -k -d username="15mcpc15" -d password="unmission@123"' +
-    #     #         ' -d mode=191 http://192.168.56.2:8090/login.xml', shell=True,
-    #     #         stdout=PIPE, stderr=PIPE)
-    #     if self.daemon_name is not None:
-    #         if not hosts:
-    #             hosts = self.fwd_hosts
-    #         for host in hosts:
-    #             self._logi(f"Finding ssh port for {host}")
-    #             self.fwd_ports[host] = port = check_ssh_port(host, self.fwd_port_start)
-    #             if host in self.fwd_procs:
-    #                 self.fwd_procs[host].kill()
-    #             self.fwd_procs[host] = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {host}"),
-    #                                          stdout=PIPE, stderr=PIPE)
-    #             resp = register_with_tracker(host, self.daemon_name, port)
-    #             self._logi(f"Forwarded port {port} to {host}. Response is {resp}")
-
     # FIXME: This thing will start in a thread and if this is available to call
     #        from an endpoint then there could be race conditions
     def _check_and_register_with_trackers(self, trackers=[]):
@@ -322,6 +313,8 @@ sys.path.append("{self.data_dir}")
             daemon_name = self.daemon_name
 
         def _check_fwd_port(host, port):
+            if port == "UNREACHABLE":
+                return False
             try:
                 self._logd(f"Checking {host}:{port}")
                 p = Popen(shlex.split(f"ssh {host} \"curl http://localhost:{port}/_name\""),
@@ -340,14 +333,18 @@ sys.path.append("{self.data_dir}")
             if host in self.fwd_procs:
                 self.fwd_procs[host].kill()
             self.fwd_ports[host] = port = check_ssh_port(host, self.fwd_port_start)
-            self.fwd_procs[host] = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {host}"),
-                                         stdout=PIPE, stderr=PIPE)
+            if port != "UNREACHABLE":
+                self.fwd_procs[host] = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {host}"),
+                                             stdout=PIPE, stderr=PIPE)
             return port
 
         def _register(host, daemon_name, port):
             resp = register_with_tracker(tracker, daemon_name, port)
-            self._logi(f"Forwarded port {port}, with name {daemon_name} to {tracker}." +
-                       f"Response is {resp}")
+            if resp is not None:
+                self._logi(f"Forwarded port {port}, with name {daemon_name} to {tracker}." +
+                           f"Response is {resp}")
+            else:
+                self._loge(f"Connection error from {daemon_name}. Could not forward port")
 
         if not trackers:
             trackers = [*self.fwd_hosts]
@@ -359,20 +356,25 @@ sys.path.append("{self.data_dir}")
             for tracker in trackers:
                 if tracker in self.fwd_ports:
                     port = self.fwd_ports[tracker]
-                    if _check_fwd_port(tracker, port):
-                        resp = register_with_tracker(tracker, daemon_name, port)
-                        self._logi(f"Port {port} is working fine. Registered with {tracker}." +
-                                   f"Response is {resp}")
+                    if port == "UNREACHABLE":
+                        # NOTE: Skip if unreachable
+                        continue
+                    elif _check_fwd_port(tracker, port):
+                        _register(tracker, daemon_name, port)
                     else:
                         self._logi(f"Bad port {port}, with {daemon_name} to {tracker}.")
                         new_port = _fwd_port(tracker)
-                        _register(tracker, daemon_name, new_port)
+                        if new_port == "UNREACHABLE":
+                            continue
+                        else:
+                            _register(tracker, daemon_name, new_port)
                 else:
                     print(f"Finding new port for {tracker}")
                     port = _fwd_port(tracker)
-                    resp = register_with_tracker(tracker, daemon_name, port)
-                    self._logi(f"Forwarded port {port}, with name {daemon_name} to {tracker}." +
-                               f"Response is {resp}")
+                    if port == "UNREACHABLE":
+                        continue
+                    else:
+                        _register(tracker, daemon_name, port)
 
     def _init_context(self):
         self.api_crt = "res/server.crt"

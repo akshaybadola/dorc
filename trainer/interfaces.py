@@ -2,7 +2,6 @@ from typing import Dict, Iterable, Union
 import os
 import sys
 import ssl
-import copy
 import glob
 import json
 import atexit
@@ -135,7 +134,7 @@ class FlaskInterface:
                 sys.path.remove(self.data_dir)
             else:
                 from session_config import config
-            self._orig_config = copy.deepcopy(config)
+            self._orig_config = json.loads(_dump(config))  # self._orig_config is now serializable
             overrides_file = os.path.join(self.data_dir, "config_overrides.json")
             if self.config_overrides is not None:
                 self._logd(f"Config Overrides given: \n{self.config_overrides}" +

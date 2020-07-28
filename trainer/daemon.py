@@ -70,7 +70,7 @@ def check_ssh_port(host, port):
         print(f"Checking port {port}")
         out, err = b"", b""
         ip_addr = host.split("@")[1]
-        p = Popen(shlex.split(f"nc -z -v {ip_addr} 22"), shell=True, stdout=PIPE, stderr=PIPE)
+        p = Popen(f"nc -z -v {ip_addr} 22", shell=True, stdout=PIPE, stderr=PIPE)
         try:
             out, err = p.communicate(timeout=timeout)
         except TimeoutExpired:
@@ -1050,7 +1050,7 @@ sys.path.append("{self.data_dir}")
     def stop(self):
         # NOTE: clear the _fwd_ports_event
         self._fwd_ports_event.clear()
-        self._logi("Waiting for the fwd_ports_thread to join")
+        self._logi("Waiting for the fwd_ports_thread to join. Can take upto 60 seconds")
         self._fwd_ports_thread.join()
         self._logi("Joined fwd_ports thread")
         # NOTE: kill the fwd ports
@@ -1568,7 +1568,7 @@ sys.path.append("{self.data_dir}")
         @atexit.register
         def cleanup():
             self.stop()
-            
+
         @self.app.route("/_shutdown", methods=["GET"])
         @flask_login.login_required
         def __shutdown_server():

@@ -177,7 +177,8 @@ class Connector:
             connect_port = 22
             client.connect(remote_host, connect_port, username=user,
                            key_filename=os.path.expanduser("~/.ssh/id_rsa"))
-            cmd = 'curl -H "Content-Type: application/json" --data \'{"get": true}\' localhost:11111'
+            cmd = 'curl -H "Content-Type: application/json"\
+            --data \'{"get": true}\' localhost:11111'
             stdin, stdout, stderr = client.exec_command(cmd)
             lines = [*stdout]
             client.close()

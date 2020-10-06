@@ -1497,7 +1497,7 @@ class Trainer:
         #                                        " is not suited to process data")}
         elif params["num_or_fraction"] <= 0:
             return False, self._loge(f"Incorrect fraction or number of points" +
-                                     " {params['num_or_fraction']}")
+                                     f" {params['num_or_fraction']}")
         elif params["device"] not in {"gpu", "cpu"}:
             return False, self._loge(f"Incorrect device given {params['device']}")
         elif params["data"] not in {"train", "val", "test"}:
@@ -1599,7 +1599,8 @@ class Trainer:
                 optim_name = self._model_defs[model_name]["optimizer"]
                 optimizers[model_name] = {"name": optim_name,
                                           "optimizer": self._optimizer_params
-                                          [optim_name]["function"](models[model_name].parameters(),
+                                          [optim_name]["function"](
+                                              models[model_name].parameters(),
                                               **self._optimizer_params[optim_name]["params"])}
                 devices[model_name] = self._device
                 # CHECK: This may not actually be needed

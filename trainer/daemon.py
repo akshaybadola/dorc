@@ -139,7 +139,7 @@ def register_with_tracker(tracker, host, port):
                                           "port": port}).content
             status = True
         except requests.ConnectionError as e:
-            print(f"Connection refused from server")
+            print(f"Connection refused from server {e}")
             resp = None
             status = True
         except Exception as e:
@@ -974,7 +974,7 @@ sys.path.append("{self.data_dir}")
                 self._loge("Cannot copy saves right now")
             self._logd("Cloned session successfully")
         else:
-            self._logd("Failed to clone with task_id {task_id}")
+            self._logd(f"Failed to clone with task_id {task_id}")
 
     @session_method
     def _reinit_session_helper(self, task_id, name, time_str, data=None):
@@ -1001,7 +1001,7 @@ sys.path.append("{self.data_dir}")
                 self._sessions[name]["sessions"][time_str]["state"] = json.load(f)
             self._logd("Reinitialized session successfully")
         else:
-            self._logd("Failed to reinitialize with task_id {task_id}")
+            self._logd(f"Failed to reinitialize with task_id {task_id}")
 
     def _session_method_check(self, task_id, func_name, data):
         """Calls the appropriate helper based on the url route"""

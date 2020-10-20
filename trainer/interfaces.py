@@ -224,6 +224,11 @@ class FlaskInterface:
             return Response(response, status=500, mimetype='application/json')
 
     def trainer_post(self, func_name):
+        """Helper function to conduct standard checks for a POST request.  After the
+           checks the function `func_name` from :class:`Trainer` is invoked and
+           returned as json.
+
+        """
         if hasattr(request, "json"):
             data = request.json
             status, response = getattr(self.trainer, func_name)(data)
@@ -281,9 +286,33 @@ class FlaskInterface:
                                        controls=self.trainer.controls,
                                        mobile=mobile)
 
+        @self.app.route('/_ping')
+        def __ping():
+            return "pong"
+
         @self.app.route('/props')
         def __props():
             return _dump(self.trainer.props)
+
+        @self.app.route('/docs')
+        def __docs():
+            return _dump(self.trainer.docs())
+
+        @self.app.route("/batch_props", methods=["POST"])
+        def __batch_props():
+            print(f"{request.json}, {request.data}, {request.form}")
+            if hasattr(request, "json"):
+                props = request.json
+                if not props or "props_list" not in props:
+                    return _dump({"error": "Need dict with key \"props_list\""})
+                try:
+                    result = [True, dict(map(lambda x: (x, self.trainer_props(x)), props["props_list"]))]
+                except Exception as e:
+                    result = [False, f"Error occured {e}"]
+                response = _dump(result)
+            else:
+                response = _dump([False, f"Error: No data given"])
+            return Response(response, status=200, mimetype='application/json')
 
         @self.app.route("/_shutdown", methods=["GET"])
         def __shutdown_server():
@@ -378,7 +407,7 @@ class FlaskInterface:
         def __update_restart():
             return _dump("Does nothing for now")
 
-        # NOTE: Props
+        # NOTE: Add rule for each property `prop` of `Trainer`"
         for x in self.trainer.props:
             self.app.add_url_rule("/" + "props/" + x, x, partial(self.trainer_props, x))
 
@@ -386,24 +415,24 @@ class FlaskInterface:
         for x, y in self.trainer.controls.items():
             self.app.add_url_rule("/" + x, x, partial(self.trainer_control, x))
 
-        # NOTE: Adding extras
-        for x, y in self.trainer._extras.items():
+        # NOTE: Adding helpers
+        for x, y in self.trainer.methods.items():
+            http_methods = []
+            if "POST" in y.__http_methods__:
+                http_methods.append("POST")
             if "GET" in y.__http_methods__:
-                self.app.add_url_rule("/_extras/" + x, x, partial(self.trainer_get, x),
+                http_methods.append("GET")
+            self.app.add_url_rule("/methods/" + x, x, partial(self.trainer_route, x),
+                                  methods=http_methods)
+
+        # NOTE: Adding extras
+        for x, y in self.trainer.extras.items():
+            if "GET" in y.__http_methods__:
+                self.app.add_url_rule("/extras/" + x, x, partial(self.trainer_get, x),
                                       methods=["GET"])
             elif "POST" in y.__http_methods__:
-                self.app.add_url_rule("/_extras/" + x, x, partial(self.trainer_post, x),
+                self.app.add_url_rule("/extras/" + x, x, partial(self.trainer_post, x),
                                       methods=["POST"])
-
-        # NOTE: Adding helpers
-        for x, y in self.trainer._helpers.items():
-            methods = []
-            if "POST" in y.__http_methods__:
-                methods.append("POST")
-            if "GET" in y.__http_methods__:
-                methods.append("GET")
-            self.app.add_url_rule("/_helpers/" + x, x, partial(self.trainer_route, x),
-                                  methods=methods)
 
         for x, y in self.trainer._internals.items():
             self.app.add_url_rule("/_internals/" + x, x, partial(self.trainer_internals, x),

@@ -35,7 +35,7 @@ from .version import __trainer__version__
 control = Tag("control")
 prop = Tag("prop")
 extras = Tag("extras")
-helpers = Tag("helpers")
+methods = Tag("methods")
 internals = Tag("internals")
 
 
@@ -210,8 +210,8 @@ class Trainer:
     def _check_exports(self):
         """Checks the API as exported endpoints.
 
-        All the properties not beginning with _ are exported except _extras and
-        _helpers.
+        All the properties not beginning with _ are exported except extras and
+        methods.
 
         Controls and other export checks are to be added.
 
@@ -346,8 +346,8 @@ class Trainer:
         # Other exposed API
         self.__props.add("props")
         self.__props.add("controls")
-        self.__props.add("_helpers")
-        self.__props.add("_extras")
+        self.__props.add("methods")
+        self.__props.add("extras")
 
         self._logi("Initializing State Variables")
 
@@ -1674,8 +1674,9 @@ class Trainer:
 
     # START: Helpers
     @POST
-    @helpers
+    @methods
     def set_model(self, model_name):
+        """Set one of the available models as current active model"""
         return self._set_model_active(model_name)
 
     def _set_model_active(self, model_name):
@@ -1700,9 +1701,9 @@ class Trainer:
             return True, self._logd(f"Model {model_name} is now the current active model.")
 
     @POST
-    @helpers
+    @methods
     def fetch_preds(self, img_path):
-        """Fetch the prediction for a given image. Returns predictions
+        """Fetch the prediction for a given image. Returns predictions (captions)
 
         :param img_path: Image Path
         :returns: preds: {"beam_preds": beam_preds, "greedy_preds": greedy_preds}
@@ -1767,7 +1768,7 @@ class Trainer:
             # Assuming predictions exist already somewhere in the report
 
     @POST
-    @helpers
+    @methods
     def fetch_image(self, img_path):
         """Fetch the image from a given path.
         """
@@ -1784,9 +1785,9 @@ class Trainer:
                 return True, base64.b64encode(img_file.read()).decode("utf-8")
 
     @POST
-    @helpers
+    @methods
     def load_image(self, request):
-        """Load an image from the given data.
+        """Load an image from the given data and call given functions on it.
         """
         try:
             img_file = request.files["file"].read()
@@ -1811,7 +1812,7 @@ class Trainer:
             return False, self._loge("Data is not image")
 
     @POST
-    @helpers
+    @methods
     def load_weights(self, request):
         if "model_names" not in request.form:
             return False, self._logd(f"Model name not sent in data")
@@ -1837,7 +1838,7 @@ class Trainer:
                                      f"\n{traceback.format_exc()}")
 
     @POST
-    @helpers
+    @methods
     def hack_param(self, data):
         """Update a param as a hack. Data is assumed to be a pair of `{key, [type, value]}`
         dictionary."""
@@ -1877,12 +1878,12 @@ class Trainer:
             return False, "None of the values could be updated."
 
     @POST
-    @helpers
+    @methods
     def add_user_funcs(self, request):
         return self._mods.add_user_funcs(request, self._user_funcs)
 
     @POST
-    @helpers
+    @methods
     def add_model(self, request):
         """Add a model from a given python or module as a zip file.
         Delegates the request to :meth:`Trainer.add_module`
@@ -1998,7 +1999,7 @@ class Trainer:
         return True, models
 
     @POST
-    @helpers
+    @methods
     def add_module(self, request, checks):
         return self._mods.add_module(request, checks)
     # END: Helpers
@@ -2494,19 +2495,24 @@ class Trainer:
     # START: Properties
     @property
     def version(self):
+        "Version of the server"
         return self.__version__
 
     @property
     @deprecated
     def unique_id(self):
+        "DEPRECATED: Unique id to refer to the trainer. It's replaced with the timestamp"
         return self._unique_id
 
     @property
     def current_state(self):
+        "Current global state of the state machine"
         return self._current_state
 
     @property
     def loop_type(self):
+        """Loop type determines if the training monitor number of epochs or number of batches.
+        """
         if "iterations" in self._trainer_params["training_steps"]:
             return "iterations"
         else:
@@ -2514,45 +2520,64 @@ class Trainer:
 
     @property
     def logger(self):
+        "Current :class:`logging.Logger` instance"
         return self._logger
 
     @property
     def logfile(self):
+        "Logfile contents"
         return open(self._logfile).read()
 
     @property
     def saves(self):
+        "A list of all the files in the Saves directory"
         return os.listdir(self._savedir)
 
     @property
     def gpus(self):
+        "List of GPUs if avaiable on the system.  Returns [-1] if no available"
         return self._gpus
 
     @property
     def system_info(self):
+        "System Info: cpu_util, mem_util, gpu_util"
         return {"gpu_util": gpu_util(self._device_handles) if self._gpus[0] != -1 else None,
                 "cpu_info": cpu_info(),
                 "memory": memory_info()}
 
     @property
     def device(self):
+        """The device where the model is loaded. cpu or cuda_[indx]"""
         return self._device
 
     # FIXME: self.models creates problems
     @property
     def models(self):
+        "Return the names of the models available with the server"
         return self._models.names
 
     @property
     def train_step_func(self):
+        """The Training Step is a partial function of the `training_step` function, the
+        models and the criteria given to the server
+
+        """
         return partial(self._train_step_func, self._models, self.criteria)
 
     @property
     def val_step_func(self):
+        """The Validation Step is a partial function of the `validation_step` function,
+        the models and the criteria given to the server
+
+        """
         return partial(self._val_step_func, self._models, self.criteria)
 
     @property
     def test_step_func(self):
+        """The Test Step is a partial function of the `test_step` function,
+        the models and the criteria given to the server
+
+        """
         return partial(self._val_step_func, self._models, self.criteria)
 
     @property
@@ -2565,13 +2590,17 @@ class Trainer:
     # exclude properties beginning with _
     @property
     def props(self):
+        """Return all properties of the instance including `extras` and `methods`
+        except hidden properties
+        """
         return [x for x, y in self.__class__.__dict__.items()
                 if isinstance(y, property) and
                 x != "props" and
-                (x in {"_extras", "_helpers"} or not x.startswith("_"))]
+                (x in {"extras", "methods"} or not x.startswith("_"))]
 
     @property
     def epoch(self):
+        "Current Epoch to train, if training type is epoch. See `loop_type`"
         return self._epoch
 
     @epoch.setter
@@ -2580,10 +2609,12 @@ class Trainer:
 
     @property
     def max_epochs(self):
+        "Max Epochs to train, if training type is epoch. See `loop_type`"
         return self._max_epochs
 
     @property
     def iterations(self):
+        "Current iteration if training type is iterations. See `loop_type`"
         return self._iterations
 
     @iterations.setter
@@ -2592,39 +2623,55 @@ class Trainer:
 
     @property
     def max_iterations(self):
+        "Max iterations to run if training type is iterations. See `loop_type`"
         return self._max_iterations
 
     @property
     def controls(self):
-        """Which of the functions can be accessed via the API
+        """Controls are primary functions through which training is controlled. They
+        affect the main training loop and other functions can be run either in
+        parallel or while the main loop is paused.
 
-        :returns: API exports
-        :rtype: list
-
+        :rtype: `dict`
         """
-        # return dict((x, self.__getattribute__(x)) for x in self._controls)
         return dict((x.__name__, x) for x in control.members)
 
     @property
-    def _helpers(self):
-        return dict((x.__name__, x) for x in helpers.members)
+    def methods(self):
+        """Trainer methods are additional methods besides the controls to manage and
+        modify the training session.  Containing such functions which upload
+        weights to the server, load previous saves, add/set a model or view
+        predictions after pausing the trainer.
+
+        """
+        return dict((x.__name__, x) for x in methods.members)
 
     @property
     def _internals(self):
+        """Internals are diagnostic tools to examine the state of the
+        training. Currently only has one function: `_dump_state`."""
         return dict((x.__name__, x) for x in internals.members)
 
     @property
-    def _extras(self):
+    def extras(self):
+        """Extras are experimental methods whose execution is more complicated and
+        should be used with caution. They include calling an pausing and
+        evaluating any combination of train/val/test data on current or any
+        previous state, running an arbitrary user given function on the data, etc.
+
+        """
         return dict((x.__name__, x) for x in extras.members)
 
     # START: State props
     @property
     def running(self):
+        "Is the current loop running?"
         return self._running_event.is_set()
 
     @property
     @deprecated
     def current_run(self):
+        "Which loop is the current loop? Can be one of [adhoc, user, main]"
         if "_epoch_runner" not in self.__dict__:
             return "None"
         else:
@@ -2632,6 +2679,7 @@ class Trainer:
 
     @property
     def paused(self):
+        "Is the current loop paused?"
         loop = self.current_state.split("_")[0]
         if loop == "main":
             return not self._running_event.is_set()
@@ -2656,6 +2704,7 @@ class Trainer:
 
     @property
     def adhoc_paused(self):
+        "Is the adhoc loop paused?"
         return not self._adhoc_running_event.is_set()
 
     # Are adhoc_aborted and userfunc_aborted needed?
@@ -2663,19 +2712,23 @@ class Trainer:
     # "current_loop". current_loop therefore only applies to [train, val, test]
     @property
     def adhoc_aborted(self):
+        "Was the adhoc loop aborted?"
         return self._adhoc_aborted_event.is_set()
 
     @property
     def userfunc_paused(self):
+        "Is a given userfunc paused?"
         return not self._userfunc_running_event.is_set()
 
     @property
     def userfunc_aborted(self):
+        "Was a given userfunc aborted?"
         return self._userfunc_aborted_event.is_set()
     # END: State props
 
     @property
     def best_save(self):
+        """The path of the best save recorded. Probably should not be available to the client"""
         if not os.path.exists(self._savedir) or not os.listdir(self._savedir):
             return None
         else:
@@ -2725,6 +2778,8 @@ class Trainer:
     # TODO: Allow extra_metrics, update_funcs and any other params to be updated
     @property
     def updatable_params(self):
+        """All the parameters which can be updated by the user midway. We segregate them
+        into [model_params, trainer_params, dataloader_params]"""
         params = {}
         params["model_params"] = self._model_params
         params["trainer_params"] = self._trainer_params
@@ -2733,6 +2788,9 @@ class Trainer:
 
     @property
     def all_params(self):
+        """All params is the entire config which can be serialized as JSON. It contains
+        [epoch, iterations, model_params, criteria_params, dataloader_params,
+        trainer_params, metrics]"""
         save_state = {}
         save_state["epoch"] = self.epoch
         save_state["iterations"] = self._iterations
@@ -2748,17 +2806,22 @@ class Trainer:
 
     @property
     def all_attrs(self):
+        """Full __dict__ serialized as json. The parts which can't be serialized are
+        left out."""
         return self.__dict__
 
     # TODO: What about other losses
     #       `prop` can help
     @property
     def train_losses(self):
+        """History of training losses"""
         return dict((k, v) for k, v in self._metrics["train"].items()
                     if k[0] == "loss")
 
     @property
     def progress(self):
+        """Progress returns the number of steps and max steps of training (whether
+        epochs or iterations) and also the round of current batch being processed"""
         predicate = "iterations" in self._trainer_params["training_steps"]
         cur_step = self.iterations / self._hooks_run_iter_frequency\
             if predicate else self.epoch
@@ -2772,10 +2835,13 @@ class Trainer:
     # FIXME: self.user_funcs MAY create problems
     @property
     def user_funcs(self):
+        """Names of all the functions uploaded by the user"""
         return [x for x in self._user_funcs]
 
     @property
     def _current_user_func(self):
+        """User function currently active. This function will be run if `run_user_func`
+        is called."""
         if self._current_user_func_name and\
            self._current_user_func_params:
             return partial(self._user_funcs[self._current_user_func_name],
@@ -2785,17 +2851,22 @@ class Trainer:
 
     @property
     def metrics(self):
+        "All the metrics used for evaluation"
         return self._metrics
 
     # TODO: Define what is a sample correctly
     @property
     def val_samples(self):
+        """Metrics for model output if run on a small (possibly random) subset of
+        validation data."""
         return dict((k, v) for k, v in self._metrics["val"].items()
                     if k[0] == "sample")
 
     # NOTE: Not sure if I want to use dir(self)
     @property
     def all_post_epoch_hooks(self):
+        """All the post epoch hooks present. All of them may not be called. See
+        `post_epoch_hooks_before`."""
         dict_a = dict((x, y) for (x, y) in self.__class__.__dict__.items()
                       if x.endswith("post_epoch_hook") and
                       callable(y) and
@@ -2810,12 +2881,21 @@ class Trainer:
 
     @property
     def post_epoch_hooks_to_run(self):
+        """All the post epoch hooks which will be called at the end of an epoch."""
         return self._post_epoch_hooks_to_run
 
     @property
     def items_to_log_dict(self):
         """Which of the items will be logged."""
         return self._items_to_log_dict
+
+    def docs(self):
+        """Return all doc strings which are available for any functionality in the
+        server. Currently only returns for `props`.
+
+        """
+        return {"props": {x: self.__class__.__dict__[x].__doc__ for x in self.props}}
+
     # END: Properties
 
     # START: Broken funcs

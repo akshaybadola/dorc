@@ -150,15 +150,27 @@ def register_with_tracker(tracker, host, port):
     return resp
 
 
+def create_module(module_dir, module_files=[]):
+    if not os.path.exists(module_dir):
+        os.mkdir(module_dir)
+    if not os.path.exists(os.path.join(module_dir, "__init__.py")):
+        with open(os.path.join(module_dir, "__init__.py"), "w") as f:
+            f.write("")
+    for f in module_files:
+        shutil.copy(f, module_dir)
+
+
 class Daemon:
     __version__ = __daemon__version__
 
     def __init__(self, hostname, port, data_dir, production=False,
-                 template_dir=None, static_dir=None, root_dir=None, daemon_name=None):
+                 template_dir=None, static_dir=None, root_dir=None,
+                 daemon_name=None, register=True):
         self.ctx = mp.get_context("spawn")
         self.hostname = hostname
         self.port = port
         self.daemon_name = daemon_name
+        self.register = register
         # NOTE: fwd_hosts and fwd_ports are hard coded
         self.fwd_port_start = 8181    # starts with 8181
         if "droid" in get_hostname().lower():
@@ -184,25 +196,17 @@ class Daemon:
         # FIXME: Code duplication here
         # NOTE: init modules_dir
         self.modules_dir = os.path.join(self.data_dir, "global_modules")
-        if not os.path.exists(self.modules_dir):
-            os.mkdir(self.modules_dir)
-        if not os.path.exists(os.path.join(self.modules_dir, "__init__.py")):
-            with open(os.path.join(self.modules_dir, "__init__.py"), "w") as f:
-                f.write("")
-        shutil.copy(os.path.join(os.path.dirname(__file__), "autoloads.py"),
-                    self.modules_dir)
+        create_module(self.modules_dir,
+                      [os.path.join(os.path.dirname(__file__), "autoloads.py")])
+        # NOTE: Append data_dir path
         self.env_str = f"""
 import sys
 sys.path.append("{self.data_dir}")
 """
         # NOTE: init datasets_dir
         self.datasets_dir = os.path.join(self.data_dir, "global_datasets")
-        if not os.path.exists(self.datasets_dir):
-            os.mkdir(self.datasets_dir)
-        if not os.path.exists(os.path.join(self.datasets_dir, "__init__.py")):
-            with open(os.path.join(self.datasets_dir, "__init__.py"), "w") as f:
-                f.write("")
-        # NOTE: Set exclude_dirs
+        create_module(self.datasets_dir)
+        # NOTE: Set exclude_dirs, dirs not to scan for sessions
         self._exclude_dirs = [*map(os.path.basename,
                                    [self.modules_dir, self.datasets_dir,
                                     self.tmp_dir])]
@@ -282,12 +286,18 @@ sys.path.append("{self.data_dir}")
             self._users = {"admin": User(0, "admin"),
                            "joe": User(1, "joe")}
         self._passwords = lambda x: __inti__(x)     # {"admin": "admin", "joe": "admin"}
-        self.fwd_ports = {}
-        self.fwd_procs = {}
-        self._fwd_ports_event = mp.Event()
-        self._fwd_ports_event.set()
-        self._fwd_ports_thread = mp.Process(target=self._fwd_ports_func)
-        self._fwd_ports_thread.start()
+        self._fwd_ports_event = None
+        self._fwd_ports_thread = None
+        self._fwd_procs = None
+        if self.register:
+            self.fwd_ports = {}
+            self._fwd_procs = {}
+            self._fwd_ports_event = mp.Event()
+            self._fwd_ports_event.set()
+            self._fwd_ports_thread = mp.Process(target=self._fwd_ports_func)
+            self._fwd_ports_thread.start()
+        else:
+            print(f"Not registering with trackers")
         # self._fwd_ports()
 
     def _fwd_ports_func(self):
@@ -330,11 +340,11 @@ sys.path.append("{self.data_dir}")
                 return False
 
         def _fwd_port(host):
-            if host in self.fwd_procs:
-                self.fwd_procs[host].kill()
+            if host in self._fwd_procs:
+                self._fwd_procs[host].kill()
             self.fwd_ports[host] = port = check_ssh_port(host, self.fwd_port_start)
             if port != "UNREACHABLE":
-                self.fwd_procs[host] = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {host}"),
+                self._fwd_procs[host] = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {host}"),
                                              stdout=PIPE, stderr=PIPE)
             return port
 
@@ -723,6 +733,18 @@ sys.path.append("{self.data_dir}")
         else:
             return True
 
+    def _session_alive_p(self, session_name: str, timestamp: str) -> bool:
+        "Check if a given session is still alive"
+        status = self._check_session_valid(session_name, timestamp)
+        if not status[0]:
+            return status
+        else:
+            retcode = self._sessions[session_name]["sessions"][timestamp]["process"].poll()
+            if retcode is None:
+                return True, True
+            else:
+                return False, retcode
+
     def _check_session_valid(self, session_name, timestamp):
         if session_name not in self._sessions:
             return False, f"Unknown session, {session_name}"
@@ -751,7 +773,7 @@ sys.path.append("{self.data_dir}")
                 retval[key]["port"] = session["port"] if retval[key]["loaded"] else None
                 retval[key]["state"] = session["state"]
                 retval[key]["finished"] = self._session_finished_p(session["state"])
-        return _dump(retval)
+        return retval
 
     def _check_username_password(self, data):
         if (data["username"] in self._users):
@@ -1049,14 +1071,17 @@ sys.path.append("{self.data_dir}")
 
     def stop(self):
         # NOTE: clear the _fwd_ports_event
-        self._fwd_ports_event.clear()
-        self._logi("Waiting for the fwd_ports_thread to join. Can take upto 60 seconds")
-        self._fwd_ports_thread.join()
-        self._logi("Joined fwd_ports thread")
+        if self._fwd_ports_event is not None:
+            self._fwd_ports_event.clear()
+            self._logi("Waiting for the fwd_ports_thread to join. Can take upto 60 seconds")
+        if self._fwd_ports_thread is not None:
+            self._fwd_ports_thread.join()
+            self._logi("Joined fwd_ports thread")
         # NOTE: kill the fwd ports
-        self._logi("Killing fwd_procs")
-        for p in self.fwd_procs.values():
-            p.kill()
+        if self._fwd_procs is not None:
+            self._logi("Killing fwd_procs")
+            for p in self._fwd_procs.values():
+                p.kill()
         # NOTE: Unload the sessions
         self._logi("Unloading sessions")
         for k in self._sessions:
@@ -1128,48 +1153,78 @@ sys.path.append("{self.data_dir}")
         @self.app.route("/trainer/<int:port>/<endpoint>", methods=["GET", "POST"])
         @flask_login.login_required
         def __trainer(port=None, endpoint=None):
-            _json = _data = _files = None
-            if request.json:
-                _json = request.json if isinstance(request.json, dict) else json.loads(request.json)
-            if request.form:
-                _data = dict(request.form)
-            if request.files:
-                _files = request.files
-            response = requests.request(request.method, f"http://localhost:{port}/{endpoint}",
-                                        files=_files, json=_json, data=_data)
-            excluded_headers = ["content-encoding", "content-length",
-                                "transfer-encoding", "connection"]
-            headers = [(name, value) for (name, value) in response.raw.headers.items()
-                       if name.lower() not in excluded_headers]
-            response = Response(response.content, response.status_code, headers)
-            return response
+            for k in self._sessions:
+                for ts in self._sessions[k]["sessions"]:
+                    if self._sessions[k]["sessions"][ts]["port"] == port and\
+                       self._sessions[k]["sessions"][ts]["process"].poll() is not None:
+                        return _dump([False, "Trainer is dead"])
+            try:
+                print(f"{request.json}, {request.data}, {request.form}")
+                _json = _data = _files = None
+                if request.json:
+                    _json = request.json if isinstance(request.json, dict)\
+                        else json.loads(request.json)
+                if request.form:
+                    _data = dict(request.form)
+                if request.files:
+                    _files = request.files
+                response = requests.request(request.method, f"http://localhost:{port}/{endpoint}",
+                                            files=_files, json=_json, data=_data)
+                excluded_headers = ["content-encoding", "content-length",
+                                    "transfer-encoding", "connection"]
+                headers = [(name, value) for (name, value) in response.raw.headers.items()
+                           if name.lower() not in excluded_headers]
+                response = Response(response.content, response.status_code, headers)
+                return response
+            except Exception as e:
+                return Response(_dump([False, f"Error occured {e}"]))
 
         @self.app.route("/trainer/<int:port>/<category>/<endpoint>", methods=["GET", "POST"])
         @flask_login.login_required
         def __trainer_one(port=None, category=None, endpoint=None):
-            _json = _data = _files = None
-            if request.json:
-                _json = request.json if isinstance(request.json, dict) else json.loads(request.json)
-            if request.form:
-                _data = dict(request.form)
-            if request.files:
-                _files = request.files
-            response = requests.request(request.method,
-                                        f"http://localhost:{port}/{category}/{endpoint}",
-                                        files=_files, json=_json, data=_data)
-            excluded_headers = ["content-encoding", "content-length",
-                                "transfer-encoding", "connection"]
-            headers = [(name, value) for (name, value) in response.raw.headers.items()
-                       if name.lower() not in excluded_headers]
-            response = Response(response.content, response.status_code, headers)
-            return response
+            for k in self._sessions:
+                for ts in self._sessions[k]["sessions"]:
+                    if self._sessions[k]["sessions"][ts]["port"] == port and\
+                       self._sessions[k]["sessions"][ts]["process"].poll() is not None:
+                        return _dump("Trainer is dead")
+            try:
+                _json = _data = _files = None
+                if request.json:
+                    _json = request.json if isinstance(request.json, dict)\
+                        else json.loads(request.json)
+                if request.form:
+                    _data = dict(request.form)
+                if request.files:
+                    _files = request.files
+                response = requests.request(request.method,
+                                            f"http://localhost:{port}/{category}/{endpoint}",
+                                            files=_files, json=_json, data=_data)
+                excluded_headers = ["content-encoding", "content-length",
+                                    "transfer-encoding", "connection"]
+                headers = [(name, value) for (name, value) in response.raw.headers.items()
+                           if name.lower() not in excluded_headers]
+                response = Response(response.content, response.status_code, headers)
+                return response
+            except Exception as e:
+                return Response(_dump(f"Error occured {e}"))
+
 
         @self.app.route("/sessions", methods=["GET"])
         @flask_login.login_required
         def __list_sessions():
             """Returns a dictionary of sessions, their ports if they're alive and the
             state. Rest of the communication can be done with session"""
-            return self._sessions_list
+            return _dump(self._sessions_list)
+
+        @self.app.route("/current_user", methods=["GET"])
+        @flask_login.login_required
+        def __current_user():
+            """Returns the name of the current user, in case we're logged in and username is
+            not known to the client as they have refreshed and the store state
+            is gone (LOL, FIXME)
+
+            """
+            return _dump({"user", flask_login.current_user.name})
 
         @self.app.route("/update_given_name", methods=["POST"])
         @flask_login.login_required
@@ -1304,6 +1359,14 @@ sys.path.append("{self.data_dir}")
                     return _dump([True, "Login Successful"])
                 else:
                     return _dump([False, "Invalid Credentials"])
+
+        # I think I have to update the user.id on each login
+        @self.app.route("/logged_in", methods=["GET"])
+        def __logged_in():
+            if flask_login.current_user.is_authenticated:
+                return _dump([True, "Logged in"])
+            else:
+                return _dump([False, "Could not Login"])
 
         @self.app.route("/logout", methods=["GET"])
         @flask_login.login_required
@@ -1619,9 +1682,9 @@ def create_daemon(test=False, params=None):
 
 def _start_daemon(hostname, port, data_dir, production=False,
                   template_dir=None, static_dir=None, root_dir=None,
-                  daemon_name=None):
+                  daemon_name=None, register=False):
     daemon = Daemon(hostname, port, data_dir, production, template_dir,
-                    static_dir, root_dir, daemon_name)
+                    static_dir, root_dir, daemon_name, register)
     Thread(target=daemon.start).start()
     return daemon
 

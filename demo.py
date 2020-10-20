@@ -17,4 +17,5 @@ if __name__ == "__main__":
         daemon_name = None
     daemon = _start_daemon("0.0.0.0", 20202, ".demo_dir", False,
                            os.path.abspath("dist"), os.path.abspath("dist"),
-                           os.path.abspath("."), daemon_name=daemon_name)
+                           os.path.abspath("."), daemon_name=daemon_name,
+                           register=args.register)

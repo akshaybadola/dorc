@@ -66,7 +66,8 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
             json.dump(state, f)
         # start new daemon
         daemon = _start_daemon(self.hostname, self.port + 5, ".test_dir")
-        daemon._fwd_ports_thread.kill()
+        if daemon._fwd_ports_thread is not None:
+            daemon._fwd_ports_thread.kill()
         host = "http://" + ":".join([self.hostname, str(self.port + 5) + "/"])
         time.sleep(1)
         response = requests.request("GET", host + "sessions", cookies=self.cookies)
@@ -94,7 +95,8 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
 
     @classmethod
     def shutdown_daemon(cls, host):
-        cls.daemon._fwd_ports_thread.kill()
+        if cls.daemon._fwd_ports_thread is not None:
+            cls.daemon._fwd_ports_thread.kill()
         response = requests.request("GET", host + "_shutdown", timeout=2,
                                     cookies=cls.cookies)
         return response

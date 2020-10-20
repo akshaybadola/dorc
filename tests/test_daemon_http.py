@@ -129,7 +129,8 @@ class DaemonHTTPTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.daemon._fwd_ports_thread.kill()
+        if cls.daemon._fwd_ports_thread is not None:
+            cls.daemon._fwd_ports_thread.kill()
         cls.shutdown_daemon(cls.host)
         if os.path.exists(cls.data_dir):
             shutil.rmtree(cls.data_dir)

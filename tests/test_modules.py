@@ -188,6 +188,6 @@ module_exports = {"cls": A, "f": func}
         if os.path.exists(cls.mods_dir):
             shutil.rmtree(cls.mods_dir)
 
-    
+
 if __name__ == '__main__':
     unittest.main()

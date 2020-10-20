@@ -166,7 +166,7 @@ class Models:
                 self._models[name]._optimizer.load_state_dict(state["optimizer_state"])
             else:
                 self._logger.warn(f"Optimizers are different." +
-                                  " Could not load state dict for model {name}")
+                                  f" Could not load state dict for model {name}")
             self._models[name].load_state_dict(state["state_dict"])
             self._models[name]._device = state["device"]
         return True, None

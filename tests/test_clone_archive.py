@@ -149,7 +149,6 @@ class CloneHTTPTest(unittest.TestCase):
                                           "config": config},
                                     cookies=new_cookies)
         time.sleep(.5)
-        import ipdb; ipdb.set_trace()
         requests.request("GET", new_host + "_shutdown", timeout=2,
                          cookies=new_cookies)
         shutil.rmtree(".new_test_dir")

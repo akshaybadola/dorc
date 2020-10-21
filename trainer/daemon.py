@@ -19,12 +19,12 @@ import zipfile
 from queue import Queue
 from threading import Thread
 import multiprocessing as mp
-from subprocess import Popen, PIPE, run, TimeoutExpired
+from subprocess import Popen, PIPE, TimeoutExpired
 from markupsafe import escape
 from functools import partial
 
 import flask_login
-from flask import Flask, render_template, url_for, redirect, request, Response
+from flask import Flask, render_template, request, Response
 from flask_cors import CORS
 from werkzeug import serving
 
@@ -165,20 +165,15 @@ class Daemon:
 
     def __init__(self, hostname, port, data_dir, production=False,
                  template_dir=None, static_dir=None, root_dir=None,
-                 daemon_name=None, register=True):
+                 trackers=[], daemon_name=None, register=True):
         self.ctx = mp.get_context("spawn")
-        self.hostname = hostname
-        self.port = port
+        self._hostname = hostname
+        self._port = port
+        self._trackers = trackers
         self.daemon_name = daemon_name
         self.register = register
         # NOTE: fwd_hosts and fwd_ports are hard coded
         self.fwd_port_start = 8181    # starts with 8181
-        if "droid" in get_hostname().lower():
-            self.fwd_hosts = ["joe@13.232.207.179", "joe@149.129.189.46",
-                              "15mcpc15@mars.uohyd.ac.in"]
-        else:
-            self.fwd_hosts = ["joe@13.232.207.179", "joe@149.129.189.46",
-                              "15mcpc15@10.5.0.107"]
         if "droid" not in get_hostname().lower():
             self._have_internet = mp.Process(target=have_internet)
             self._have_internet.start()
@@ -290,29 +285,90 @@ sys.path.append("{self.data_dir}")
         self._fwd_ports_thread = None
         self._fwd_procs = None
         if self.register:
-            self.fwd_ports = {}
+            self._fwd_ports = {}
             self._fwd_procs = {}
             self._fwd_ports_event = mp.Event()
-            self._fwd_ports_event.set()
-            self._fwd_ports_thread = mp.Process(target=self._fwd_ports_func)
-            self._fwd_ports_thread.start()
+            self.fwd_ports_event.set()
+            self._fwd_ports_thread = mp.Process(target=self.fwd_ports_func)
+            self.fwd_ports_thread.start()
         else:
             print(f"Not registering with trackers")
         # self._fwd_ports()
 
-    def _fwd_ports_func(self):
-        while self._fwd_ports_event.is_set():
+    @property
+    def hostname(self):
+        "Hostname on which to serve"
+        return self._hostname
+
+    @property
+    def port(self):
+        "port on which to listen"
+        return self._port
+
+    @property
+    def fwd_ports(self):
+        "A :class:`dict` mapping trackers and ports forwarded to them"
+        return self._fwd_ports
+
+    @property
+    def fwd_procs(self):
+        "A :class:`dict` mapping trackers and SSH :class:`subprocess.Popen` processes"
+        return self._fwd_procs
+
+    @property
+    def fwd_ports_event(self):
+        """Event :class:`multiprocessing.Event` which controls `self.fwd_port_thread`"""
+        return self._fwd_ports_event
+
+    @property
+    def fwd_ports_thread(self):
+        """Process :class:`multiprocessing.Process` which checks if the ports are
+        correctly forwarded to the trackers.
+
+        """
+        return self._fwd_ports_thread
+
+    @property
+    def trackers(self):
+        """List of user@host strings where a tracker is present.
+
+        Trackers are http servers which map the hostnames to forwarded ports on
+        that machine. Each `daemon` when started, can register with a list of
+        trackers and forward its ports. The trackers can then be used to forward
+        those ports back to user machine. Convoluted I know.
+
+        """
+        return self._trackers
+
+    def fwd_ports_func(self):
+        """Forward ports at one minute interval to `self.trackers`
+
+        This function runs in a separate process and checks the SSH forwarded
+        ports and forwards any stale/dead ports if required.
+
+        """
+        while self.fwd_ports_event.is_set():
             self._logi("Checking port forwards")
-            self._check_and_register_with_trackers()
-            if not self._fwd_ports_event.is_set():
-                self._logi("Exiting from _fwd_ports_func")
+            self.check_and_register_with_trackers()
+            if not self.fwd_ports_event.is_set():
+                self._logi("Exiting from fwd_ports_func")
                 return
             else:
                 time.sleep(60)
 
     # FIXME: This thing will start in a thread and if this is available to call
     #        from an endpoint then there could be race conditions
-    def _check_and_register_with_trackers(self, trackers=[]):
+    def check_and_register_with_trackers(self):
+        """Checks if the all the ports are correctly forwarded.
+
+        It checks all the ports with internal functions which use various shell
+        commands. If any port is not correctly forwarded it forwards that port
+        and registers that port correctly with the tracker.
+
+        """
+        if not self.trackers:
+            self._logd(f"Empty tracker list. Will not do do anything")
+            return
         if self.daemon_name is None:
             try:
                 with open("daemon_name", "r") as f:
@@ -340,11 +396,11 @@ sys.path.append("{self.data_dir}")
                 return False
 
         def _fwd_port(host):
-            if host in self._fwd_procs:
-                self._fwd_procs[host].kill()
+            if host in self.fwd_procs:
+                self.fwd_procs[host].kill()
             self.fwd_ports[host] = port = check_ssh_port(host, self.fwd_port_start)
             if port != "UNREACHABLE":
-                self._fwd_procs[host] = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {host}"),
+                self.fwd_procs[host] = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {host}"),
                                              stdout=PIPE, stderr=PIPE)
             return port
 
@@ -356,14 +412,10 @@ sys.path.append("{self.data_dir}")
             else:
                 self._loge(f"Connection error from {daemon_name}. Could not forward port")
 
-        if not trackers:
-            trackers = [*self.fwd_hosts]
-            _check = self._fwd_ports_event.is_set()
-        else:
-            _check = True
-        print(f"Checking ports and Registering with {trackers}")
+        _check = self.fwd_ports_event.is_set()
+        print(f"Checking ports and Registering with {self.trackers}")
         if _check:
-            for tracker in trackers:
+            for tracker in self.trackers:
                 if tracker in self.fwd_ports:
                     port = self.fwd_ports[tracker]
                     if port == "UNREACHABLE":
@@ -1070,17 +1122,17 @@ sys.path.append("{self.data_dir}")
             return _dump({"task_id": task_id, "message": f"{func_name.split('_')[0]}ing {data}"})
 
     def stop(self):
-        # NOTE: clear the _fwd_ports_event
-        if self._fwd_ports_event is not None:
-            self._fwd_ports_event.clear()
+        # NOTE: clear the fwd_ports_event
+        if self.fwd_ports_event is not None:
+            self.fwd_ports_event.clear()
             self._logi("Waiting for the fwd_ports_thread to join. Can take upto 60 seconds")
-        if self._fwd_ports_thread is not None:
-            self._fwd_ports_thread.join()
+        if self.fwd_ports_thread is not None:
+            self.fwd_ports_thread.join()
             self._logi("Joined fwd_ports thread")
         # NOTE: kill the fwd ports
-        if self._fwd_procs is not None:
+        if self.fwd_procs is not None:
             self._logi("Killing fwd_procs")
-            for p in self._fwd_procs.values():
+            for p in self.fwd_procs.values():
                 p.kill()
         # NOTE: Unload the sessions
         self._logi("Unloading sessions")
@@ -1224,7 +1276,7 @@ sys.path.append("{self.data_dir}")
             is gone (LOL, FIXME)
 
             """
-            return _dump({"user", flask_login.current_user.name})
+            return _dump({"user": flask_login.current_user.name})
 
         @self.app.route("/update_given_name", methods=["POST"])
         @flask_login.login_required
@@ -1593,7 +1645,7 @@ sys.path.append("{self.data_dir}")
 
         # @self.app.before_request
         # def __before_request_func():
-        #     self._logd(f"FWD ports thread is alive? {self._fwd_ports_thread.is_alive()}")
+        #     self._logd(f"FWD ports thread is alive? {self.fwd_ports_thread.is_alive()}")
 
         @self.app.route("/_ping", methods=["GET"])
         def __ping():

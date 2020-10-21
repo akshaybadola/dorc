@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import glob
 import multiprocessing as mp
 import argparse
 import shutil
@@ -39,8 +40,22 @@ def exec_cmd(host, cmd):
 
 
 def deploy(host, _init=False, copy_js=False, clean_env=False, _restart=False):
+    """DORC deployment:
+
+    Deploy DORC servers on hosts. It uses SSH and it's preferable to have ssh
+    keys installed on the remote machines as otherwise you may get password
+    prompts. We use Popen as a simple interface to SSH.
+
+    :param host: a string of the type of \"user@host\" on which to deploy
+    :param _init: create all the directory structure, default is \"~/trainer\"
+    :param copy_js: (deprecated) copy the JS files
+    :param clean_env: Update the python environment for the trainer. It's installed in the
+                      directory ~/trainer/env
+    :param _restart: Restart the daemon if running after
+
+    """
     print(f"Deploying to host {host}")
-    if not dir_exists(host, "~/trainer"):
+    if not dir_exists(host, os.path.expanduser("~/trainer")):
         print(f"Trainer directory doesn't exist on {host}. Initializing")
         _init = True
     if _init:
@@ -60,9 +75,9 @@ def deploy(host, _init=False, copy_js=False, clean_env=False, _restart=False):
 def update_venv(host, delete=False):
     if delete:
         print(f"Removing env dir on {host}")
-        shutil.rmtree("~/trainer/env")
-    if not dir_exists(host, "~/trainer/env"):
-        create_dir(host, "~/trainer/env")
+        shutil.rmtree(os.path.expanduser("~/trainer/env"))
+    if not dir_exists(host, os.path.expanduser("~/trainer/env")):
+        create_dir(host, os.path.expanduser("~/trainer/env"))
         print(f"Creating virtualenv on {host}")
         print(exec_cmd(host, "python3.7 -m virtualenv -p python3.7 ~/trainer/env"))
     run(f"scp deploy_scripts/requirements.txt {host}:~/trainer/", shell=True)
@@ -73,11 +88,11 @@ def update_venv(host, delete=False):
 
 
 def init(host, clean_env=False):
-    if dir_exists(host, "~/trainer"):
+    if dir_exists(host, os.path.expanduser("~/trainer")):
         print("WARNING. Directory already exists. It must be removed manually. Exiting")
         return
-    create_dir(host, "~/trainer")
-    create_dir(host, "~/trainer/dist")
+    create_dir(host, os.path.expanduser("~/trainer"))
+    create_dir(host, os.path.expanduser("~/trainer/dist"))
     update_venv(host, clean_env)
     dstr = """#! /bin/bash
 
@@ -107,20 +122,69 @@ def restart(host):
     p.terminate()
 
 
+def create_zip():
+    if os.path.exists(".zip_temp"):
+        shutil.rmtree(".zip_temp")
+    os.mkdir(".zip_temp")
+    os.mkdir(".zip_temp/trainer")
+    os.mkdir(".zip_temp/trainer/dist")
+    trainer_dir = ".zip_temp/trainer"
+    shutil.copy("build/trainer.cpython-37m-x86_64-linux-gnu.so", trainer_dir)
+    shutil.copy("trainer/autoloads.py", trainer_dir)
+    shutil.copy("deploy_scripts/if_run.py", trainer_dir)
+    shutil.copy("deploy_scripts/run.py", trainer_dir)
+    shutil.copy("deploy_scripts/requirements.txt", trainer_dir)
+    dist_files = glob.glob("dist/**", recursive=True)
+    with open(os.path.join(trainer_dir, "README"), "w") as f:
+        f.write("""Instructions:
+1. Create a venv in any directory and install the requirements in requirements.txt
+2. Default path is \"~/trainer\". If you decide to keep the contents of this
+   directory anywhere else, you should change those paths in \"run.py\".
+   Also add register=False as an option to \"Daemon\".
+3.. Create a file "daemon_name" in the current directory and insert any name in it.
+4. After installing the requirements, run \"python run.py\" in the current directory
+""")
+    for f in dist_files:
+        if os.path.isfile(f):
+            shutil.copy(f, os.path.join(trainer_dir, "dist"))
+    run("cd .zip_temp; 7z a trainer.zip trainer; mv trainer.zip ..", shell=True)
+
+
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="""DORC deployment:
+
+Deploy DORC servers on hosts with SSH. Default is to copy the compiled C module
+and update the global modules. See help for additional options.""")
     parser.add_argument("--hosts", type=lambda x: x.split(","),
-                        default="mc15pc15@10.5.0.96,prototype@10.5.1.93,user@10.5.0.92,taruna@10.5.1.3")
-    parser.add_argument("--clean-env", action="store_true")
-    parser.add_argument("--copy-js", action="store_true")
-    parser.add_argument("--force-init", action="store_true")
-    parser.add_argument("--compile", action="store_true")
-    parser.add_argument("--restart", action="store_true")
-    parser.add_argument("--restart-only", action="store_true")
+                        default="mc15pc15@10.5.0.96,prototype@10.5.1.93,user@10.5.0.92,taruna@10.5.1.3",
+                        help="Comma separated user@host to deploy")
+    parser.add_argument("--clean-env", action="store_true",
+                        help="Also clean the python venv for the trainer on the hosts")
+    parser.add_argument("--copy-js", action="store_true",
+                        help="Copy the javascript sources (deprecated)")
+    parser.add_argument("--force-init", action="store_true",
+                        help="""Initialize the trainer from scratch. Creates the directories and installs
+                        dependencies using ssh. If the directory already exists,
+                        then it has to be removed manually as a precaution.""")
+    parser.add_argument("--compile", action="store_true",
+                        help="Compile the trainer module with cython")
+    parser.add_argument("--compile-only", action="store_true",
+                        help="Only compile the C module, do nothing else")
+    parser.add_argument("--create-zip", action="store_true",
+                        help="Create the zip file of the package" +
+                        "Doesn't do anything else")
+    parser.add_argument("--restart", action="store_true", help="Restart the daemons on the hosts")
+    parser.add_argument("--restart-only", action="store_true", help="Only restart the daemons" +
+                        "on the hosts, don't do anything else")
     args = parser.parse_args()
     curdir = os.path.abspath(os.curdir)
-    if args.compile:
+    if args.compile or args.compile_only:
         build()
+    if args.create_zip:
+        create_zip()
+        return
+    if args.compile_only:
+        return
     os.chdir(curdir)
     for host in args.hosts:
         if args.restart_only:

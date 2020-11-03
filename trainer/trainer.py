@@ -36,6 +36,7 @@ control = Tag("control")
 prop = Tag("prop")
 extras = Tag("extras")
 methods = Tag("methods")
+objects = Tag("objects")
 internals = Tag("internals")
 
 
@@ -1672,7 +1673,7 @@ class Trainer:
 
     # END: Extras
 
-    # START: Helpers
+    # START: Methods
     @POST
     @methods
     def set_model(self, model_name):
@@ -2003,6 +2004,29 @@ class Trainer:
     def add_module(self, request, checks):
         return self._mods.add_module(request, checks)
     # END: Helpers
+
+    # START: Objects
+    #
+    # Objects can be queried for properties just like the trainer, although
+    # their methods cannot be called. We can fetch each exposed property via a
+    # @prop tag. A sequence of @prop tags can expose nested props.
+    #
+    # For example, Trainer._epoch_runner is an instance of Epoch. Now say
+    # Trainer has an "object" epoch_runner like below which can be exposed.  So
+    # we can access the property "info" of Epoch like trainer/epoch_runner/info
+    # from the HTTP API. If batch_vars is another "object" of type BatchVars and
+    # that is also exposed, then we should be able to access,
+    # trainer/epoch_runner/batch_vars/{prop}, for some "prop" of batch_vars.
+    @POST
+    @objects
+    def epoch_runner(self):
+        return None
+
+    @POST
+    @objects
+    def task_runners(self):
+        return None
+    # END: Objects
 
     # START: Save, Load, Resume
     @internals

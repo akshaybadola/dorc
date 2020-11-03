@@ -123,7 +123,7 @@ class DaemonModulesTest(unittest.TestCase):
             os.mkdir(cls.data_dir)
         cls.port = 23232
         cls.hostname = "127.0.0.1"
-        cls.daemon = _start_daemon(cls.hostname, cls.port, ".test_dir")
+        cls.daemon = _start_daemon(cls.hostname, cls.port, ".test_dir", daemon_name="test@local")
         cls.host = "http://" + ":".join([cls.hostname, str(cls.port) + "/"])
         time.sleep(.5)
         cls.cookies = requests.request("POST", cls.host + "login",
@@ -144,12 +144,14 @@ class DaemonModulesTest(unittest.TestCase):
         if cls.daemon._fwd_ports_thread is not None:
             cls.daemon._fwd_ports_thread.kill()
         time.sleep(1)
+        print(cls.daemon.daemon_name)
         print("Initialized daemon and created sessions")
 
     def test_list_modules(self):
         time.sleep(1)
         response = requests.request("GET", self.host + "list_global_modules", cookies=self.cookies)
-        self.assertIsInstance(json.loads(response.content), dict)
+        self.assertIsInstance(json.loads(response.content), list)
+        self.assertIsInstance(json.loads(response.content)[1], dict)
         mods = json.loads(response.content)
         # NOTE: Not sure why this fails
         # self.assertEqual(mods, {"autoloads": ["torch", "ModelStep",
@@ -169,9 +171,11 @@ class DaemonModulesTest(unittest.TestCase):
                                         files={"file": f},
                                         data={"name": json.dumps("test_module_a")},
                                         cookies=self.cookies)
-        self.assertIsInstance(json.loads(response.content), dict)
-        meh = json.loads(response.content)
-        task_id = meh["task_id"]
+        self.assertIsInstance(json.loads(response.content), list)
+        self.assertIsInstance(json.loads(response.content)[1], dict)
+        status, result = json.loads(response.content)
+        self.assertTrue(status)
+        task_id = result["task_id"]
         time.sleep(1)
         response = requests.request("GET", self.host + f"check_task?task_id={task_id}",
                                     cookies=self.cookies)
@@ -183,8 +187,9 @@ class DaemonModulesTest(unittest.TestCase):
                                         files={"file": f},
                                         data={"name": json.dumps("test_module_b")},
                                         cookies=self.cookies)
-        meh = json.loads(response.content)
-        task_id = meh["task_id"]
+        status, result = json.loads(response.content)
+        self.assertTrue(status)
+        task_id = result["task_id"]
         time.sleep(1)
         response = requests.request("GET", self.host + f"check_task?task_id={task_id}",
                                     cookies=self.cookies)
@@ -232,13 +237,16 @@ dataset = MnistDataset(os.path.join(file_dir, "training.pt"))
                                               "description": "MNIST Image dataset",
                                               "type": "image"},
                                         cookies=self.cookies)
-        self.assertIsInstance(json.loads(response.content), dict)
-        meh = json.loads(response.content)
-        task_id = meh["task_id"]
+        self.assertIsInstance(json.loads(response.content), list)
+        self.assertIsInstance(json.loads(response.content)[1], dict)
+        status, result = json.loads(response.content)
+        self.assertTrue(status)
+        task_id = result["task_id"]
         time.sleep(1)
         response = requests.request("GET", self.host + f"check_task?task_id={task_id}",
                                     cookies=self.cookies)
-        result = json.loads(response.content)
+        status, result = json.loads(response.content)
+        self.assertTrue(status)
         self.assertTrue(result["result"])
         self.assertIn("_dataset_MNIST", self.daemon._datasets)
         py_string_2 = """
@@ -264,13 +272,16 @@ dataset = MnistDataset("/home/joe/projects/trainer/.data/MNIST/processed/trainin
                                               "description": "MNIST Image dataset",
                                               "type": "image"},
                                         cookies=self.cookies)
-        self.assertIsInstance(json.loads(response.content), dict)
-        meh = json.loads(response.content)
-        task_id = meh["task_id"]
+        self.assertIsInstance(json.loads(response.content), list)
+        self.assertIsInstance(json.loads(response.content)[1], dict)
+        status, result = json.loads(response.content)
+        self.assertTrue(status)
+        task_id = result["task_id"]
         time.sleep(1)
         response = requests.request("GET", self.host + f"check_task?task_id={task_id}",
                                     cookies=self.cookies)
-        result = json.loads(response.content)
+        status, result = json.loads(response.content)
+        self.assertTrue(status)
         self.assertTrue(result["result"])
         self.assertIn("_dataset_MNIST_2", self.daemon._datasets)
         requests.request("POST", self.host + "delete_dataset",

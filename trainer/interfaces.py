@@ -296,7 +296,8 @@ class FlaskInterface:
 
         @self.app.route('/docs')
         def __docs():
-            return _dump(self.trainer.docs())
+            return _dump(["Currently only {props} docs are sent. Rest will be added soon",
+                          self.trainer.docs()])
 
         @self.app.route("/batch_props", methods=["POST"])
         def __batch_props():
@@ -306,7 +307,8 @@ class FlaskInterface:
                 if not props or "props_list" not in props:
                     return _dump({"error": "Need dict with key \"props_list\""})
                 try:
-                    result = [True, dict(map(lambda x: (x, self.trainer_props(x)), props["props_list"]))]
+                    result = [True, dict(map(lambda x: (x, json.loads(self.trainer_props(x))),
+                                             props["props_list"]))]
                 except Exception as e:
                     result = [False, f"Error occured {e}"]
                 response = _dump(result)

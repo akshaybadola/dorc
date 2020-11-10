@@ -22,7 +22,11 @@ class TrainerTest(unittest.TestCase):
         os.mkdir(f".test_dir/test_session/{time_str}")
         cls.data_dir = f".test_dir/test_session/{time_str}"
         cls.trainer = Trainer(**{"data_dir": cls.data_dir, **cls.config})
-        cls.trainer._init_all()
+
+    def test_init_device(self):
+        """Validate that the devices are allocated correctly for the given trainer
+        parameters"""
+        
 
     # TODO: Tweak config's various parameters and check for errors
     #       Would have to be subtests.
@@ -46,9 +50,11 @@ class TrainerTest(unittest.TestCase):
     # 15. All stateless funcs
     # 16. Fixes and tests for broken funcs
 
-    def test_trainer_init(self):
-        self.assertFalse(self.trainer._have_resumed)
-        self.assertTrue(self.trainer.paused)
+
+
+    # def test_trainer_init(self):
+    #     self.assertFalse(self.trainer._have_resumed)
+    #     self.assertTrue(self.trainer.paused)
 
     # def test_trainer_log(self):
     #     self.trainer._init_all()

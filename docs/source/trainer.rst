@@ -4,10 +4,26 @@ trainer package
 Submodules
 ----------
 
-trainer.check module
---------------------
+trainer.auth module
+-------------------
 
-.. automodule:: trainer.check
+.. automodule:: trainer.auth
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+trainer.autoloads module
+------------------------
+
+.. automodule:: trainer.autoloads
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+trainer.checks module
+---------------------
+
+.. automodule:: trainer.checks
    :members:
    :undoc-members:
    :show-inheritance:
@@ -16,6 +32,22 @@ trainer.components module
 -------------------------
 
 .. automodule:: trainer.components
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+trainer.config module
+---------------------
+
+.. automodule:: trainer.config
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+trainer.daemon module
+---------------------
+
+.. automodule:: trainer.daemon
    :members:
    :undoc-members:
    :show-inheritance:
@@ -32,14 +64,6 @@ trainer.epoch module
 --------------------
 
 .. automodule:: trainer.epoch
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-trainer.functions module
-------------------------
-
-.. automodule:: trainer.functions
    :members:
    :undoc-members:
    :show-inheritance:
@@ -84,10 +108,10 @@ trainer.simple\_trainer module
    :undoc-members:
    :show-inheritance:
 
-trainer.state\_machine module
------------------------------
+trainer.task module
+-------------------
 
-.. automodule:: trainer.state_machine
+.. automodule:: trainer.task
    :members:
    :undoc-members:
    :show-inheritance:
@@ -115,7 +139,6 @@ trainer.version module
    :members:
    :undoc-members:
    :show-inheritance:
-
 
 Module contents
 ---------------

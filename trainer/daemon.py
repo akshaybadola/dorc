@@ -862,7 +862,8 @@ sys.path.append("{self.data_dir}")
 
     def _debug_and_put(self, task_id, status, message):
         self._logd(message)
-        self._task_q.put((task_id, status, message))
+        if task_id is not None:
+            self._task_q.put((task_id, status, message))
 
     @property
     def _session_methods(self):
@@ -922,10 +923,19 @@ sys.path.append("{self.data_dir}")
     def _purge_session_helper(self, task_id, name, time_str, data=None):
         self._logd(f"Purging {name}/{time_str}")
         try:
-            self._unload_session_helper(task_id, name, time_str)
-            shutil.rmtree(os.path.join(self.data_dir, name, time_str))
-            self._sessions[name]["sessions"].pop(time_str)
-            self._debug_and_put(task_id, True, f"Purged session {name}/{time_str}")
+            sub_task_id = self._create_id()
+            self._unload_session_helper(sub_task_id, name, time_str)
+            result = self._check_result(sub_task_id)  # cannot be None
+            if result[1]:
+                shutil.rmtree(os.path.join(self.data_dir, name, time_str))
+                dirlist = os.listdir(os.path.join(self.data_dir, name))
+                # Remove the full directory if only modules remain
+                if dirlist == ["modules"]:
+                    shutil.rmtree(self.data_dir, name)
+                self._sessions[name]["sessions"].pop(time_str)
+                self._debug_and_put(task_id, True, f"Purged session {name}/{time_str}")
+            else:
+                self._error_and_put(*result)
         except Exception as e:
             self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
 
@@ -1438,6 +1448,7 @@ sys.path.append("{self.data_dir}")
                                      "message": "Not yet processed"}])
             else:
                 if len(result) == 2:
+                    self._logw(f"Result of length 2 for check_task {result}")
                     return _dump([True, {"task_id": result[0], "result": True,
                                          "message": "Successful"}])
                 elif len(result) == 3 and result[1]:

@@ -210,17 +210,17 @@ class FlaskInterface:
     def trainer_get(self, func_name):
         status, response = getattr(self.trainer, func_name)()
         if status:
-            return _dump({"success": response})
+            response = _dump([True, response])
         else:
-            return _dump({"error": response})
+            response = _dump([False, response])
 
     def trainer_post_form(self, func_name):
         status, response = getattr(self.trainer, func_name)(request)
         if status:
-            response = _dump({"success": response})
+            response = _dump([True, response])
             return Response(response, status=200, mimetype='application/json')
         else:
-            response = _dump({"error": response})
+            response = _dump([False, response])
             return Response(response, status=500, mimetype='application/json')
 
     def trainer_post(self, func_name):
@@ -238,7 +238,7 @@ class FlaskInterface:
             else:
                 return Response(response, status=200, mimetype='application/json')
         else:
-            response = _dump({"error": "No data given"})
+            response = _dump([False, "No data given"])
             return Response(response, status=400, mimetype='application/json')
 
     def trainer_route(self, func_name):
@@ -268,7 +268,7 @@ class FlaskInterface:
             else:
                 return Response(response, status=200, mimetype='application/json')
         else:
-            response = _dump({"error": "No data given"})
+            response = _dump([False, "No data given"])
             return Response(response, status=400, mimetype='application/json')
 
     def start(self):
@@ -305,7 +305,7 @@ class FlaskInterface:
             if hasattr(request, "json"):
                 props = request.json
                 if not props or "props_list" not in props:
-                    return _dump({"error": "Need dict with key \"props_list\""})
+                    return _dump([False, "Need dict with key \"props_list\""])
                 try:
                     result = [True, dict(map(lambda x: (x, json.loads(self.trainer_props(x))),
                                              props["props_list"]))]
@@ -332,9 +332,9 @@ class FlaskInterface:
 
         @self.app.route("/config", methods=["GET"])
         def __config():
-            return _dump({"config": self._current_config,
-                          "orig_config": self._orig_config,
-                          "overrides": self._current_overrides})
+            return _dump([True, {"config": self._current_config,
+                                 "orig_config": self._orig_config,
+                                 "overrides": self._current_overrides}])
 
         @self.app.route("/list_files", methods=["GET"])
         def __list_files():
@@ -344,7 +344,7 @@ class FlaskInterface:
                 files = [f.replace(self.data_dir, "") for f in
                          glob.glob(os.path.join(self.data_dir, "session_config", "**/*.py"),
                                    recursive=True)]
-            return _dump(files)
+            return _dump([True, {"files": files}])
 
         @self.app.route("/get_file", methods=["POST"])
         def __get_file():

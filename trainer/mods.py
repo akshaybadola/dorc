@@ -7,8 +7,24 @@ import magic
 import zipfile
 import traceback
 
+# imports needed for typing
+import flask
+import pathlib
+
 
 class Modules:
+    """Dynamic loading and unloading of python modules.
+
+    If two modules with the same name are imported, the previous one is
+    overwritten. A global list of modules is maintained.
+
+    The modules are listed as file/def where def is any variable definition:
+    function, class or global variable. They're simply imported as file.var.
+
+    A bit of the code is old in the sense that :mod:`importlib` has changed to
+    allow loading python modules without a file.
+
+    """
     def __init__(self, mods_dir: str, logd: Callable[[str], str],
                  loge: Callable[[str], str], logi: Callable[[str], str],
                  logw: Callable[[str], str]):
@@ -22,6 +38,15 @@ class Modules:
             os.mkdir(mods_dir)
 
     def _check_file_magic(self, _file: bytes, test_str: str) -> bool:
+        """Determine the file type from `libmagic`
+
+        Args:
+            _file: Bytes of the file
+            test_str: String to test for in the magic output
+        Returns:
+            True or False according to whether string is in magic output
+
+        """
         if hasattr(magic, "from_buffer"):
             self._logd("from_buffer in magic")
             test = test_str in magic.from_buffer(_file).lower()
@@ -36,8 +61,20 @@ class Modules:
         return dirname
 
     def _load_python_file(self, module_file: bytes, checks: Iterable[Callable[[str], bool]],
-                          write_path: str, exec_cmd: str, return_key: str) ->\
+                          write_path: Union[str, pathlib.Path], exec_cmd: str, return_key: str) ->\
                           Tuple[bool, Union[str, Dict]]:
+        """Load a python file containing a module.
+
+        Args:
+            module_file: A stream of bytes. It's written on the disk and module loaded.
+            checks: An Iterable of functions which checks the loaded module.
+            write_path: Path to which the file is written
+            exec_cmd: Command to execute for loading
+            return_key: The key of the object to return
+        Returns:
+            A tuple of status, and message if fails or dictionary with the module.
+
+        """
         self._logd("Detected python file")
         with open(write_path, "w") as f:
             print(self._logd(f"Written to {write_path}"))
@@ -64,8 +101,24 @@ class Modules:
                                      + "\n" + traceback.format_exc())
 
     def _load_zip_file(self, module_file: bytes, checks: Iterable[Callable[[str], bool]],
-                       write_path: str, exec_cmd: str, return_key: str) ->\
+                       write_path: Union[str, pathlib.Path], exec_cmd: str, return_key: str) ->\
                        Tuple[bool, Union[str, Dict]]:
+        """Load a zip file containing a module.
+
+        The file should contain an __init__.py at the top level and that should
+        contain all the definitions which should be available.  The zip file is
+        extracted to a folder and loaded as a directory.
+
+        Args:
+            module_file: A stream of bytes. It's written on the disk and module loaded.
+            checks: An Iterable of functions which checks the loaded module.
+            write_path: Path to which the file is written
+            exec_cmd: Command to execute for loading
+            return_key: The key of the object to return
+        Returns:
+            A tuple of status, and message if fails or dictionary with the module.
+
+        """
         zf = zipfile.ZipFile(io.BytesIO(module_file))
         # make sure that __init__.py is at the root of tmp_dir
         print("FILE NAME list", zf.namelist())
@@ -87,26 +140,31 @@ class Modules:
                 return False, self._logd(f"Some weird error occured while importing {return_key}. Error {e}"
                                          + "\n" + traceback.format_exc())
 
-    def add_module(self, request, checks: Iterable[Callable[[str], bool]]) ->\
+    def add_module(self, request: flask.Request, checks: Iterable[Callable[[str], bool]]) ->\
             Tuple[bool, Union[str, Dict]]:
-        """Adds an arbitrary module from a given python or module as a zip file. File
+        """Add an arbitrary module from a given python or module as a zip file. File
         must be present in request and is read as ``request.files["file"]``
 
-        The file can be either a python file in text format or a zipped
-        module. If it's a zipped module then ``__init__.py`` must be at the top
-        level in the zip file.
+        ``module_exports`` must be defined in the module. e.g.::
 
-        exports must be defined in ``module_exports``. e.g.:
-
-        .. code-block :: py
-
-            class CLS
+            class Cls
                 # some stuff here
 
             def some_stuff():
                 # Do something here
 
             module_exports = {"abc": CLS, "some_stuff": some_stuff}
+
+        The above code exports ``CLS`` as ``abc`` and ``some_stuff`` as ``some_stuff``.
+
+        Args:
+            request: http request forwarded from daemon. Must contain the module file
+                     The file can be either a python file in text format or a zipped
+                     module. If it's a zipped module then ``__init__.py`` must be at the top
+                     level in the zip file.
+            checks: Checks to conduct on the file.
+        Returns:
+            A tuple of status, and message if fails or dictionary with the module.
 
         """
         if not os.path.abspath(self._mods_dir) in sys.path:
@@ -132,29 +190,17 @@ class Modules:
             return False, self._logd(f"Error occured while reading file {e}"
                                      + "\n" + traceback.format_exc())
 
-    def add_user_funcs(self, request, user_funcs) -> Tuple[bool, str]:
-        """Add a user function from a given python or module as a zip file. Delegates
-        the requeste to :meth:`Trainer.add_module`
+    def add_user_funcs(self, request: flask.Request, user_funcs) -> Tuple[bool, str]:
+        """Add a user function from a given python or module as a zip file.
 
-        Prospective rules for adding a user func
+        The request content is treated as a module and call :meth:`add_module`
+        with additional checks.  Prospective rules for adding a user func:
 
-        1. `user_func` shouldn't be given access to the trainer instance itself as
-        it may cause unwanted states
-
-        2. `hooks` may be specific functions which can be given access to specific
-        locals of particular functions
-
-        3. `user_func` is the most generic function and has arbitrary call and
-        return values
-
-        4. In constrast `hooks` would be more restriced and while adding or
-        removing a hook certain checks can be performed
-
-        5. `user_funcs` maybe invoked in the middle of the program somewhere as
-        defined, or can be invoked in any situation parallelly. While other
-        functions may only execute in certain cricumstances
-
-        :param request: :func:`flask.request`
+        Args:
+            request: http request forwarded from the daemon
+            user_funcs: :attr:`trainer.Trainer._user_funcs` existing user functions
+        Returns:
+            A tuple of status, and message if fails or dictionary with the functions
 
         """
         # NOTE: In the python way, we can't really restrain whatever is in
@@ -187,7 +233,18 @@ class Modules:
         else:
             return False, "Failed to add module"
 
-    def add_config(self, config_dir, module_file, env=None):
+    def add_config(self, config_dir: Union[str, pathlib.Path], module_file: bytes,
+                   env: None = None):
+        """Load a :class:`Trainer` configuration
+
+        Args:
+            config_dir: The directory where the config resides. It's append to the :attr:`sys.path`
+            module_file: Config file bytes
+            env: Additional commands to prepend to the commad for loading the config
+        Returns:
+            A tuple of status, and message if fails or the config
+
+        """
         test_py_file = self._check_file_magic(module_file, "python")
         return_key = "config"
         checks = []
@@ -204,9 +261,11 @@ class Modules:
         else:
             tmp_path = os.path.join(os.path.abspath(config_dir), tmp_dir)
             return self._load_zip_file(module_file, checks, tmp_path, exec_cmd, return_key)
-        sys.path.remove(config_dir)
+        # NOTE: I'm sure this code is unreachable
+        # sys.path.remove(config_dir)
 
-    def add_named_module(self, mods_dir, module_file, module_name):
+    def add_named_module(self, mods_dir: Union[str, pathlib.Path], module_file: bytes,
+                         module_name: str) -> Tuple[bool, str]:
         test_py_file = self._check_file_magic(module_file, "python")
         return_key = module_name
         checks = []
@@ -232,6 +291,14 @@ class Modules:
             return mod
 
     def _get_symbols_from_module(self, mod_name: str) -> Iterable:
+        """Read all the symbols from a given module in the module directory `mods_dir`.
+
+        Args:
+            mod_name: Module name
+        Returns:
+            A list of symbol names
+
+        """
         exec_cmd = f"import {mod_name}"
         ldict = {}
         exec(exec_cmd, globals(), ldict)
@@ -240,20 +307,15 @@ class Modules:
         del ldict
         return symbol_names
 
-    def read_modules_from_dir(self, mods_dir: str,
+    def read_modules_from_dir(self, mods_dir: Union[pathlib.Path, str],
                               excludes: Iterable[Callable[[str], bool]]) -> Dict:
-        """Load all the available modules in the module directory. If two modules with
-        the same name are imported, the previous one is overwritten. A global
-        list of modules is maintained.
+        """Read all the symbols from available modules in the module directory `mods_dir`.
 
-        The modules are listed as file/def where def is any variable definition:
-        function, class or global variable. They're simply imported as file.var.
-
-        For a zip file module, __init__.py should contain all the definitions
-        which should be available.
-
-        :returns: None
-        :rtype: None
+        Args:
+            mods_dir: Module directory
+            excludes: Exclude the given symbols from the return value
+        Returns:
+            A dictionary of module and symbol names
 
         """
         modules_dict = {}

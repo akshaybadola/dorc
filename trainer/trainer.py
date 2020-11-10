@@ -1,3 +1,4 @@
+from typing import List, Dict, Iterable, Any, Union, Tuple, Callable
 import re
 import io
 import os
@@ -8,6 +9,7 @@ import json
 import torch
 import inspect
 import traceback
+import flask
 from functools import partial
 from threading import Thread, Event
 from PIL import Image
@@ -238,7 +240,24 @@ class Trainer:
     # END: Checks
 
     # START: Init Funcs
+
+    # CHECK: It does beg the questions that what happens when the system
+    #        reboots? Or when a reinitialization occurs.
     def _init_device(self):
+        """Initialize the devices according to :attr:`trainer_params` and system
+        configuration.
+
+        If `gpus` are requested in :attr:`trainer_params` and the system
+        contains `gpus` then they're allocated to the trainer. In addition, the
+        devices to the models are assigned in accordance with
+        :attr:`model_params`. Otherwise the models reside on the CPU (and system
+        VRAM).
+
+        Two (or more) models in this case can share the same device if there's
+        enough room on the device VRAM.
+
+        """
+        # CHECK: Why's this commented?
         # if self._devices_initialized:
         #     return
         if isinstance(self._trainer_params["gpus"], str):
@@ -471,6 +490,15 @@ class Trainer:
             self._device_handles = None
 
     def _init_models(self):
+        """Initialize models with a :class:`~trainer.components.Models` class
+
+        criteria, optimizers are initialized first and then the model
+
+        `Trainer._model_params` should contain a :class:`dict` of {models, optimizers, devices}
+
+        device allocations should be given in model_params
+
+        """
         self._logi("Initializing Models, Optimizers and Criteria ")
         self.criteria = {}
         for k, v in self._criteria_params.items():
@@ -497,14 +525,25 @@ class Trainer:
         self._models = Models(models, optimizers, devices, self.gpus, self.logger)
 
     def _init_dataloaders(self):
-        """Dataloaders can be initialized from a {step, data, params} in which the
-        corresponding torch dataloader is initialized with the given data. Or
-        from a function like `get_dataloader` with certain parameters. In case
-        `train data` is available, then train_step has to be
+        """Initialize the dataloaders.
+
+        Dataloaders are initialized from a ``{step, data, params}`` in which the
+        corresponding dataloaders are initialized with the given data.
+
+        ``step`` here corresponds to the ``train\val\test`` step and so are
+        ``data`` and ``params`` respectively. As such separate datasets can
+        always be initialized with different paramters at any given instance.
+
+        They can also be initialized from a function like ``get_dataloader``
+        with certain parameters, so that a complex dataloader with various
+        transformations and arrangements on the data can be loaded `ab initio`.
+
+        In case `train data` is available, then `train_step` has to be
         available. Arbitrary custom named steps aren't supported as of now.
 
-        :returns: None
-        :rtype: None
+        As of now, only a torch :class:`~torch.utils.data.DataLoader` is
+        integrated, but more may be added as the data loading and feeding part
+        is agnostic of the framework.
 
         """
 
@@ -609,19 +648,20 @@ class Trainer:
             elif k == "test":
                 self._test_step_func = self._update_functions["test"]
 
+    # FIXME: It should be _init_task_runners instead
     def _init_epoch_runner(self):
-        """The task_runners and threads are a triple
-        As of now there are three kinds of task runners There can be:
+        """Initialize the :meth:`task_runners`
+
+        A ``task_runner`` is an :class:`Epoch` instance. This method initializes
+        three kinds of task runners:
+
           1. epoch_runner
           2. adhoc_runner
           3. user_func_runner
 
-        Corresponding to each task runner there are threads and with the same
-        names and the references are further stored in `Trainer._task_thread_keys`,
-        `_task_callbacks`
-
-        :returns: None
-        :rtype: None
+        Corresponding to each task runner there are threads with the same names
+        and the references are further stored in ``_task_thread_keys``,
+        ``_task_callbacks``.
 
         """
         device_monitor, signals = self._task_runner_helper("main")
@@ -983,16 +1023,21 @@ class Trainer:
     # END: State Machine Helpers
 
     # START: State Machine
-    def _transition(self, _from, _to):
-        """Transitions to the next state from the given state.
+    def _transition(self, _from: str, _to: str) -> None:
+        """Transition to the next state from the given state.
+
+        Args:
+            _from: previous state
+            _to: next state
 
         State is a string triple joined by "_". Each state `s` is composed of
         `loop_run_step`, where:
-                `loop` can be in {"main", "adhoc", "user"}
-                `run` can be in {"running", "paused", "finished"}
-                `step` for the main loop can be any of the
-                    `self._trainer_params["training_steps"]` + "none"
-                    or `{"train", "val", "test", "none"}`
+
+        - `loop` can be in {"main", "adhoc", "user"}
+        - `run` can be in {"running", "paused", "finished"}
+        - `step` for the main loop can be any of the
+          `self._trainer_params["training_steps"]` + "none"
+          or `{"train", "val", "test", "none"}`
 
         For a :class:`Trainer` instance the regular flow is `train_step ->
         post_epoch_hooks` or equivalent steps. However, all those can be paused
@@ -1001,9 +1046,10 @@ class Trainer:
         `run` is the state of the trainer in the sense that if some active task
         is going on which has reserved some of the resourcese, whether that be
         training, validation or a given user function.
-            "running" implies that some such task is present.
-            "paused" implies that task is present but not active
-            "finished" means that the task has finished
+
+        - "running" implies that some such task is present.
+        - "paused" implies that task is present but not active
+        - "finished" means that the task has finished
 
         On top of these `self._aborted` is not a :class:`list` of flags which is
         to be set after a task was finished but was aborted by the user. See
@@ -1017,11 +1063,6 @@ class Trainer:
         only one loop is run at a given time and the other one is paused. A
         function running in a loop must be completed or aborted for another
         function to start in the same loop.
-
-        :param _from: From state
-        :param _to: To state
-        :returns: None
-        :rtype: None
 
         """
         a_loop, a_run, a_step = _from.split("_")
@@ -1454,15 +1495,18 @@ class Trainer:
         """Call :meth:`call_adhoc_func_on_data` with params. Perhaps it can be lifted
         above though
 
-        :param func: Function name. Should be present in :meth:`Trainer.user_funcs`
-                     or one of {"train", "val", "test"}
-        :param params: `params` is a :class:`dict` of type
-                        {"epoch": :class:`int` num or "current",
-                         "num_or_fraction": 0 < x,
-                         "device", "gpu" or "cpu",  # allocated automatically
-                         "parallel", True or False,
-                         "data": "train_val_or_test",
-                         "callback": "name_of_callback_function"}
+        Args:
+            func: Function name. Should be present in :meth:`Trainer.user_funcs`
+                  or one of {"train", "val", "test"}
+
+            params: `params` is a :class:`dict` like:
+
+                    {"epoch": :class:`int` num or "current",
+                     "num_or_fraction": 0 < x,
+                     "device", "gpu" or "cpu",  # allocated automatically
+                     "parallel", True or False,
+                     "data": "train_val_or_test",
+                     "callback": "name_of_callback_function"}
 
         """
         # NOTE: Samples should be captured by default, model defines a sampling
@@ -1701,6 +1745,7 @@ class Trainer:
                 self._update_functions[x]._model_name = model_name
             return True, self._logd(f"Model {model_name} is now the current active model.")
 
+    # TODO: This should be a given input and not an image
     @POST
     @methods
     def fetch_preds(self, img_path):
@@ -1768,6 +1813,7 @@ class Trainer:
             #     return False, f"Error occurred while reading file {e}"
             # Assuming predictions exist already somewhere in the report
 
+    # TODO: These functions for images can be generalized for arbitrary binary data
     @POST
     @methods
     def fetch_image(self, img_path):
@@ -1842,13 +1888,14 @@ class Trainer:
     @methods
     def hack_param(self, data):
         """Update a param as a hack. Data is assumed to be a pair of `{key, [type, value]}`
-        dictionary."""
+        dictionary. Only [str, int, float, bool] (simple) types are accepted."""
         statuses = []
+        type_dict = {"str": str, "int": int, "float": float, "bool": bool}
         for k, v in data.items():
             if not hasattr(self, k):
                 self._logw(f"{k} not an attribute of {self}. Will add.")
-                if v["type"] in {"str", "int", "float"}:
-                    _v = {"str": str, "int": int, "float": float}[v["type"]](v["value"])
+                if v["type"] in type_dict.keys():
+                    _v = type_dict[v["type"]](v["value"])
                     setattr(self, k, _v)
                     statuses.append(True)
                 else:
@@ -1856,8 +1903,8 @@ class Trainer:
                     statuses.append(False)
             else:
                 try:
-                    if v["type"] in {"str", "int", "float"}:
-                        _v = {"str": str, "int": int, "float": float}[v["type"]](v["value"])
+                    if v["type"] in type_dict.keys():
+                        _v = type_dict[v["type"]](v["value"])
                         if k not in self.__class__.__dict__:
                             setattr(self, k, _v)
                             self._logi(f"Set param {k} to {_v} successfully!")
@@ -1880,24 +1927,47 @@ class Trainer:
 
     @POST
     @methods
-    def add_user_funcs(self, request):
+    def add_user_funcs(self, request: flask.Request):
+        """Adds user given functions.
+        Delegates to :meth:`~trainer.mods.Modules.add_user_funcs`
+
+        """
         return self._mods.add_user_funcs(request, self._user_funcs)
 
     @POST
     @methods
-    def add_model(self, request):
-        """Add a model from a given python or module as a zip file.
-        Delegates the request to :meth:`Trainer.add_module`
+    def add_model(self, request: flask.Request) -> Tuple[bool, str]:
+        """Add a model from a given python or module as a zip file.  Delegates the
+        request to :meth:`add_module`
 
-        For this case ``module_exports`` has to include at models and
+        For this case `module_exports` has to include models and
         optimizers. Optimizers can be a string and if so, if optimizer_params
         are given then it is initialized with that, else the params are checked
         in instance scope. If both aren't present it's initialized with default
         params from :mod:`torch.optim`
 
-        :param flask.request request: request is the http request
-        :returns: :class:`bool` status, :class:`str` message
-        :rtype: :class:`tuple`
+        Args:
+            request: http request forwarded from the daemon
+
+        Example: ``file_which_is_sent.py``
+
+            class SomeModel:
+                # code
+
+            class AnotherModel:
+                # code
+
+            class YourOptimizer:
+                # code
+
+            module_exports = {"model_names": ["model_1", "model_2"],
+                              "model_params": {"model_1": {"param_1": 123, "param_2": "bleh"},
+                                               "model_2": {"param_1": True, "param_2": False}}
+                              "model_defs": {"model_1": {"model": SomeModel, "optimizer": "Adam"},
+                                             "model_2": {"model": AnotherModel, "optimizer": YourOptimizer}}}
+
+        Returns:
+            A tuple of status and message
 
         """
         checks = []
@@ -1916,17 +1986,19 @@ class Trainer:
                     # CHECK: How to force destruction of those models and resources and
                     #        initialize new ones? Does thread work?
                     try:
+                        names = []
                         for name in models["models"]:
                             model = models["models"][name]
+                            names.append(name)
                             params = {"name": name,
                                       "optimizer": models["optimizers"][name],
                                       "optimizer_name": models["optim_names"][name],
                                       "device": self.device}
                             self._models.add(model, params)
+                        return True, self._logd(f"Added model/s {names} successfully")
                     except Exception as e:
                         return False, self._loge(f"Some weird error occured {e}" +
                                                  f"\n{traceback.format_exc()}")
-                    return status, self._logd(f"Added model {name} successfully")
         else:
             return status, response
 
@@ -1935,75 +2007,78 @@ class Trainer:
     #
     # TODO: model initialization is repetitive here and should be delegated to a
     #       subroutine of _init_models. Fix.
-    def _get_new_models(self, model_names, model_defs, model_params):
-        """Extracts ``models`` from the ``model_names``, ``model_defs`` and ``model_params``
+    def _get_new_models(self, model_names: List[str], model_defs: Dict[str, Callable],
+                        model_params: Dict):
+        """Extract ``models`` from the ``model_names``, ``model_defs`` and ``model_params``
 
-        :param list model_names:
-        :param dict model_defs:
-        :param dict model_params:
+        Args:
+            model_names: Names of the models
+            model_defs: Definitions for the models
+            model_params:
 
-        :returns: A :class:`tuple` of ``status``, ``response`` where if
-        ``status`` is successful the response is model else an error string
-
-        :rtype: :class:`tuple`
+        Returns:
+            A :class:`tuple` of ``status``, ``response`` where if
+            ``status`` is successful the response is model else an error string
 
         """
-
-        if not all(x in model_params and x in model_defs for x in model_names):
-            return False, self._logd(f"Some of the model_names not in given module")
-        models = {"models": {}, "optimizers": {}, "optim_names": {}}
-        for model in model_names:
-            _def = model_defs[model]["model"]
-            _params = model_params[model]
-            if "__inherit" in _params:
-                if "__add" in _params:  # NOTE: add params from self, stupid hack
-                    add_params = _params["__add"]
-                else:
-                    add_params = []
-                inherit_name = _params["__inherit"]
-                sig = inspect.signature(_def)
-                model_args = {}
-                for x in sig.parameters:
-                    if x not in add_params:
-                        model_args[x] = self._model_params[inherit_name][x]
+        try:
+            if not all(x in model_params and x in model_defs for x in model_names):
+                return False, self._logd(f"Some of the model_names not in given module")
+            models = {"models": {}, "optimizers": {}, "optim_names": {}}
+            for model in model_names:
+                _def = model_defs[model]["model"]
+                _params = model_params[model]
+                if "__inherit" in _params:
+                    if "__add" in _params:  # FIXME: add params from self, stupid hack
+                        add_params = _params["__add"]
                     else:
-                        model_args[x] = getattr(self, x)  # NOTE: Bad hack
-            else:
-                model_args = _params
-            if model not in self._model_defs:
-                self._model_defs[model] = {}
-            else:
-                self._logw(f"Will overwrite model, optimizer params and defs for {model}")
-            self._model_defs[model]["model"] = _def
-            self._model_params[model] = model_args.copy()
-            self._logd(f"Updated model_params and model_def for {model}")
-            models["models"][model] = _def(**model_args)
-            if isinstance(model_defs[model]["optimizer"], str):
-                optim_name = model_defs[model]["optimizer"]
-                self._model_defs[model]["optimizer"] = optim_name
-                self._logd(f"Updated optimizer params for {model}")
-                models["optim_names"][model] = optim_name
-                if "optimizer_params" in model_defs and hasattr(torch.optim, optim_name):
-                    models["optimizers"][model] = getattr(torch.optim, optim_name)(
-                        **model_defs[model]["optimizer_params"])
-                    self._logd(f"Initialized optimizer for {model} in add_model with given params")
-                elif optim_name in self._optimizer_params:
-                    models["optimizers"][model] = self._optimizer_params[optim_name]["function"](
-                        models["models"][model].parameters(),
-                        **self._optimizer_params[optim_name]["params"])
-                    self._logd(f"Initialized optimizer for {model} in add_model with self params")
+                        add_params = []
+                    inherit_name = _params["__inherit"]
+                    sig = inspect.signature(_def)
+                    model_args = {}
+                    for x in sig.parameters:
+                        if x not in add_params:
+                            model_args[x] = self._model_params[inherit_name][x]
+                        else:
+                            model_args[x] = getattr(self, x)  # FIXME: Bad hack
                 else:
-                    models["optimizers"][model] = getattr(torch.optim, optim_name)()
-                    self._logw(f"Initialized optimizer for {model} in add_model with default params")
-            else:
-                False, self._logd(f"Unrecognized optimizer for model {model}")
-        return True, models
+                    model_args = _params
+                if model not in self._model_defs:
+                    self._model_defs[model] = {}
+                else:
+                    self._logw(f"Will overwrite model, optimizer params and defs for {model}")
+                self._model_defs[model]["model"] = _def
+                self._model_params[model] = model_args.copy()
+                self._logd(f"Updated model_params and model_def for {model}")
+                models["models"][model] = _def(**model_args)
+                if isinstance(model_defs[model]["optimizer"], str):
+                    optim_name = model_defs[model]["optimizer"]
+                    self._model_defs[model]["optimizer"] = optim_name
+                    self._logd(f"Updated optimizer params for {model}")
+                    models["optim_names"][model] = optim_name
+                    if "optimizer_params" in model_defs and hasattr(torch.optim, optim_name):
+                        models["optimizers"][model] = getattr(torch.optim, optim_name)(
+                            **model_defs[model]["optimizer_params"])
+                        self._logd(f"Initialized optimizer for {model} in add_model with given params")
+                    elif optim_name in self._optimizer_params:
+                        models["optimizers"][model] = self._optimizer_params[optim_name]["function"]\
+                            (models["models"][model].parameters(),
+                             **self._optimizer_params[optim_name]["params"])
+                        self._logd(f"Initialized optimizer for {model} in add_model with self params")
+                    else:
+                        models["optimizers"][model] = getattr(torch.optim, optim_name)()
+                        self._logw(f"Initialized optimizer for {model} in add_model with default params")
+                else:
+                    False, self._logd(f"Unrecognized optimizer for model {model}")
+            return True, models
+        except Exception as e:
+            return False, f"{e}"
 
     @POST
     @methods
     def add_module(self, request, checks):
         return self._mods.add_module(request, checks)
-    # END: Helpers
+    # END: Methods
 
     # START: Objects
     #
@@ -2570,8 +2645,14 @@ class Trainer:
                 "memory": memory_info()}
 
     @property
-    def device(self):
-        """The device where the model is loaded. cpu or cuda_[indx]"""
+    def devices(self):
+        """The devices allocated to the trainer.
+
+        Devices can be allocated both to the trainer or the models individually
+        or spread across the models. The devices are provided as trainer_params[\"gpus\"]. For example:
+        
+
+        """
         return self._device
 
     # FIXME: self.models creates problems
@@ -2799,11 +2880,73 @@ class Trainer:
         # save_name = "_".join([str(self._unique_id), model_names, "checkpoint"])
         return os.path.join(self._save_path_without_epoch + "_checkpoint" + ".pth")
 
+    @property
+    def trainer_params(self):
+        """Trainer params govern the behaviour of the trainer.
+
+        Params must be a dict with fields and types:
+
+            ``{'gpus': str, 'cuda': Boolean, 'seed': Union[int, None],
+            'resume': Boolean, 'resume_best': Boolean, 'resume_weights': Union[pathlib.Path, None],
+            'init_weights': Union[str, pathlib.Path], 'training_steps': List[str],
+            'check_func': Union[str, None], 'max_epochs': Union[int, None]}``
+
+        - ``training_steps`` can only be ``['train', 'val', 'test', 'iterations']`` as
+          of now.
+        - if ``iterations`` is present in ``training_steps`` then the trainer will
+          not progress via epochs but via number of batches. ``epoch`` and
+          ``max_epochs`` in that case are 0. In this case ``max_iterations`` must be
+          provided.
+        - Otherwise ``epoch`` and ``max_epoch`` must be given.
+        - A ``condition`` can also be added instead of ``max_epochs`` or
+          ``max_iterations`` but isn't implemented right now.
+        - Both ``cuda`` and ``gpus`` have to be given. To understand how they
+          operate see :meth:`_init_device`.
+
+        """
+        return self._trainer_params
+
+    @property
+    def model_params(self):
+        """`model_params` is a :class:`dict` mapping model names and all the paramters
+        required by those models to be initialized.
+
+        These parameters are specific to each model and can be changed during
+        the training procedure. Depending on the parameter changes, the model
+        may or may not be able to resume trainming from that point. For example,
+        a parameter which changes the number of layers or the dimension of one
+        of the layers would render the model incompatible with the previously
+        trained model. The new model in that case will have to be patched by
+        hand, and the weights copied from the previous model.
+
+        In addition they can contain a `devices` parameter also which is a
+        directive to the trainer assigning the specified devices to the
+        models. An ``auto`` field for the devices will find the optimal
+        allocation w.r.t training speed.
+
+        """
+        return self._model_params
+
+
+    @property
+    def dataloader_params(self):
+        """`dataloader_params` are the parameters given to the various dataloaders.
+        Currently only torch dataloaders are supported. See """
+        pass
+
+    @property
+    def data(self):
+        pass
+
     # TODO: Allow extra_metrics, update_funcs and any other params to be updated
     @property
     def updatable_params(self):
-        """All the parameters which can be updated by the user midway. We segregate them
-        into [model_params, trainer_params, dataloader_params]"""
+        """All the parameters which can be updated by the user midway.
+
+        We segregate them into ``[model_params, trainer_params,
+        dataloader_params]``
+
+        """
         params = {}
         params["model_params"] = self._model_params
         params["trainer_params"] = self._trainer_params

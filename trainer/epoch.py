@@ -14,11 +14,13 @@ from .device import DeviceMonitor
 class BatchVars:
     """BatchVars makes minimal assumptions on the return values of the function. At
     the very least it assumes that:
+
         1. all batches give output structure.
         2. each one has a format of (name, batch_num, prop_namme, value)
 
-    At each append it automatically updates its index so that it's convenient to
-    get values in the form of [batch_num][prop_name].
+    An :class:`Epoch` or any other instance can use it by calling
+    :meth:`append`.  At each append it automatically updates its index so that
+    it's convenient to get values in the form of [batch_num][prop_name].
 
     The iterator returned is of its list and not the index.
 

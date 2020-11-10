@@ -2,9 +2,29 @@ from typing import List, Dict, Iterable, Any, Union, Tuple
 import torch
 import logging
 import traceback
+from functools import partial
+
+
+def _set_device(model, device):
+    for x in model.parameters():
+        x = x.to(device)
 
 
 class Models:
+    """An abstraction for models.
+
+    Currently only :class:`torch.nn.Module` models are supported but the
+    abstraction means that it can easily be extended.
+
+    Args:
+        models: A :class:`dict` mapping model names and models, ``{"model_name": model, ...}``
+        optimizers: A :class:`dict` mapping optimizer names and optimizers
+                    ``{"optim_name": optimizer, ...}``
+        devices: A dictionary 
+    Models are ``{"name": model}`` dictionaries, where each model has a set of
+
+
+    """
     def __init__(self, models: Dict[str, torch.nn.Module],
                  # optimizers: Dict[str, torch.optim.optimizer.Optimizer],
                  optimizers: Dict[str, Any],
@@ -52,23 +72,23 @@ class Models:
     def _check(self, model) -> Tuple[bool, str]:
         if not hasattr(model, "forward"):
             return False, f"No forward call in model {type(model).__qualname__}"
-        elif not hasattr(model, "_device"):
-            return True, f"No \"_device\" attr in model {type(model).__qualname__}. "
-        elif not hasattr(model, "to_"):
-            return True, f"No \"to_\" attr in model {type(model).__qualname__}. "
+        # FIXME: Check if the code is commented
+        # if "cuda()" in inspect.getsource(model.__class__):
+        #     return False, f"cuda() call in model code {type(model).__qualname__}"
+        # if "import ipdb" in inspect.getsource(model.__class__) or\
+        #    "import pdb" in inspect.getsource(model.__class__):
+        #     return False, f"i/pdb imported in model code {type(model).__qualname__}"
         else:
             return True, "Edge Case?"
 
     def set_device(self, model_name: str, device: Union[str, torch.device]):
-        """Sets the device and patches the model with _device and to_ attrs
+        """Sets the device and patches the model with ``_device`` and ``to_`` attrs
 
-        :param model_name: 
-        :param device: 
-        :returns: 
-        :rtype: 
+        Args:
+            model_name: The name of the model
+            device: The device to attach to the model
 
         """
-        
         # FIXME: `device` is referred by the model which shouldn't be the case
         #        In models_old.py, Decoder refers to the _device as
         #        self._device.  Ideally _device should be totally outside the
@@ -126,16 +146,24 @@ class Models:
         except Exception as e:
             return False, f"{e}" + f"\n{traceback.format_exc()}"
 
+    def set_warning(self, *args, **kwargs):
+        return
+
     def add(self, model: torch.nn.Module, params: Dict[str, Any]):
         """Add model to self and initialize it according to the params
 
-        :param params: params for the model. :class:`dict` with keys
-        ``["name", "optimizer", "optimizer_state", "device"]``
-        :returns: None
-        :rtype: None
+        Args:
+            model: The model to add
+            params: params for the model. :class:`dict` with keys
+                    ``["name", "optimizer", "optimizer_state", "device"]``
 
         """
+        if not hasattr(model, "to_"):
+            self.set_warning(f"No \"to_\" attr in model {type(model).__qualname__}. ")
+            model.to_ = partial(_set_device, model)
+
         if self._check(model)[0]:
+            import ipdb; ipdb.set_trace()
             name = params["name"]
             self._models[name] = model
             self._models[name]._name = name

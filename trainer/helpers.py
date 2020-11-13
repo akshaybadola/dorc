@@ -99,7 +99,11 @@ class PropertyProxy(type):
 class Tag:
     def __init__(self, x):
         self.tag = x
-        self._members = []
+        self._members = {}
+
+    @property
+    def names(self):
+        return [*self._members.keys()]
 
     @property
     def members(self):
@@ -107,7 +111,10 @@ class Tag:
 
     def __call__(self, f):
         if f not in self._members:
-            self._members.append(f)
+            if isinstance(f, property):
+                self._members[f.fget.__name__] = f
+            else:
+                self._members[f.__name__] = f
         return f
 
 

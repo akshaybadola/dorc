@@ -190,7 +190,8 @@ class Modules:
             return False, self._logd(f"Error occured while reading file {e}"
                                      + "\n" + traceback.format_exc())
 
-    def add_user_funcs(self, request: flask.Request, user_funcs) -> Tuple[bool, str]:
+    def add_user_funcs(self, request: flask.Request, user_funcs: Dict[str, Callable]) ->\
+            Tuple[bool, str]:
         """Add a user function from a given python or module as a zip file.
 
         The request content is treated as a module and call :meth:`add_module`

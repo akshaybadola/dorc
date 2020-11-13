@@ -9,6 +9,16 @@ sys.path.append("../")
 from trainer.trainer import Trainer
 
 
+class SubTrainer(Trainer):
+    def __init__(self, _cuda, *args, **kwargs):
+        self._cuda = _cuda
+        super().__init__(*args, **kwargs)
+
+    @property
+    def have_cuda(self):
+        return self._cuda
+
+
 class TrainerTestDevice(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -21,24 +31,54 @@ class TrainerTestDevice(unittest.TestCase):
         time_str = datetime.now().isoformat()
         os.mkdir(f".test_dir/test_session/{time_str}")
         cls.data_dir = f".test_dir/test_session/{time_str}"
-        cls.trainer = Trainer(**{"data_dir": cls.data_dir, **cls.config})
+        cls.params = {"data_dir": cls.data_dir, **cls.config}
 
-    def test_check_trainer_params_gpus(self):
-        cases = [*zip([None, "bleh", 4, -2, False, {"bleh"}, ["test"]],
-                      [[-1], [-1], [-1], [-1], [-1], [-1], [-1]])]
+    def test_check_trainer_bad_params_gpus(self):
+        self.trainer = SubTrainer(False, **self.params)
+        cases = [None, "bleh", -2, False, {"bleh"}, ["test"]]
         for i, case in enumerate(cases):
             with self.subTest(i=i):
-                self.trainer._trainer_params["gpus"] = case[0]
+                self.trainer._trainer_params["gpus"] = case
                 self.trainer._check_gpus()
-                self.assertEqual(self.trainer._gpus, case[1])
+                self.assertEqual(self.trainer._gpus, [-1])
 
-    def test_check_trainer_device_allocation_have_cuda(self):
-        self.trainer.have_cuda = lambda: True
-        self.trainer._gpus = [0, 1]
-        self.trainer._set_device()
+    def test_check_trainer_good_params_gpus(self):
+        self.trainer = SubTrainer(False, **self.params)
+        cases = [0, 4, [0, 1], [-1]]
+        for i, case in enumerate(cases):
+            with self.subTest(i=i):
+                self.trainer._trainer_params["gpus"] = case
+                self.trainer._check_gpus()
+                self.assertEqual(self.trainer._gpus,
+                                 case if isinstance(case, list) else [case])
 
-    def 
+    def test_check_trainer_set_device_no_have_cuda_AND_cuda_given(self):
+        self.trainer = SubTrainer(False, **self.params)
+        self.trainer._trainer_params["cuda"] = True
+        with self.subTest(i="many_gpus_given_AND_one_gpu_AND_one_model"):
+            self.trainer._trainer_params["gpus"] = [0, 1]
+            self.trainer._check_gpus()
 
+    # def test_check_trainer_set_device_have_cuda_AND_cuda_given_AND_one_gpu_AND_one_model(self):
+    #     self.trainer.have_cuda = lambda: True
+    #     self.trainer._gpus = [0]
+    #     self.trainer._trainer_params["cuda"] = True
+    #     self.trainer._set_device()
+    #     self.trainer.
+
+    # def test_check_trainer_set_device_have_cuda_AND_cuda_given_AND_two_gpus_AND_one_model_AND_dataparallel(self):
+    #     self.trainer.have_cuda = lambda: True
+    #     self.trainer._gpus = [0, 1]
+    #     self.trainer._trainer_params["cuda"] = True
+    #     self.trainer._set_device()
+    #     self.trainer.
+
+    # def test_check_trainer_set_device_have_cuda_AND_cuda_given_AND_two_gpus_AND_two_models(self):
+    #     self.trainer.have_cuda = lambda: True
+    #     self.trainer._gpus = [0, 1]
+    #     self.trainer._trainer_params["cuda"] = True
+    #     self.trainer._set_device()
+    #     self.trainer.
 
 
     # TODO: Tweak config's various parameters and check for errors
@@ -107,16 +147,16 @@ class TrainerTestDevice(unittest.TestCase):
     # def test_device_logging(self):
     #     pass
 
-    def test_load_saves(self):
-        data = {}
-        self.assertEqual(self.trainer.load_saves(data),
-                         (False, "[load_saves()] Missing params \"weights\""))
-        data = {"weights": "meh"}
-        self.assertEqual(self.trainer.load_saves(data),
-                         (False, "[load_saves()] Invalid or no such method"))
-        data = {"weights": "meh", "method": "load"}
-        self.assertEqual(self.trainer.load_saves(data),
-                         (False, "[load_saves()] No such file"))
+    # def test_load_saves(self):
+    #     data = {}
+    #     self.assertEqual(self.trainer.load_saves(data),
+    #                      (False, "[load_saves()] Missing params \"weights\""))
+    #     data = {"weights": "meh"}
+    #     self.assertEqual(self.trainer.load_saves(data),
+    #                      (False, "[load_saves()] Invalid or no such method"))
+    #     data = {"weights": "meh", "method": "load"}
+    #     self.assertEqual(self.trainer.load_saves(data),
+    #                      (False, "[load_saves()] No such file"))
 
     # Need to test
     # trainer setup has to be tested separately
@@ -126,7 +166,7 @@ class TrainerTestDevice(unittest.TestCase):
     # rest of the functions
     # user func transitions
     @classmethod
-    def tearDown(cls):
+    def tearDownClass(cls):
         if os.path.exists(".test_dir"):
             shutil.rmtree(".test_dir")
 

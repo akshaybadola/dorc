@@ -78,7 +78,7 @@ class DeviceMonitor:
                 self._data["memory_info"].append(memory_info())
                 self._data["time"] += self._interval
                 time.sleep(self._interval)
- 
+
     def _start(self):
         self._running_event.set()
         self._t = Thread(target=self._monitor_func)

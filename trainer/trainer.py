@@ -18,7 +18,7 @@ from multiprocessing.pool import ThreadPool
 from types import SimpleNamespace
 from torch.utils.data import Dataset, DataLoader
 
-from .device import init_nvml, gpu_util, cpu_info, memory_info, DeviceMonitor
+from .device import init_nvml, gpu_util, gpu_name, cpu_info, memory_info, DeviceMonitor
 from .util import gen_file_and_stream_logger, deprecated, _dump
 from .task import Signals
 from .epoch import Epoch
@@ -187,7 +187,8 @@ class Trainer:
         self._init_static_vars()
         self._init_property_vars()
         # self._check_exports()
-        if trainer_params["resume"] or "init_weights" in trainer_params:
+        if trainer_params["resume"] or ("init_weights" in trainer_params and
+                                        trainer_params["init_weights"]):
             self._init_device()
             self._init_models()
             _check_resume_or_init_weights(self)
@@ -273,10 +274,11 @@ class Trainer:
         # CHECK: Why's this commented?
         # if self._devices_initialized:
         #     return
-        self._check_gpus()
+        self._check_gpus_param()
+        self._maybe_init_gpus()
         self._set_device()
 
-    def _check_gpus(self):
+    def _check_gpus_param(self):
         gpus = self._trainer_params["gpus"]
         try:
             if isinstance(gpus, bool):
@@ -304,25 +306,41 @@ class Trainer:
             self._loge(f"Error occured {e} while setting GPUS {gpus}. Will run on CPU.")
             self._gpus = [-1]
 
-    def _set_device(self):
+    def _maybe_init_gpus(self):
         if self._gpus != [-1]:
+            available_gpus = [x for x in self._gpus if x not in self.reserved_gpus]
+            unvailable_gpus = set(available_gpus) - set(self._gpus)
+            self._gpus = available_gpus
+            if not self.reserve_gpus(self._gpus)[0]:
+                self._loge(f"Could not reserve gpus {self._gpus}")
+                self._gpus = [-1]
+            else:
+                self._logd(f"Reserved gpus {self._gpus}")
             try:
-                self._device_handles = init_nvml(self._gpus)
-                self._logd(f"Initial device handles: {self._device_handles}")
+                self._device_handles, removed = init_nvml(self._gpus)
+                self._loge(f"Devices {unvailable_gpus} are already in use. " +
+                           f"Will only set {available_gpus}")
+                self._logd(f"Initialized devices {[*self._device_handles.keys()]} with names:\n" +
+                           f"{[gpu_name(x) for x in self._device_handles.values()]}")
+                if removed:
+                    self._logw(f"Devices {removed} are not supported")
+                self._gpus = [*self._device_handles.keys()]
             except Exception as e:
                 self._loge(f"Could not initialize devices {self._gpus}. Error {e}")
                 self._device_handles = None
         else:
             self._device_handles = None
 
-        have_cuda = self.have_cuda
+    def _set_device(self):
+        print("CALLED")
+        have_cuda = torch.cuda.is_available()
         gpus_given = self._gpus and (not self._gpus == [-1])
         cuda_given = self._trainer_params["cuda"]
         if not gpus_given:
             self._logd("No gpus given. Will run on cpu")
             self._device = torch.device("cpu")
             self._gpus = [-1]
-        if cuda_given and not have_cuda:
+        elif cuda_given and not have_cuda:
             self._logw("cuda specified but not available. Will run on cpu")
             self._device = torch.device("cpu")
             self._gpus = [-1]
@@ -330,17 +348,18 @@ class Trainer:
             self._logw("cuda not specified but gpus given. Will run on cpu")
             self._device = torch.device("cpu")
             self._gpus = [-1]
-        elif cuda_given and have_cuda and len(self._gpus) == 1:
+        elif cuda_given and have_cuda and self._gpus != [-1] and len(self._gpus) == 1:
             self._logi(f"GPU {self._gpus[0]} detected and specified")
             self._device = torch.device(f"cuda:{self._gpus[0]}")
+        # NOTE: Not necessarily. We can allocate different models to different devices
         elif cuda_given and have_cuda and len(self._gpus) > 1:
             self._logi(f"Data parallel specified with gpus {self._gpus}")
             if torch.cuda.device_count() >= len(self._gpus):
                 self._logi(f"{torch.cuda.device_count()} gpus are available")
                 if "parallel" in self._trainer_params:
-                    # I always get confused by this statement
-                    # It's somewhhat mirthful and one has to see the next line
-                    # to make sense of it.
+                    # NOTE: I always get confused by this statement It's
+                    #       somewhhat mirthful and one has to see the next line
+                    #       to make sense of it.
                     self._logi(f"Parallel call be functional {self._trainer_params['parallel']}")
                     self._device = self._trainer_params["parallel"]
                 else:
@@ -359,7 +378,6 @@ class Trainer:
                 self._logw(f"Tried overwriting attribute {t}! Denied.")
             elif t != "gpus":
                 self.__dict__[t] = v
-        self.__init_nvml()
         self._devices_initialized = True
 
     def _init_static_vars(self):
@@ -514,24 +532,6 @@ class Trainer:
                                       "val_loader": self.val_loader,
                                       "test_loader": self.test_loader,
                                       "torch": torch}
-
-    def __init_nvml(self):
-        """Initializes the Nvidia monitoring library. It's called by _init_state_vars so
-        needn't be called again.
-
-        :returns: None
-        :rtype: None
-
-        """
-        self._logi(f"Initializing nvml for gpus {self._gpus}")
-        # CHECK: I don't remember how the order is printed.
-        # Assumes torch.cuda devices are of the same order as PCI BUS for
-        # getting correct info with pynvml
-        if self._gpus[0] != -1:
-            self._device_handles = init_nvml(self._gpus)
-            print("INITIAL handles", self._device_handles)
-        else:
-            self._device_handles = None
 
     def _init_models(self):
         """Initialize models with a :class:`~trainer.components.Models` class
@@ -2642,11 +2642,12 @@ class Trainer:
         "Version of the server"
         return self.__version__
 
-    @prop
-    @property
-    def have_cuda(self):
-        "Do we have gpus? And cuda?"
-        return torch.cuda.is_available()
+    # @prop
+    # @property
+    # def have_cuda(self):
+    #     "Do we have gpus? And cuda?"
+    #     bleh = torch.cuda.is_available()
+    #     return bleh
 
     @prop
     @property
@@ -2710,7 +2711,8 @@ class Trainer:
         """The devices allocated to the trainer.
 
         Devices can be allocated both to the trainer or the models individually
-        or spread across the models. The devices are provided as trainer_params[\"gpus\"]. For example:
+        or spread across the models. The devices are provided as
+        trainer_params[\"gpus\"]. For example:
 
         """
         return self._device

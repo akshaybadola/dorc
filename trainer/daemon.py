@@ -1,3 +1,4 @@
+from typing import List, Dict, Any, Union, Callable
 import os
 import sys
 import ssl
@@ -16,6 +17,7 @@ import hashlib
 import traceback
 import configparser
 import zipfile
+import pathlib
 from queue import Queue
 from threading import Thread
 import multiprocessing as mp
@@ -54,13 +56,13 @@ session_method = Tag("session_method")
 #             dump(args)
 
 
-def get_hostname():
+def get_hostname() -> str:
     p = Popen("hostname", stdout=PIPE, stderr=PIPE)
     out, err = p.communicate()
     return out.decode("utf-8")
 
 
-def check_ssh_port(host, port):
+def check_ssh_port(host: str, port: int) -> int:
     timeout = 2
     while True:
         print(f"Checking port {port}")
@@ -156,12 +158,17 @@ def create_module(module_dir, module_files=[]):
         shutil.copy(f, module_dir)
 
 
+Path = Union[str, pathlib.Path]
+
+
 class Daemon:
     __version__ = __daemon__version__
 
-    def __init__(self, hostname, port, data_dir, production=False,
-                 template_dir=None, static_dir=None, root_dir=None,
-                 trackers=[], daemon_name=None, register=True):
+    def __init__(self, hostname: str, port: int, data_dir: Path,
+                 production: bool = False, template_dir: Union[Path, None] = None,
+                 static_dir: Union[Path, None] = None, root_dir: Union[Path, None] = None,
+                 trackers: List[str] = [], daemon_name: Union[str, None] = None,
+                 register: bool = True):
         self.ctx = mp.get_context("spawn")
         self._hostname = hostname
         self._port = port
@@ -238,6 +245,7 @@ sys.path.append("{self.data_dir}")
         self._threads = {}
         self._task_q = Queue()
         self._sessions = {}
+        self._devices = {}
         self._modules = {}
         self._datasets = {}
         self._init_context()
@@ -293,32 +301,32 @@ sys.path.append("{self.data_dir}")
         # self._fwd_ports()
 
     @property
-    def hostname(self):
+    def hostname(self) -> str:
         "Hostname on which to serve"
         return self._hostname
 
     @property
-    def port(self):
+    def port(self) -> int:
         "port on which to listen"
         return self._port
 
     @property
-    def fwd_ports(self):
+    def fwd_ports(self) -> Dict:
         "A :class:`dict` mapping trackers and ports forwarded to them"
         return self._fwd_ports
 
     @property
-    def fwd_procs(self):
+    def fwd_procs(self) -> Dict:
         "A :class:`dict` mapping trackers and SSH :class:`subprocess.Popen` processes"
         return self._fwd_procs
 
     @property
-    def fwd_ports_event(self):
+    def fwd_ports_event(self) -> mp.Event:
         """Event :class:`multiprocessing.Event` which controls `self.fwd_port_thread`"""
         return self._fwd_ports_event
 
     @property
-    def fwd_ports_thread(self):
+    def fwd_ports_thread(self) -> mp.Process:
         """Process :class:`multiprocessing.Process` which checks if the ports are
         correctly forwarded to the trackers.
 
@@ -326,7 +334,7 @@ sys.path.append("{self.data_dir}")
         return self._fwd_ports_thread
 
     @property
-    def trackers(self):
+    def trackers(self) -> List[str]:
         """List of user@host strings where a tracker is present.
 
         Trackers are http servers which map the hostnames to forwarded ports on
@@ -337,7 +345,7 @@ sys.path.append("{self.data_dir}")
         """
         return self._trackers
 
-    def fwd_ports_func(self):
+    def fwd_ports_func(self) -> None:
         """Forward ports at one minute interval to `self.trackers`
 
         This function runs in a separate process and checks the SSH forwarded
@@ -456,7 +464,7 @@ sys.path.append("{self.data_dir}")
         while not self._task_q.empty():
             self._results.append(self._task_q.get())
 
-    def _check_config(self, config):
+    def _check_config(self, config) -> bool:
         self._logw(f"This is a placeholder function")
         # Need python file or module, that's it
         return True
@@ -472,19 +480,19 @@ sys.path.append("{self.data_dir}")
         s.close()
         return self._last_free_port
 
-    def _create_id(self):
+    def _create_id(self) -> int:
         # 0 reserverd for instance
         self._task_id += 1
         self.__task_ids.append(self._task_id)
         return self._task_id
 
-    def _get_task_id_launch_func(self, func, *args):
+    def _get_task_id_launch_func(self, func: Callable, *args):
         task_id = self._create_id()
         self._threads[task_id] = Thread(target=func, args=[task_id, *args])
         self._threads[task_id].start()
         return task_id
 
-    def _check_result(self, task_id):
+    def _check_result(self, task_id: int) -> Any:
         self._update_results()
         for x in self._results:
             if task_id == x[0]:
@@ -492,7 +500,7 @@ sys.path.append("{self.data_dir}")
         else:
             return None
 
-    def _wait_for_task(self, func, task_id, args):
+    def _wait_for_task(self, func: Callable, task_id: int, args) -> Any:
         func(task_id, *args)
         result = self._check_result(task_id)
         while result is None:
@@ -500,7 +508,7 @@ sys.path.append("{self.data_dir}")
             result = self._check_result(task_id)
         return result[1]
 
-    def _update_init_file(self, init_file, module_names):
+    def _update_init_file(self, init_file: str, module_names: List[str]):
         lines = []
         for m in module_names:
             lines.append(f"from . import {m}\n")
@@ -902,7 +910,8 @@ sys.path.append("{self.data_dir}")
             self._sessions[name]["sessions"][time_str]["config"] = None
             self._sessions[name]["sessions"][time_str].pop("config")
             if "port" in self._sessions[name]["sessions"][time_str]:
-                self._sessions[name]["sessions"][time_str].pop("port")
+                port = self._sessions[name]["sessions"][time_str].pop("port")
+                self._devices.pop(port)
             if "iface" in self._sessions[name]["sessions"][time_str]:
                 self._sessions[name]["sessions"][time_str].pop("iface")
         if time_str is None:
@@ -1469,6 +1478,21 @@ sys.path.append("{self.data_dir}")
             :retval: str
             """
             return self.__version__
+
+        @self.app.route("/_devices", methods=["GET", "POST"])
+        def __devices():
+            if request.method == "POST":
+                try:
+                    data = request.json
+                    self._devices[data["port"]] = data["gpus"]
+                    return _dump([True, None])
+                except Exception as e:
+                    return _dump([False, f"{e}"])
+            elif request.method == "GET":
+                retval = []
+                for x in self._devices.values():
+                    retval.extend(x)
+                return _dump(retval)
 
         # @flask_login.login_required
         # @self.app.route("/api", methods=["GET"])

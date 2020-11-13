@@ -1,4 +1,4 @@
-from typing import Dict, Iterable, Union
+from typing import Dict, Iterable, Union, List
 import os
 import sys
 import ssl
@@ -7,6 +7,7 @@ import json
 import atexit
 import shutil
 import logging
+import requests
 import traceback
 from functools import partial
 
@@ -43,6 +44,7 @@ class FlaskInterface:
         :rtype: None
 
         """
+        self._daemon_url = "http://localhost:20202/"
         self.api_host = hostname
         self.api_port = port
         self.logger = None
@@ -103,6 +105,14 @@ class FlaskInterface:
     def state_exists(self):
         return os.path.exists(os.path.join(self.data_dir, "session_state"))
 
+    @property
+    def reserved_gpus(self) -> List[int]:
+        return requests.get(self._daemon_url + "_devices").json()
+
+    def reserve_gpus(self, gpus) -> List[Union[bool, None, str]]:
+        return requests.post(self._daemon_url + "_devices",
+                             json={"gpus": gpus, "port": self.api_port})
+
     def _update_config(self, config: Dict, overrides: Iterable[Union[int, float, str]]):
         def _check(conf, seq):
             status = True
@@ -153,6 +163,8 @@ class FlaskInterface:
             self._current_overrides = config_overrides
             self.trainer = Trainer(**{"data_dir": self.data_dir, "production": self.production,
                                       **config})
+            self.trainer.reserved_gpus = lambda: self.reserved_gpus
+            self.trainer.reserve_gpus = self.reserve_gpus
             self.trainer._init_all()
             return True, "Created Trainer"
         except Exception as e:

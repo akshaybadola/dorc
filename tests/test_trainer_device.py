@@ -6,6 +6,7 @@ import unittest
 import sys
 from _setup_local import config
 sys.path.append("../")
+from trainer.device import all_devices, useable_devices
 from trainer.trainer import Trainer
 
 
@@ -39,7 +40,7 @@ class TrainerTestDevice(unittest.TestCase):
         for i, case in enumerate(cases):
             with self.subTest(i=i):
                 self.trainer._trainer_params["gpus"] = case
-                self.trainer._check_gpus()
+                self.trainer._check_gpus_param()
                 self.assertEqual(self.trainer._gpus, [-1])
 
     def test_check_trainer_good_params_gpus(self):
@@ -48,16 +49,52 @@ class TrainerTestDevice(unittest.TestCase):
         for i, case in enumerate(cases):
             with self.subTest(i=i):
                 self.trainer._trainer_params["gpus"] = case
-                self.trainer._check_gpus()
+                self.trainer._check_gpus_param()
                 self.assertEqual(self.trainer._gpus,
                                  case if isinstance(case, list) else [case])
 
-    def test_check_trainer_set_device_no_have_cuda_AND_cuda_given(self):
+    def test_check_trainer_set_gpus(self):
         self.trainer = SubTrainer(False, **self.params)
+        self.trainer.reserved_gpus = []
+        self.trainer.reserve_gpus = lambda x: [True, None]
         self.trainer._trainer_params["cuda"] = True
-        with self.subTest(i="many_gpus_given_AND_one_gpu_AND_one_model"):
-            self.trainer._trainer_params["gpus"] = [0, 1]
-            self.trainer._check_gpus()
+        have_gpus = all_devices()
+        useable_gpus = useable_devices()
+        if have_gpus != useable_gpus:
+            self.trainer._gpus = have_gpus
+            with self.subTest(i="some_gpus_not_supported"):
+                self.trainer._maybe_init_gpus()
+                self.assertEqual(self.trainer._gpus, useable_gpus)
+        with self.subTest(i="more_gpus_than_available_given"):
+            self.trainer.reserved_gpus = []
+            self.trainer._gpus = have_gpus + [*range(max(have_gpus) + 1, max(have_gpus) + 3)]
+            self.trainer._maybe_init_gpus()
+            self.assertEqual(self.trainer._gpus, useable_gpus)
+
+    def test_check_trainer_set_device_one_gpu_no_cuda_given_AND_gpus_given(self):
+        self.trainer = SubTrainer(False, **self.params)
+        self.trainer.reserved_gpus = []
+        self.trainer.reserve_gpus = lambda x: [True, None]
+        self.trainer._trainer_params["cuda"] = False
+        self.trainer._trainer_params["gpus"] = [0, 1]
+        self.trainer._check_gpus_param()
+        self.trainer._maybe_init_gpus()
+        self.assertEqual(self.trainer._gpus, [0, 1])
+        self.trainer._set_device()
+        self.assertEqual(self.trainer._gpus, [-1])
+
+    def test_check_trainer_set_device_cuda_given_AND_no_gpus_given(self):
+        self.trainer = SubTrainer(False, **self.params)
+        self.trainer.reserved_gpus = []
+        self.trainer.reserve_gpus = lambda x: [True, None]
+        self.trainer._trainer_params["cuda"] = True
+        self.trainer._trainer_params["gpus"] = []
+        self.trainer._check_gpus_param()
+        self.trainer._maybe_init_gpus()
+        self.trainer._set_device()
+        self.assertEqual(self.trainer._gpus, [-1])
+
+    # def test_check_trainer_set_
 
     # def test_check_trainer_set_device_have_cuda_AND_cuda_given_AND_one_gpu_AND_one_model(self):
     #     self.trainer.have_cuda = lambda: True

@@ -1,54 +1,90 @@
+from typing import List, Dict, Any, Union
 from threading import Thread, Event
 import time
 import psutil
-import pynvml
+import pynvml as nv
 
 
-def cpu_info():
+def cpu_info() -> Dict[str, Union[int, float]]:
     return {"cpu_count": psutil.cpu_count(), "cpu_util": psutil.cpu_percent()}
 
 
-def memory_info():
+def memory_info() -> Dict[str, int]:
     info = psutil.virtual_memory()
     return {"total": info.total, "used": info.used}
 
 
-def gpu_util(handles):
+def gpu_util(handles: Dict[int, Any]) -> Dict[int, Dict[str, Union[int, float]]]:
     def _get_util(h):
-        util = pynvml.nvmlDeviceGetUtilizationRates(h)
-        mem = pynvml.nvmlDeviceGetMemoryInfo(h)
+        util = nv.nvmlDeviceGetUtilizationRates(h)
+        mem = nv.nvmlDeviceGetMemoryInfo(h)
         return {"gpu": util.gpu, "memory": 100 * (mem.used / mem.total)}
     return {gpu_id: _get_util(h) for gpu_id, h in handles.items()}
 
 
-def gpu_temp(handles):
+def gpu_temp(handles: Dict[int, Any]) -> Dict[int, Dict[str, int]]:
     def _get_temp(h):
-        temp = pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU)
-        thresh = pynvml.nvmlDeviceGetTemperatureThreshold(
-            h, pynvml.NVML_TEMPERATURE_THRESHOLD_SLOWDOWN)
+        temp = nv.nvmlDeviceGetTemperature(h, nv.NVML_TEMPERATURE_GPU)
+        thresh = nv.nvmlDeviceGetTemperatureThreshold(
+            h, nv.NVML_TEMPERATURE_THRESHOLD_SLOWDOWN)
         return {"temp": temp, "thresh": thresh}
     return {gpu_id: _get_temp(h) for gpu_id, h in handles.items()}
 
 
-def init_nvml(gpus):
-    pynvml.nvmlInit()
-    return {x: pynvml.nvmlDeviceGetHandleByIndex(x) for x in gpus}
+def all_devices() -> List[int]:
+    nv.nvmlInit()
+    x = 0
+    inds = []
+    while True:
+        try:
+            nv.nvmlDeviceGetHandleByIndex(x)
+            inds.append(x)
+            x += 1
+        except Exception:
+            break
+    return inds
 
 
-class Monitor:
-    def __init__(self, dm):
-        self._dm = dm
+def useable_devices() -> List[int]:
+    nv.nvmlInit()
+    x = 0
+    inds = []
+    while True:
+        try:
+            handle = nv.nvmlDeviceGetHandleByIndex(x)
+            gpu_temp({x: handle})
+            inds.append(x)
+            x += 1
+        except Exception as e:
+            if isinstance(e, nv.NVMLError_NotSupported):
+                x += 1
+                continue
+            else:
+                break
+    return inds
 
-    def __enter__(self):
-        self._dm._reset()
-        self._dm._start()
 
-    def __exit__(self, *args):
-        self._dm._end()
+def init_nvml(gpus: List[int]) -> Dict[int, Any]:
+    nv.nvmlInit()
+    remove = []
+    handles = {}
+    for x in gpus:
+        try:
+            handles[x] = nv.nvmlDeviceGetHandleByIndex(x)
+            gpu_temp({x: handles[x]})
+        except Exception:
+            if x in handles:
+                handles.pop(x)
+            remove.append(x)
+    return handles, remove
+
+
+def gpu_name(handle) -> str:
+    return nv.nvmlDeviceGetName(handle).decode("utf-8")
 
 
 class DeviceMonitor:
-    def __init__(self, gpu_handles, poll_interval=0.05):
+    def __init__(self, gpu_handles: Dict[int, Any], poll_interval: float = 0.05):
         self._handles = gpu_handles
         self._interval = poll_interval
         self._running_event = Event()
@@ -128,3 +164,15 @@ class DeviceMonitor:
     @property
     def time(self):
         return self._data["time"]
+
+
+class Monitor:
+    def __init__(self, dm: DeviceMonitor):
+        self._dm = dm
+
+    def __enter__(self):
+        self._dm._reset()
+        self._dm._start()
+
+    def __exit__(self, *args):
+        self._dm._end()

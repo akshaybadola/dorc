@@ -1,6 +1,6 @@
 import os
 import shutil
-import time
+import torch
 from datetime import datetime
 import unittest
 import sys
@@ -94,28 +94,27 @@ class TrainerTestDevice(unittest.TestCase):
         self.trainer._set_device()
         self.assertEqual(self.trainer._gpus, [-1])
 
-    # def test_check_trainer_set_
+    def test_check_trainer_set_device_one_model(self):
+        # if one gpu and one model, set model._device even when not specified in
+        # params? when have_cuda and cuda_given
+        self.trainer = SubTrainer(False, **self.params)
+        with self.subTest(i="one_gpu"):
+            self.trainer.reserved_gpus = []
+            self.trainer.reserve_gpus = lambda x: [True, None]
+            self.trainer._trainer_params["cuda"] = True
+            self.trainer._trainer_params["gpus"] = [0]
+            self.trainer._check_gpus_param()
+            self.trainer._maybe_init_gpus()
+            self.trainer._set_device()
+            self.assertEqual(self.trainer._gpus, [0])
+            self.trainer._init_models()
+            self.assertEqual(self.trainer._models["net"]._device, torch.device(0))
 
-    # def test_check_trainer_set_device_have_cuda_AND_cuda_given_AND_one_gpu_AND_one_model(self):
-    #     self.trainer.have_cuda = lambda: True
-    #     self.trainer._gpus = [0]
-    #     self.trainer._trainer_params["cuda"] = True
-    #     self.trainer._set_device()
-    #     self.trainer.
+    def test_check_trainer_set_device_one_gpu_many_models(self):
+        pass
 
-    # def test_check_trainer_set_device_have_cuda_AND_cuda_given_AND_two_gpus_AND_one_model_AND_dataparallel(self):
-    #     self.trainer.have_cuda = lambda: True
-    #     self.trainer._gpus = [0, 1]
-    #     self.trainer._trainer_params["cuda"] = True
-    #     self.trainer._set_device()
-    #     self.trainer.
-
-    # def test_check_trainer_set_device_have_cuda_AND_cuda_given_AND_two_gpus_AND_two_models(self):
-    #     self.trainer.have_cuda = lambda: True
-    #     self.trainer._gpus = [0, 1]
-    #     self.trainer._trainer_params["cuda"] = True
-    #     self.trainer._set_device()
-    #     self.trainer.
+    def test_check_trainer_set_device_many_gpus_many_models(self):
+        pass
 
 
     # TODO: Tweak config's various parameters and check for errors

@@ -32,14 +32,6 @@ class TrainerTestDevice(unittest.TestCase):
                 self.trainer._check_gpus()
                 self.assertEqual(self.trainer._gpus, case[1])
 
-    def test_check_trainer_device_allocation_have_cuda(self):
-        self.trainer.have_cuda = lambda: True
-        self.trainer._gpus = [0, 1]
-        self.trainer._set_device()
-
-    def 
-
-
 
     # TODO: Tweak config's various parameters and check for errors
     #       Would have to be subtests.

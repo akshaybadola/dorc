@@ -24,7 +24,7 @@ from .task import Signals
 from .epoch import Epoch
 from .mods import Modules as Modules
 from .overrides import MyDataLoader, default_tensorify
-from .components import Models
+from .model import Model
 from ._log import Log
 from ._checks import (_check_model_params, _check_trainer_params, _check_data_params,
                       _check_resume_or_init_weights)
@@ -332,52 +332,51 @@ class Trainer:
             self._device_handles = None
 
     def _set_device(self):
-        print("CALLED")
         have_cuda = torch.cuda.is_available()
         gpus_given = self._gpus and (not self._gpus == [-1])
         cuda_given = self._trainer_params["cuda"]
         if not gpus_given:
             self._logd("No gpus given. Will run on cpu")
-            self._device = torch.device("cpu")
+            # self._device = torch.device("cpu")
             self._gpus = [-1]
         elif cuda_given and not have_cuda:
             self._logw("cuda specified but not available. Will run on cpu")
-            self._device = torch.device("cpu")
+            # self._device = torch.device("cpu")
             self._gpus = [-1]
         elif gpus_given and not cuda_given:
             self._logw("cuda not specified but gpus given. Will run on cpu")
-            self._device = torch.device("cpu")
+            # self._device = torch.device("cpu")
             self._gpus = [-1]
         elif cuda_given and have_cuda and self._gpus != [-1] and len(self._gpus) == 1:
             self._logi(f"GPU {self._gpus[0]} detected and specified")
-            self._device = torch.device(f"cuda:{self._gpus[0]}")
-        # NOTE: Not necessarily. We can allocate different models to different devices
+            # self._device = torch.device(f"cuda:{self._gpus[0]}")
         elif cuda_given and have_cuda and len(self._gpus) > 1:
-            self._logi(f"Data parallel specified with gpus {self._gpus}")
-            if torch.cuda.device_count() >= len(self._gpus):
-                self._logi(f"{torch.cuda.device_count()} gpus are available")
-                if "parallel" in self._trainer_params:
-                    # NOTE: I always get confused by this statement It's
-                    #       somewhhat mirthful and one has to see the next line
-                    #       to make sense of it.
-                    self._logi(f"Parallel call be functional {self._trainer_params['parallel']}")
-                    self._device = self._trainer_params["parallel"]
-                else:
-                    self._logi("Parallel call be Module dataparallel")
-                    self._device = "dataparallel"
-            else:
-                self._loge(f"{torch.cuda.device_count()} gpus are not available")
-                raise AttributeError
-        else:
-            self._logi("cuda not specified. Using cpu")
-            self._device = torch.device("cpu")
-            self._gpus = [-1]
+            self._logi(f"Multipule gpus {self._gpus} specified." +
+                       " Will allocate according to model_params")
+        #     if torch.cuda.device_count() >= len(self._gpus):
+        #         self._logi(f"{torch.cuda.device_count()} gpus are available")
+        #         if "parallel" in self._trainer_params:
+        #             # NOTE: I always get confused by this statement It's
+        #             #       somewhhat mirthful and one has to see the next line
+        #             #       to make sense of it.
+        #             self._logi(f"Parallel call be functional {self._trainer_params['parallel']}")
+        #             # self._device = self._trainer_params["parallel"]
+        #         else:
+        #             self._logi("Parallel call be Module dataparallel")
+        #             # self._device = "dataparallel"
+        #     else:
+        #         self._loge(f"{torch.cuda.device_count()} gpus are not available")
+        #         raise AttributeError
+        # else:
+        #     self._logi("cuda not specified. Using cpu")
+        #     # self._device = torch.device("cpu")
+        #     self._gpus = [-1]
         torch.cuda.manual_seed(self._trainer_params["seed"])
-        for t, v in self._trainer_params.items():
-            if t in self.__class__.__dict__:
-                self._logw(f"Tried overwriting attribute {t}! Denied.")
-            elif t != "gpus":
-                self.__dict__[t] = v
+        # for t, v in self._trainer_params.items():
+        #     if t in self.__class__.__dict__:
+        #         self._logw(f"Tried overwriting attribute {t}! Denied.")
+        #     elif t != "gpus":
+        #         self.__dict__[t] = v
         self._devices_initialized = True
 
     def _init_static_vars(self):
@@ -534,39 +533,53 @@ class Trainer:
                                       "torch": torch}
 
     def _init_models(self):
-        """Initialize models with a :class:`~trainer.components.Models` class
+        """Initialize models with a :class:`~trainer.model.Model` class
 
-        criteria, optimizers are initialized first and then the model
+        Criteria are are initialized also.  :attr:`Trainer.model_params` should
+        be a :class:`dict` of {model_name: model_params}.  Device allocation can
+        be specified with giving `gpus` in model_params. There can be overlap
+        between models and GPUs and it is left up to the user.
 
-        `Trainer._model_params` should contain a :class:`dict` of {models, optimizers, devices}
+        `gpus` can also be specified as "auto" or "parallel".  If "auto" is
+        given then certain heuristics are applied according which of the models
+        are to be loaded initially the the gpus available.
 
-        device allocations should be given in model_params
+        See :ref:`Device Allocation` for details
 
         """
-        self._logi("Initializing Models, Optimizers and Criteria ")
+        self._logi("Initializing Criteria and Models.")
         self.criteria = {}
         for k, v in self._criteria_params.items():
             self.criteria[k] = v["function"](**v["params"])
-        models = {}
-        optimizers = {}
-        devices = {}
-        if (not hasattr(self, "devices") or not hasattr(self, "_devices"))\
-           and hasattr(self, "_device"):
-            devices = {m: self._device for m in self._model_params}
-        else:
-            # TODO: Model parallel and sharding
-            # CHECK: if the device isn't specified in traine params, how can
-            #        it be loaded by the model?
-            # self._init_device()
-            devices = {m: self._device for m in self._model_params}
-        for model_name, model_params in self._model_params.items():
-            models[model_name] = self._model_defs[model_name]["model"](**model_params)
-            optim_name = self._model_defs[model_name]["optimizer"]
-            optimizers[model_name] = {"name": optim_name,
-                                      "optimizer": self._optimizer_params[optim_name]["function"](
-                                          models[model_name].parameters(),
-                                          **self._optimizer_params[optim_name]["params"])}
-        self._models = Models(models, optimizers, devices, self.gpus, self.logger)
+        # TODO: Model parallel and sharding
+        # NOTE: if only one model load it
+        self._models = {}
+        loaded = dict((k, v) for k, v in self._model_params.items()
+                      if "loaded" in v and v["loaded"])
+        for name, params in loaded.items():
+            devices = [x for x in loaded["gpus"] if x in self._gpus]
+            model_name = name
+            model_params = params
+            self._models[model_name] = self._model_init_helper(
+                model_name, model_params, devices)
+
+    @POST
+    @methods
+    def load_model(self, name):
+        """Load a model with given `name`."""
+        if name in self._model_params:
+            params = self._model_params[name]
+            devices = [x for x in params["gpus"] if x in self._gpus]
+            self._models[name] = self._model_init_helper(name, params, devices)
+
+    def _model_init_helper(self, model_name, model_params, devices):
+        model_def = self._model_defs[model_name]["model"]
+        params = model_params
+        optim_name = self._model_defs[model_name]["optimizer"]
+        optimizer = {"name": optim_name,
+                     "function": self._optimizer_params[optim_name]["function"],
+                     "params": self._optimizer_params[optim_name]["params"]}
+        self._models[model_name] = Model(model_name, model_def, params, optimizer)
 
     def _init_dataloaders(self):
         """Initialize the dataloaders.
@@ -2705,24 +2718,38 @@ class Trainer:
                 "cpu_info": cpu_info(),
                 "memory": memory_info()}
 
+    # @prop
+    # @property
+    # def devices(self):
+    #     """The devices allocated to the trainer.
+
+    #     Devices can be allocated both to the trainer or the models individually
+    #     or spread across the models. The devices are provided as
+    #     trainer_params[\"gpus\"]. For example:
+
+    #     """
+    #     return self._device
+
     @prop
     @property
-    def devices(self):
-        """The devices allocated to the trainer.
+    def device_allocation(self):
+        """How the devices are allocated to the trainer.
 
-        Devices can be allocated both to the trainer or the models individually
-        or spread across the models. The devices are provided as
-        trainer_params[\"gpus\"]. For example:
+        Depending on the trainer and model parameters, the model(s) can be
+        parallelized over multiple devices or reside on a single device. Device
+        info is pulled from the models where it's stored separately for the
+        models. Multiple models can reside on one device if it has enough VRAM
+        and compute capacity.
 
         """
-        return self._device
+        return None
 
     # FIXME: self.models creates problems
     @prop
     @property
     def models(self):
         "Return the names of the models available with the server"
-        return self._models.names
+        return [x.name for x in self._models]
 
     @prop
     @property

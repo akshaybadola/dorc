@@ -22,7 +22,7 @@ Device Allocation
 Devices are allocated both to the trainer and to the models. Devices allocated
 to a trainer will not be available to other training sessions. Devices within a
 training sessions can be shuffled around to various models available to the
-trainer as the need arises and according to the commands given.
+trainer as the need arises and according to the commands given and availability.
 
 Special directives can be given which would ensure automatic device
 allocation.
@@ -30,20 +30,20 @@ allocation.
 - GPUs (or systems) themselves can be allocated to the trainer in
   `trainer_params`.
 - After which the models themselves can have which can set which devices they're
-  active on. We can use a ``_device`` attr on the model to determine which
-  device to assign to which model.
-- Special device names like `parallel`, `dataparallel` or
-  `distributed_dataparallel` can indicate that the model is requested to be
-  spread over all the possible GPUs (or systems). Otherwise device names
-
-
+  active on. We use a ``_device`` attr on the model to determine which device to
+  assign to which model.
+- Special device names like `auto`, `parallel` can indicate that the model is
+  requested to be spread over all the possible GPUs (or systems). Otherwise
+  device names.
 
 1. If there are multiple models and gpus then the models are distributed
    among the gpus such that no more than one model is on each device.
+
    - If the number of gpus is greater than number of models then larger
      models are spread across multiple devices.
    - The aim would be to make sure that for a given batch of data, the
      forward call for each model is balanced.
+
 2. If one model and multiple gpus are given, then the model is spread
    across all the models.
 3. If the number of models is greater than the number of gpus then again

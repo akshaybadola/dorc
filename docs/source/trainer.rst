@@ -28,14 +28,6 @@ trainer.checks module
    :undoc-members:
    :show-inheritance:
 
-trainer.components module
--------------------------
-
-.. automodule:: trainer.components
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 trainer.config module
 ---------------------
 
@@ -80,6 +72,14 @@ trainer.interfaces module
 -------------------------
 
 .. automodule:: trainer.interfaces
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+trainer.model module
+--------------------
+
+.. automodule:: trainer.model
    :members:
    :undoc-members:
    :show-inheritance:

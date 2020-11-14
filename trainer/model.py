@@ -19,7 +19,7 @@ class Model:
     """
     def __init__(self, name: str, model_def: Callable[..., torch.nn.Module],
                  params: Dict,
-                 optimizer: Dict[str, Union[Callable[..., torch.optim.optimizer.Optimizer],
+                 optimizer: Dict[str, Union[Callable[..., torch.optim.Optimizer],
                                             str, Dict]],
                  gpus: List[int]):
         self._name = name
@@ -58,7 +58,7 @@ class Model:
         return self._optimizer_name
 
     @property
-    def optimizer(self) -> torch.optim.optimizer.Optimizer:
+    def optimizer(self) -> torch.optim.Optimizer:
         return self._optimizer
 
     @property

@@ -544,7 +544,7 @@ class Trainer:
         given then certain heuristics are applied according which of the models
         are to be loaded initially the the gpus available.
 
-        See :ref:`Device Allocation` for details
+        See :ref:`source/dorc:Device Allocation` for details
 
         """
         self._logi("Initializing Criteria and Models.")

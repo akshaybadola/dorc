@@ -1,3 +1,4 @@
+from typing import List, Iterable
 import os
 import sys
 import json
@@ -5,6 +6,14 @@ import logging
 import numpy
 import torch
 import warnings
+
+
+def concat(l: Iterable[List]) -> List:
+    """Concat all items in a given list of lists"""
+    temp = []
+    for x in l:
+        temp.extend(x)
+    return temp
 
 
 def deprecated(f):

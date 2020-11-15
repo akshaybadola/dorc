@@ -39,16 +39,19 @@ class Model:
 
     def _init(self):
         self._model = self._model_def(**self._model_params)
-        self._optimizer = self._optimizer_func(**self._optimizer_params)
+        self._optimizer = self._optimizer_func(self._model.parameters(), **self._optimizer_params)
         if self._gpus == [-1] or self._gpus == []:
             self._device = torch.device("cpu")
         elif len(self._gpus) == 1:
+            self._device = torch.device(f"cuda:{self._gpus[0]}")
+            self.to = lambda x: x.cuda(self._gpus[0])
+            self._model = self._model.to(self._device)
             self._model._to_device = lambda x: x.cuda(self._gpus[0])
-            # TODO:
-            # 1. one model many gpus -> dataparallel
-            # 2. one model one gpu -> obvious
-            # 3. many models many gpus -> tricky
-            pass
+        else:
+            self._device = "dataparallel"
+            self.to = lambda x: x.cuda(self._gpus[0])
+            self._model = self._model.to(torch.device(f"cuda:{self._gpus[0]}"))
+            self._model._to_device = lambda x: x.cuda(self._gpus[0])
 
     def reinit(self):
         self._init()

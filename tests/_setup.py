@@ -112,7 +112,7 @@ config["dataloader_params"] = {"train": {"batch_size": 32,
                                         "num_workers": 0,
                                         "shuffle": False,
                                         "pin_memory": False}}
-config["model_params"] = {"net": {}}
+config["model_params"] = {"net": {"params": {}, "gpus": "auto"}}
 config["model_defs"] = {"net": {"model": Net, "optimizer": "Adam"}}
 config["update_functions"] = {"train": gm.autoloads.ClassificationTrainStep("net", "criterion_ce_loss"),
                               "val": gm.autoloads.ClassificationTestStep("net", "criterion_ce_loss"),

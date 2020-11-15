@@ -49,6 +49,9 @@ allocation.
 3. If the number of models is greater than the number of gpus then again
    the balancing principle applies, in this case however, the models may
    share devices.
+4. If both "auto" or "parallel" are given for some models and explicit devices
+   are given for some others, then those with devices given will be allocated
+   first and the rest will be balanced later.
 
 Models (including new model definitions) can be loaded or unloaded on
 demand. This is a switching capability in case one wants to quickly compare two

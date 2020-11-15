@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from torch.utils.data import Dataset, DataLoader
 
 from .device import init_nvml, gpu_util, gpu_name, cpu_info, memory_info, DeviceMonitor
-from .util import gen_file_and_stream_logger, deprecated, _dump
+from .util import gen_file_and_stream_logger, deprecated, _dump, concat
 from .task import Signals
 from .epoch import Epoch
 from .mods import Modules as Modules
@@ -377,6 +377,7 @@ class Trainer:
         #         self._logw(f"Tried overwriting attribute {t}! Denied.")
         #     elif t != "gpus":
         #         self.__dict__[t] = v
+        self._devices = {}
         self._devices_initialized = True
 
     def _init_static_vars(self):
@@ -544,6 +545,10 @@ class Trainer:
         given then certain heuristics are applied according which of the models
         are to be loaded initially the the gpus available.
 
+        models which are to be loaded should have {"loaded": True} in their
+        params. Alternatively one can specify {"load_all": True} in
+        :attr:`trainer_params`
+
         See :ref:`source/dorc:Device Allocation` for details
 
         """
@@ -554,14 +559,47 @@ class Trainer:
         # TODO: Model parallel and sharding
         # NOTE: if only one model load it
         self._models = {}
-        loaded = dict((k, v) for k, v in self._model_params.items()
-                      if "loaded" in v and v["loaded"])
+        if self.trainer_params["load_all"]:
+            loaded = self.model_params
+        else:
+            loaded = dict((k, v) for k, v in self._model_params.items()
+                          if "loaded" in v and v["loaded"])
+        self.spread_devices(loaded)
         for name, params in loaded.items():
-            devices = [x for x in loaded["gpus"] if x in self._gpus]
             model_name = name
-            model_params = params
+            model_params = params["params"]
             self._models[model_name] = self._model_init_helper(
-                model_name, model_params, devices)
+                model_name, model_params)
+
+    def spread_devices(self, loaded):
+        if len(loaded) == 1:
+            model_name = [*loaded.keys()][0]
+            model_params = loaded[model_name]["params"]
+            gpus = loaded[model_name]["gpus"]
+            if gpus in {"auto", "parallel"}:
+                self.devices[model_name] = self._gpus
+            else:
+                self.devices[model_name] = [x for x in model_params["gpus"] if x in self._gpus]
+        else:
+            for name, params in loaded.items():
+                if params["gpus"] not in {"auto", "parallel"}:
+                    self.devices[name] = [x for x in params["gpus"] if x in self._gpus]
+            parallel = []
+            for name, params in loaded.items():
+                parallel.append(name)
+            remaining = set(self._gpus) - set(concat(self.devices.values()))
+            if len(remaining) > parallel:
+                pass
+
+    def _model_init_helper(self, model_name, model_params):
+        model_def = self._model_defs[model_name]["model"]
+        params = model_params
+        optim_name = self._model_defs[model_name]["optimizer"]
+        optimizer = {"name": optim_name,
+                     "function": self._optimizer_params[optim_name]["function"],
+                     "params": self._optimizer_params[optim_name]["params"]}
+        gpus = self.devices[model_name]
+        return Model(model_name, model_def, params, optimizer, gpus)
 
     @POST
     @methods
@@ -571,15 +609,6 @@ class Trainer:
             params = self._model_params[name]
             devices = [x for x in params["gpus"] if x in self._gpus]
             self._models[name] = self._model_init_helper(name, params, devices)
-
-    def _model_init_helper(self, model_name, model_params, devices):
-        model_def = self._model_defs[model_name]["model"]
-        params = model_params
-        optim_name = self._model_defs[model_name]["optimizer"]
-        optimizer = {"name": optim_name,
-                     "function": self._optimizer_params[optim_name]["function"],
-                     "params": self._optimizer_params[optim_name]["params"]}
-        self._models[model_name] = Model(model_name, model_def, params, optimizer)
 
     def _init_dataloaders(self):
         """Initialize the dataloaders.
@@ -2732,7 +2761,7 @@ class Trainer:
 
     @prop
     @property
-    def device_allocation(self):
+    def devices(self) -> Dict[str, List[int]]:
         """How the devices are allocated to the trainer.
 
         Depending on the trainer and model parameters, the model(s) can be
@@ -2742,7 +2771,11 @@ class Trainer:
         and compute capacity.
 
         """
-        return None
+        return self._devices
+
+    @devices.setter
+    def devices(self, model: str, gpus: List[int]) -> None:
+        self._devices[model] = gpus
 
     # FIXME: self.models creates problems
     @prop
@@ -3046,9 +3079,12 @@ class Trainer:
         models. An ``auto`` field for the devices will find the optimal
         allocation w.r.t training speed.
 
+        Multiple models can be specified and not all of which need to be loaded
+        on to the devices. Ones which are to be loaded should be specified with
+        {"loaded": True} in their parameters.
+
         """
         return self._model_params
-
 
     @prop
     @property

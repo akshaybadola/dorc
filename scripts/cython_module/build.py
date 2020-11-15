@@ -13,7 +13,7 @@ file_list = ["version.py",
              "task.py",
              "epoch.py",
              "overrides.py",
-             "components.py",
+             "model.py",
              "_checks.py",
              "helpers.py",
              "trainer.py",
@@ -21,17 +21,12 @@ file_list = ["version.py",
              "daemon.py"]
 
 
-def clobberize(entry_file):
-    "Give only one file and it recursively clobbers it up, only existing and relative modules"
-    pass
-
-
-def main():
+def main(files_dir):
     if os.path.exists("build"):
         print("Cleaning build directory")
         shutil.rmtree("build")
-    files_dir = "trainer"
     str_list = []
+    print("Generating single trainer.py")
     for fname in file_list:
         with open(os.path.join(files_dir, fname)) as f:
             line = f.readline()
@@ -41,6 +36,7 @@ def main():
                         while ")" not in line:
                             line = f.readline()
                 else:
+                    # NOTE: An attempt to strip out pdb/ipdb
                     # if "pdb" or "ipdb" in line:
                     #     str_list.append("# " + line)
                     # else:
@@ -57,12 +53,11 @@ def main():
     run(shlex.split(cmd), env=os.environ, cwd=os.curdir)
 
 
-def copy_tests():
-    if "build" in os.path.abspath(os.curdir):
-        os.chdir("..")
-    files = [x for x in os.listdir("tests") if (x.startswith("test_")
-                                                and x.endswith(".py")
-                                                and "check" not in x) or
+def copy_tests(tests_dir):
+    os.chdir(tests_dir)
+    files = [x for x in os.listdir(tests_dir) if (x.startswith("test_")
+                                                  and x.endswith(".py")
+                                                  and "check" not in x) or
              "_setup" in x]
     os.mkdir("build/tests")
     for f in files:
@@ -70,5 +65,7 @@ def copy_tests():
 
 
 if __name__ == '__main__':
-    main()
-    copy_tests()
+    files_dir = os.path.abspath("../../trainer")
+    tests_dir = os.path.abspath("../../tests")
+    main(files_dir)
+    copy_tests(tests_dir)

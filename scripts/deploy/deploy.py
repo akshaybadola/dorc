@@ -153,8 +153,10 @@ def create_zip():
 def main():
     parser = argparse.ArgumentParser(description="""DORC deployment:
 
-Deploy DORC servers on hosts with SSH. Default is to copy the compiled C module
-and update the global modules. See help for additional options.""")
+    Deploy DORC servers on hosts with SSH. Default is to copy the compiled C module
+    and update the global modules. See help for additional options.
+
+    """)
     parser.add_argument("--hosts", type=lambda x: x.split(","),
                         default="mc15pc15@10.5.0.96,prototype@10.5.1.93,user@10.5.0.92,taruna@10.5.1.3",
                         help="Comma separated user@host to deploy")

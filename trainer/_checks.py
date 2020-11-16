@@ -14,7 +14,6 @@ def _check_model_params(cls):
         "_model_defs value have to be callabes"
 
 
-# TODO: Standardize the device nomenclature especially for dataparallel later
 def _check_trainer_params(cls):
     """Checks trainer params
 

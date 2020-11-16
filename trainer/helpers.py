@@ -1,3 +1,4 @@
+from typing import List, Dict, Callable, Iterable
 import torch
 from torch.utils.data import Dataset
 import numpy as np
@@ -24,32 +25,32 @@ class Exposes:
 
 
 class HookDict:
-    def __init__(self, permanent_items):
+    def __init__(self, permanent_items: Dict[str, Callable[[], None]]):
         self._items = OrderedDict()
         self._permanent_items = permanent_items
         for k, v in self._permanent_items.items():
             self._items[k] = v
 
-    def add(self, k, v):
+    def add(self, k: str, v: Callable[[], None]):
         if k not in self._permanent_items:
             self._items[k] = v
 
-    def remove(self, k):
+    def remove(self, k: str):
         if k not in self._permanent_items:
             self._items.pop(k)
 
     @property
-    def keys(self):
+    def keys(self) -> Iterable:
         return self._items.keys()
 
     @property
-    def values(self):
+    def values(self) -> Iterable:
         return self._items.values()
 
     def __len__(self):
         return len(self._items)
 
-    def __getitem__(self, k):
+    def __getitem__(self, k: str):
         return self._items[k]
 
     def __repr__(self):
@@ -57,32 +58,38 @@ class HookDict:
 
 
 class HookList:
-    def __init__(self, permanent_items):
+    def __init__(self, permanent_items: List[Callable]):
         self._list = []
         self._permanent_items = permanent_items
         self._list = [x for x in self._permanent_items]
 
-    def append(self, item):
-        self._list.append(item)
+    def append(self, item: Callable[[], None]) -> None:
+        if item not in self._list:
+            self._list.append(item)
+        else:                   # move to back
+            self.remove(item)
+            self.append(item)
 
-    def remove(self, item):
-        if item not in self._permanent_items:
+    def remove(self, item: Callable[[], None]) -> None:
+        if item not in self._permanent_items and item in self._list:
             self._list.remove(item)
 
-    def insert(self, i, item):
-        if i >= len(self._permanent_items):
-            self._list.insert(i, item)
-
-    def insert_top(self, item):
+    def push(self, item: Callable[[], None]) -> None:
         self._list.insert(len(self._permanent_items), item)
 
-    def __getitem__(self, x):
+    def insert(self, i: int, item: Callable[[], None]) -> None:
+        if i >= len(self._permanent_items):
+            self._list.insert(i, item)
+        else:
+            self._list.insert(len(self._permanent_items), item)
+
+    def __getitem__(self, x: int) -> Callable[[], None]:
         return self._list[x]
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._list)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self._list.__repr__()
 
 

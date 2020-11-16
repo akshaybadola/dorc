@@ -34,6 +34,12 @@ class Model:
     def __call__(self, x):
         return self._model(x)
 
+    def train(self):
+        self._model.train()
+
+    def eval(self):
+        self._model.eval()
+
     def forward(self, x):
         return self.model.forward(x)
 
@@ -86,7 +92,7 @@ class Model:
     def gpus(self):
         return self._gpus
 
-    def to(self, x: Union[torch.Tensor, torch.nn.Module]) ->\
+    def to_(self, x: Union[torch.Tensor, torch.nn.Module]) ->\
             Union[torch.Tensor, torch.nn.Module]:
         if isinstance(x, torch.Tensor):
             return x.to(self.device)

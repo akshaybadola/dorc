@@ -875,7 +875,7 @@ sys.path.append("{self.data_dir}")
 
     @property
     def _session_methods(self):
-        return [x.__name__[1:].replace("_helper", "") for x in session_method.members]
+        return [x[1:].replace("_helper", "") for x in session_method.names]
 
     @session_method
     def _load_session_helper(self, task_id, name, time_str, data=None):

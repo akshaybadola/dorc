@@ -1,6 +1,6 @@
 import os
 import shutil
-import torch
+import time
 from datetime import datetime
 import unittest
 import sys
@@ -20,7 +20,7 @@ class SubTrainer(Trainer):
         return self._cuda
 
 
-class TrainerTestDevice(unittest.TestCase):
+class TrainerTestInitLoadSave(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Setup a simple trainer with MNIST dataset."""
@@ -33,12 +33,21 @@ class TrainerTestDevice(unittest.TestCase):
         os.mkdir(f".test_dir/test_session/{time_str}")
         cls.data_dir = f".test_dir/test_session/{time_str}"
         cls.params = {"data_dir": cls.data_dir, **cls.config}
+        cls.trainer = SubTrainer(False, **cls.params)
+        cls.trainer.reserved_gpus = []
+        cls.trainer.reserve_gpus = lambda x: [True, None]
+        cls.trainer._trainer_params["cuda"] = True
 
-    def setUp(self):
-        self.trainer = SubTrainer(False, **self.params)
-        self.trainer.reserved_gpus = []
-        self.trainer.reserve_gpus = lambda x: [True, None]
-        self.trainer._trainer_params["cuda"] = True
+    def test_load_saves_bad_params(self):
+        data = {}
+        self.assertEqual(self.trainer.load_saves(data),
+                         (False, "[load_saves()] Missing params \"weights\""))
+        data = {"weights": "meh"}
+        self.assertEqual(self.trainer.load_saves(data),
+                         (False, "[load_saves()] Invalid or no such method"))
+        data = {"weights": "meh", "method": "load"}
+        self.assertEqual(self.trainer.load_saves(data),
+                         (False, "[load_saves()] No such file"))
 
     @classmethod
     def tearDownClass(cls):

@@ -39,6 +39,17 @@ prop = Tag("prop")
 extras = Tag("extras")
 methods = Tag("methods")
 objects = Tag("objects")
+objects.__doc__ = """Objects can be queried for properties just like the trainer, although
+their methods cannot be called. We can fetch each exposed property via a
+@prop tag. A sequence of @prop tags can expose nested props.
+
+For example, Trainer._epoch_runner is an instance of Epoch. Now say
+Trainer has an "object" epoch_runner like below which can be exposed.  So
+we can access the property "info" of Epoch like trainer/epoch_runner/info
+from the HTTP API. If batch_vars is another "object" of type BatchVars and
+that is also exposed, then we should be able to access,
+trainer/epoch_runner/batch_vars/{prop}, for some "prop" of batch_vars.
+"""
 internals = Tag("internals")
 prop_names = {"saves", "gpus", "system_info", "devices", "models", "active_model",
               "epoch", "max_epochs", "iterations", "max_iterations",
@@ -46,7 +57,6 @@ prop_names = {"saves", "gpus", "system_info", "devices", "models", "active_model
               "post_epoch_hooks_to_run", "all_post_epoch_hooks", "items_to_log_dict",
               "current_run", "paused", "best_save", "props", "controls", "methods",
               "extras"}
-
 
 
 # Protocol:
@@ -2167,26 +2177,15 @@ class Trainer:
     # END: Methods
 
     # START: Objects
-    #
-    # Objects can be queried for properties just like the trainer, although
-    # their methods cannot be called. We can fetch each exposed property via a
-    # @prop tag. A sequence of @prop tags can expose nested props.
-    #
-    # For example, Trainer._epoch_runner is an instance of Epoch. Now say
-    # Trainer has an "object" epoch_runner like below which can be exposed.  So
-    # we can access the property "info" of Epoch like trainer/epoch_runner/info
-    # from the HTTP API. If batch_vars is another "object" of type BatchVars and
-    # that is also exposed, then we should be able to access,
-    # trainer/epoch_runner/batch_vars/{prop}, for some "prop" of batch_vars.
-    @POST
     @objects
+    @property
     def epoch_runner(self):
-        return None
+        return self._epoch_runner
 
     @POST
     @objects
     def task_runners(self):
-        return None
+        return self._task_runners
     # END: Objects
 
     # START: Save, Load, Resume
@@ -3442,6 +3441,13 @@ class Trainer:
             else:
                 self._logd(f"No dataloader for {step}")
 
+    # def batch_info(self):
+    #     """Collect the current metrics for the given epoch regardless of whether it's completed.
+
+    #     This method does not pause or resume the :attr:`epoch_runner`
+    #     """
+    #     return self._epoch_runner.info
+
     # FIXME: TRAINING_STEPS
     # NOTE: For this a sample function has to be defined
     def _log_samples(self, fraction=0.01):
@@ -3465,10 +3471,25 @@ class Trainer:
         "Dump everything except weights"
         self._dump_state()
 
+    def gather_metrics(self, runner):
+        retval = {}
+        for step in self._trainer_params["training_steps"]:
+            if step != "iterations" and step in self._metrics:
+                metric_names = self._metrics[step]
+                retval[step] = {}
+                retval[step]["num_datapoints"] = runner.total_samples[step]
+                for m in metric_names:
+                    all_vals = [x[3] for x in runner.batch_vars
+                                if x[0] == step and x[2] == m]
+                    if len(all_vals):
+                        retval[step][m] = np.mean(all_vals)
+        return retval
+
     def update_metrics_post_epoch_hook(self):
-        """Update the metrics being recorded
-        :returns: None
-        :rtype: None
+        """Update the metrics being recorded.
+
+        Gather the tuples from :attr:`epoch_runner` and update :attr:`metrics`
+
         """
         self._logd("Updating the metrics")
         if "iterations" in self._trainer_params["training_steps"]:

@@ -23,14 +23,8 @@ class TrainerTestDevice(unittest.TestCase):
         cls.data_dir = f".test_dir/test_session/{time_str}"
         cls.trainer = Trainer(**{"data_dir": cls.data_dir, **cls.config})
 
-    def test_check_trainer_params_gpus(self):
-        cases = [*zip([None, "bleh", 4, -2, False, {"bleh"}, ["test"]],
-                      [[-1], [-1], [-1], [-1], [-1], [-1], [-1]])]
-        for i, case in enumerate(cases):
-            with self.subTest(i=i):
-                self.trainer._trainer_params["gpus"] = case[0]
-                self.trainer._check_gpus()
-                self.assertEqual(self.trainer._gpus, case[1])
+    def test_trainer_consistency(self):
+        self.assertEqual(self.trainer._training_steps.keys(), self.trainer._metrics.keys())
 
 
     # TODO: Tweak config's various parameters and check for errors

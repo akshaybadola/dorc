@@ -50,17 +50,19 @@ class Model:
             self._device = torch.device("cpu")
         elif len(self._gpus) == 1:
             self._device = torch.device(f"cuda:{self._gpus[0]}")
-            self.to = lambda x: x.cuda(self._gpus[0])
             self._model = self._model.to(self._device)
             self._model._to_device = lambda x: x.cuda(self._gpus[0])
         else:
             self._device = "dataparallel"
-            self.to = lambda x: x.cuda(self._gpus[0])
             self._model = self._model.to(torch.device(f"cuda:{self._gpus[0]}"))
+            self._model = torch.nn.DataParallel(self._model, device_ids=self._gpus)
             self._model._to_device = lambda x: x.cuda(self._gpus[0])
 
     def reinit(self):
         self._init()
+
+    def to(self, x):
+        return self.to_(x)
 
     @property
     def optimizer_name(self):
@@ -86,7 +88,12 @@ class Model:
         if self._gpus == [-1]:
             return torch.device("cpu")
         else:
-            return torch.device("cuda:" + self._gpus[0])
+            return torch.device(f"cuda:{self._gpus[0]}")
+
+    @property
+    def weights(self) -> Dict[str, torch.Tensor]:
+        "Return model state_dict"
+        return self._model.state_dict()
 
     @property
     def gpus(self):
@@ -111,17 +118,30 @@ class Model:
         else:
             return True, "Edge Case?"
 
-    def load_weights(self, state_dict: Dict[str, torch.Tensor]) ->\
-            Tuple[bool, Union[str, None]]:
-        # FIXME
-        # Full state dict has to be allocated correctly
+    def load_weights(self, state_dict: Dict[str, Dict[str, torch.Tensor]],
+                     force: bool = False) -> Tuple[bool, Union[str, None]]:
+        """Load given weights.
+
+        `name` and `weights` must be present and `name` must match with
+        model.
+
+        """
+        # CHECK Full state dict is allocated correctly
         try:
-            self._model.load_state_dict(self.to(state_dict))
+            if self.name != state_dict["name"] and not force:
+                return False, "Names don't match. Set force=True to force loading weights"
+            self._model.load_state_dict(self.to(state_dict["weights"]))
             return True, None
         except Exception as e:
             return False, f"{e}" + f"\n{traceback.format_exc()}"
 
-    def dump(self):
+    def dump(self) -> Dict[str, Any]:
+        """Dump the current state.
+
+        Returns a dictionary with keys ``[name, params, optimizer, gpus,
+        state_dict]``
+
+        """
         return {"name": self._name,
                 "params": self._model_params,
                 "optimizer": {"name": self._optimizer_name,
@@ -130,23 +150,41 @@ class Model:
                 "gpus": self._gpus,
                 "state_dict": self._model.state_dict()}
 
-    # TODO: Allow loading a different optimizer
     def load(self, state: Dict[str, Any]) -> Tuple[bool, Union[str, None]]:
+        """Load the entire model state.
+
+        `model_name` and `state_dict` must be present in the state.  `state`
+        should be of the same form as :meth:`self.dump`. state["name"] has to be
+        the same as the current model. `optimizer` (and name) can be different
+        and optimizer state_dict need not be given, but that implies that the
+        optimizer will start from the beginning.
+
+        If optimizer name is different or state not given or gpus are different,
+        the state is still loaded but appropriate warnings are also returned.
+
+        """
+        warnings = []
         try:
             # status = {"model": None, "optimizer": None, "gpus": None}
             if state["name"] != self._name:
                 return False, "Different model name in state"
             if state["optimizer"]["name"] != self._optimizer_name:
-                return False, "Different optimizer name in state"
+                warnings.append("Different gpus in state")
             if state["gpus"] != self._gpus:
-                return False, "Different gpus in state"
-            self._optimizer = self._optimizer_func(**state["optimizer"]["params"])
-            self._optimizer.load_state_dict(state["optimizer"]["state_dict"])
+                warnings.append("Different gpus in state")
             self._model = self._model_def(**state["params"])
-            status, message = self.load_weights(state["state_dict"])
+            self._optimizer = self._optimizer_func(self._model.parameters(),
+                                                   **state["optimizer"]["params"])
+            # can be None if a new optimizer is specified
+            if state["optimizer"]["state_dict"]:
+                self._optimizer.load_state_dict(state["optimizer"]["state_dict"])
+            else:
+                warnings.append("optimizer state dict not given")
+            status, message = self.load_weights({"name": state["name"],
+                                                 "weights": state["state_dict"]})
             if not status:
                 return status, message
             else:
-                return True, None
+                return True, warnings
         except Exception as e:
             return False, f"{e}" + f"\n{traceback.format_exc()}"

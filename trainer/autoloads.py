@@ -27,6 +27,7 @@ class ModelStep(abc.ABC):
                 self._model_names = model_names
                 self._criteria_names = criteria_names
                 self._test = test
+                self._returns = {"losses", "outputs", "labels", "total"}
 
             def __call__(self, models, criteria, batch):
                 model_1 = models[self._model_names["foo"]]  # assuming foo is in models
@@ -94,6 +95,10 @@ class ClassificationTrainStep:
     All `steps` are given `models`, `criteria`, `batch` as input. It's up to the
     `step` to determine how to use any or all of them.
 
+    shapes and types of the batch should be handled by the data provider. This
+    is just an example convenience wrapper on top of a forward model call. The
+    return values and their format is the important part here.
+
     Loss is determined according to given criterion, between input and output
     values. Loss in classification is usually one of the `cross_entropy` losses
     from :mod:`torch.nn` or :mod:`torch.nn.functional`
@@ -102,7 +107,8 @@ class ClassificationTrainStep:
     def __init__(self, model_name: str, criterion_name: str):
         self._model_name = model_name
         self._criterion_name = criterion_name
-        self.returns = {("metric", "loss"), ("", "outputs"), ("", "labels"), ("", "total")}
+        # self.returns = {("metric", "loss"), ("", "outputs"), ("", "labels"), ("", "total")}
+        self.returns = {"loss", "outputs", "labels", "total"}
 
     def __call__(self, models: Dict[str, torch.nn.Module],
                  criteria: Dict[str, Union[torch.nn.Module, callable]],
@@ -132,7 +138,8 @@ class ClassificationTestStep:
     def __init__(self, model_name, criterion_name):
         self._model_name = model_name
         self._criterion_name = criterion_name
-        self.returns = {("metric", "loss"), ("", "outputs"), ("", "labels"), ("", "total")}
+        self.returns = {"loss", "outputs", "labels", "total"}
+        # self.returns = {("metric", "loss"), ("", "outputs"), ("", "labels"), ("", "total")}
 
     def __call__(self, models, criteria, batch):
         model = models[self._model_name]

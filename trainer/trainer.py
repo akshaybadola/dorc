@@ -1957,10 +1957,13 @@ class Trainer:
     @POST
     @methods
     def load_weights(self, request):
+        """Load weights for given model names.
+
+        The weights file must be sent in the request along with the model names."""
         if "model_names" not in request.form:
             return False, self._logd(f"Model name not sent in data")
-        model_names = json.loads(request.form["model_names"])
         try:
+            model_names = json.loads(request.form["model_names"])
             weights = torch.load(request.files["file"], map_location="cpu")
         except Exception as e:
             return False, self._loge(f"Error occured while reading data {e}" +
@@ -1972,7 +1975,7 @@ class Trainer:
             return False, self._logd(f"Some models currently not in scope")
         try:
             for model_name in model_names:
-                status, err = self._models.load_weights(model_name, weights[model_name])
+                status, err = self._models[model_name].load_weights(weights[model_name])
                 if err:
                     return False, self._loge(f"Error while updating component {err}")
             return True, self._logd(f"Updated Models {model_names}")
@@ -3471,6 +3474,7 @@ class Trainer:
         "Dump everything except weights"
         self._dump_state()
 
+    # TODO: All these functions should be separate
     def gather_metrics(self, runner):
         retval = {}
         for step in self._trainer_params["training_steps"]:

@@ -20,7 +20,7 @@ class SubTrainer(Trainer):
         return self._cuda
 
 
-class TrainerTestInitLoadSave(unittest.TestCase):
+class TrainerTestMetrics(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Setup a simple trainer with MNIST dataset."""
@@ -43,7 +43,7 @@ class TrainerTestInitLoadSave(unittest.TestCase):
         self.assertFalse(self.trainer._have_resumed)
         self.assertTrue(self.trainer.paused)
 
-    def test_trainer_epoch_captures_metrics(self):
+    def test_trainer_capture_metrics_epoch(self):
         self.trainer._init_all()
         self.trainer.start()
         time.sleep(2)
@@ -59,7 +59,7 @@ class TrainerTestInitLoadSave(unittest.TestCase):
         self.assertTrue(metrics["train"]["loss"] > 0)
         self.trainer.abort_loop()
 
-    def test_trainer_log_iter(self):
+    def test_trainer_capture_metrics_iterations(self):
         self.new_config = self.config.copy()
         self.new_config["trainer_params"]["training_steps"] = ["iterations"]
         self.new_config["trainer_params"]["max_iterations"] = 800

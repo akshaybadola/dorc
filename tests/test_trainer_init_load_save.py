@@ -1,5 +1,6 @@
 import os
 import shutil
+import json
 import time
 from datetime import datetime
 import unittest
@@ -8,6 +9,13 @@ from _setup_local import config
 sys.path.append("../")
 from trainer.device import all_devices, useable_devices
 from trainer.trainer import Trainer
+
+
+class FakeRequest:
+    def __init__(self):
+        self.form = {}
+        self.json = None
+        self.files = {}
 
 
 class SubTrainer(Trainer):
@@ -38,7 +46,7 @@ class TrainerTestInitLoadSave(unittest.TestCase):
         cls.trainer.reserve_gpus = lambda x: [True, None]
         cls.trainer._trainer_params["cuda"] = True
 
-    def test_load_saves_bad_params(self):
+    def test_trainer_load_saves_bad_params(self):
         data = {}
         self.assertEqual(self.trainer.load_saves(data),
                          (False, "[load_saves()] Missing params \"weights\""))
@@ -48,6 +56,15 @@ class TrainerTestInitLoadSave(unittest.TestCase):
         data = {"weights": "meh", "method": "load"}
         self.assertEqual(self.trainer.load_saves(data),
                          (False, "[load_saves()] No such file"))
+
+    # def test_trainer_load_weights(self):
+    #     req = FakeRequest()
+    #     req.form["model_names"] = json.dumps(["net", "net_2"])
+    #     req.files["file"] = None
+    #     status, response = self.trainer.load_weights(req)
+    #     self.assertFalse(status)
+    #     with open()
+    #     req.files["file"] = None
 
     @classmethod
     def tearDownClass(cls):

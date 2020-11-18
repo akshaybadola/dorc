@@ -1,0 +1,74 @@
+import os
+import shutil
+import unittest
+from functools import partial
+import torch
+import sys
+from _setup_local import config
+sys.path.append("../")
+from trainer.model import Model
+from trainer.autoloads import ClassificationTrainStep, ClassificationTestStep
+
+
+def get_model_batch(name, config, gpus):
+    _name = "net"
+    model_def = config["model_defs"][_name]["model"]
+    params = config["model_params"][_name]["params"]
+    optimizer = {"name": "adam",
+                 **config["optimizer"]["Adam"]}
+    return (Model(name, model_def, params, optimizer, gpus),
+            [torch.rand(8, 1, 28, 28), torch.Tensor([0]*8).long()])
+
+
+def get_step(model, step):
+    return partial(ClassificationTrainStep("net", "bce_loss") if step == "train" else
+                   ClassificationTestStep("net", "bce_loss"),
+                   {"net": model},
+                   {"bce_loss": torch.nn.functional.cross_entropy})
+
+
+class TrainingStepsTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """Setup a simple trainer with MNIST dataset."""
+        cls.config = config
+        if os.path.exists(".test_dir"):
+            shutil.rmtree(".test_dir")
+        os.mkdir(".test_dir")
+        os.mkdir(".test_dir/test_session")
+
+    def test_train_step_single_gpu(self):
+        model, batch = get_model_batch("net", self.config, [0])
+        train_step = get_step(model, "train")
+        retval = train_step(batch)
+        self.assertTrue(all(x in retval for x in train_step.func.returns))
+
+    def test_val_step_single_gpu(self):
+        model, batch = get_model_batch("net", self.config, [0])
+        val_step = get_step(model, "val")
+        retval = val_step(batch)
+        self.assertTrue(all(x in retval for x in val_step.func.returns))
+
+    # NOTE: how do we test that it is actually parallelized?
+    def test_dataparallel(self):
+        model, batch = get_model_batch("net", self.config, [0, 1])
+        train_step = get_step(model, "train")
+        retval = train_step(batch)
+        self.assertTrue(all(x in retval for x in train_step.func.returns))
+        self.assertIsInstance(model._model, torch.nn.DataParallel)
+        self.assertEqual(retval["outputs"].device, torch.device(0))
+
+    def test_distributed_data_parallel(self):
+        pass
+
+    def test_model_parallel(self):
+        pass
+
+    @classmethod
+    def tearDownClass(cls):
+        if os.path.exists(".test_dir"):
+            shutil.rmtree(".test_dir")
+
+
+if __name__ == '__main__':
+    unittest.main()

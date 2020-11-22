@@ -7,11 +7,11 @@ def _check_model_params(cls):
     assert len(cls._model_params) > 0, "_model_params can't be empty"
     assert all(isinstance(x, dict) for x in cls._model_params.values()),\
         "all the _model_params should be dict"
-    assert isinstance(cls._model_defs, dict),\
-        "_model_defs has to be a dict"
-    assert len(cls._model_defs) > 0, "_model_defs can't be empty"
-    assert all(callable(x["model"]) for x in cls._model_defs.values()),\
-        "_model_defs value have to be callabes"
+    for key in ["model", "optimizer", "params"]:
+        assert all(key in v for v in cls._model_params.values()),\
+            "Some required keys not there in model_params"
+    assert all(callable(v["model"]) for v in cls._model_params.values()),\
+        "model definition should be a callabe"
 
 
 def _check_trainer_params(cls):

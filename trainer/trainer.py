@@ -121,7 +121,7 @@ class Trainer:
     """
     __version__ = __trainer__version__
 
-    def __init__(self, model_params, criteria, optimizer, model_defs, update_functions,
+    def __init__(self, model_params, criteria, optimizers, update_functions,
                  extra_metrics, trainer_params, data, dataloader_params, data_dir,
                  uid="uid_deprecated", production=False):
         """Initializes the :class:`Trainer` object. This is supposed to be a catch all
@@ -131,7 +131,7 @@ class Trainer:
         `model_params`, `criteria`, `trainer_params`, `dataloader_params` are
         stateless parameters.
 
-        `model_defs`, `optimizers`, `update_functions` contain callables and as
+        `optimizers`, `update_functions` contain callables and as
         such aren't part of config but model and training definitions.
 
         `uid` simply identifies the trainer and should remain the same
@@ -164,9 +164,8 @@ class Trainer:
         self._unique_id = uid
         self.__props.add("unique_id")
         self._model_params = model_params
-        self._model_defs = model_defs
         self._criteria_params = criteria
-        self._optimizer_params = optimizer
+        self._optimizer_params = optimizers
         self._data = data
         self._dataloader_params = dataloader_params
         self._trainer_params = trainer_params
@@ -204,6 +203,11 @@ class Trainer:
             _check_resume_or_init_weights(self)
 
     def init(self, force=False):
+        """Initialize everything.
+
+        If ``force==True`` then initialize even if we were initialized before.
+
+        """
         if self._have_resumed and not force:
             self._logw("\"init\" cannot be called after resume. Use \"force\"")
             self._init_all()
@@ -279,6 +283,10 @@ class Trainer:
 
         Two (or more) models in this case can share the same device if there's
         enough room on the device VRAM.
+
+        :meth:`reserve_gpus` and :attr:`reserved_gpus` are added to the
+        :class:`Trainer` by :class:`FlaskInterface` as that manages the device
+        reservation.
 
         """
         # CHECK: Why's this commented?
@@ -555,6 +563,10 @@ class Trainer:
         given then certain heuristics are applied according which of the models
         are to be loaded initially the the gpus available.
 
+        Devices are allocated for the models in alphabetical order except `auto`
+        and `parallel` which are allocated last. So if there's a conflict
+        between devices priority is given alphabetically.
+
         models which are to be loaded should have {"loaded": True} in their
         params. Alternatively one can specify {"load_all": True} in
         :attr:`trainer_params`
@@ -570,55 +582,144 @@ class Trainer:
         # NOTE: if only one model load it
         self._models = {}
         if self.trainer_params["load_all"]:
-            loaded = self.model_params
+            load_models = self.model_params.keys()
         else:
-            loaded = dict((k, v) for k, v in self._model_params.items()
-                          if "loaded" in v and v["loaded"])
-        self.spread_devices(loaded)
-        for name, params in loaded.items():
-            model_name = name
-            model_params = params["params"]
-            self._models[model_name] = self._model_init_helper(
-                model_name, model_params)
+            load_models = [k for k, v in self._model_params.items()
+                           if "load" in v and v["load"]]
+        self.allocate_devices(load_models)
+        for model_name in load_models.keys():
+            self._models[model_name] = self._model_init_helper(model_name)
+            status, response = self._models[model_name].load_into_memory()
+            if not status:
+                self._loge(response)
 
-    def spread_devices(self, loaded):
-        if len(loaded) == 1:
-            model_name = [*loaded.keys()][0]
-            model_params = loaded[model_name]["params"]
-            gpus = loaded[model_name]["gpus"]
-            if gpus in {"auto", "parallel"}:
-                self.devices[model_name] = self._gpus
+    def allocate_devices(self, load_models: [] = Union[str, List[str]],
+                         unload_models: [] = Union[str, List[str]]):
+        """Spread the devices over the load_models models.
+
+        First remove the devices from self.devices and then allocate according
+        to parameters.
+
+        Args:
+            load_models: names and params of models which should be load_models
+
+        For allocation, explicitly mentioned gpus are given preference
+        first. After that `auto` is given preference over `parallel`.
+
+        """
+        if isinstance(load_models, str):
+            load_models = [load_models]
+        if isinstance(unload_models, str):
+            unload_models = [unload_models]
+        for model_name in unload_models:
+            if model_name in self._model_params:
+                self.devices[model_name] = []
             else:
-                self.devices[model_name] = [x for x in model_params["gpus"] if x in self._gpus]
+                self._logw(f"{model_name} not in known models")
+        if len(load_models) == 1:
+            model_name = load_models[0]
+            if model_name in self._model_params:
+                gpus = self._model_params[model_name]["gpus"]
+                remaining = set(self._gpus) - set(self.allocated_devices)
+                if gpus == "auto" or gpus == "parallel":
+                    self.devices[model_name] = [x for x in remaining]
+                else:
+                    self.devices[model_name] = [x for x in gpus if x in remaining]
+            else:
+                self._logw(f"{model_name} not in known models")
         else:
-            for name, params in loaded.items():
-                if params["gpus"] not in {"auto", "parallel"}:
-                    self.devices[name] = [x for x in params["gpus"] if x in self._gpus]
+            auto = []
             parallel = []
-            for name, params in loaded.items():
-                parallel.append(name)
-            remaining = set(self._gpus) - set(concat(self.devices.values()))
-            if len(remaining) > parallel:
-                pass
+            for model_name in load_models:
+                if model_name in self._model_params:
+                    if self._model_params[model_name]["gpus"] == "auto":
+                        auto.append(model_name)
+                    elif self._model_params[model_name]["gpus"] == "parallel":
+                        parallel.append(model_name)
+                    else:
+                        self.devices[model_name] = [x for x in self._model_params[model_name]["gpus"]
+                                                    if x in self._gpus and
+                                                    x not in self.allocated_devices]
+                else:
+                    self._logw(f"{model_name} not in known models")
+            remaining = set(self._gpus) - set(self.allocated_devices)
+            if len(remaining) > 0:
+                # who takes precedence `auto` or `parallel`?
+                if len(auto) >= len(remaining):
+                    # auto_devices = self.best_auto_devices(auto)
+                    for model_name in auto:
+                        if model_name in self._model_params:
+                            # self.devices[name] = auto_devices[name]
+                            pass
+                        else:
+                            self._logw(f"{model_name} not in known models")
+                remaining = set(self._gpus) - set(self.allocated_devices)
+                if len(parallel) >= len(remaining):
+                    # parallel_devices = self.best_parallel_devices(parallel)
+                    for model_name in parallel:
+                        if model_name in self._model_params:
+                            # self.devices[name] = parallel_devices[name]
+                            pass
+                        else:
+                            self._logw(f"{model_name} not in known models")
+            else:
+                for model_name in auto:
+                    if model_name in self._model_params:
+                        self.devices[model_name] = []
+                    else:
+                        self._logw(f"{model_name} not in known models")
+                for model_name in parallel:
+                    if model_name in self._model_params:
+                        self.devices[model_name] = []
+                    else:
+                        self._logw(f"{model_name} not in known models")
 
-    def _model_init_helper(self, model_name, model_params):
-        model_def = self._model_defs[model_name]["model"]
-        params = model_params
-        optim_name = self._model_defs[model_name]["optimizer"]
-        optimizer = {"name": optim_name,
-                     "function": self._optimizer_params[optim_name]["function"],
-                     "params": self._optimizer_params[optim_name]["params"]}
-        gpus = self.devices[model_name]
-        return Model(model_name, model_def, params, optimizer, gpus)
+    def _model_init_helper(self, model_name, model_params=None, optim_name=None, optim_params=None):
+        model = self._model_params[model_name]["model"]
+        if model_params is None:
+            model_params = self._model_params[model_name]["params"]
+        try:
+            if optim_name is None:
+                optim_name = self._model_params[model_name]["optimizer"]
+            if optim_name in self._optimizer_params:
+                optim_func = self._optimizer_params[optim_name]["function"]
+                if not optim_params:
+                    optim_params = self._optimizer_params[optim_name]["params"]
+            elif hasattr(torch.optim, optim_name):
+                optim_func = getattr(torch.optim, optim_name)
+            optimizer = {"name": optim_name,
+                         "function": optim_func,
+                         "params": optim_params}
+            gpus = self.devices[model_name]
+            return Model(model_name, model, model_params, optimizer, gpus)
+        except Exception as e:
+            self._loge(f"Error occured {e}")
+            return False
+
+    @prop
+    @property
+    def loaded_models(self):
+        return [name for name, model in self._models if model.loaded]
 
     @POST
     @methods
-    def load_model(self, name):
-        """Load a model with given `name`."""
+    def load_model(self, name: str) -> Tuple[bool, str]:
+        """Load a model into system and device memory with given `name`."""
         if name in self._model_params:
-            params = self._model_params[name]
-            devices = [x for x in params["gpus"] if x in self._gpus]
-            self._models[name] = self._model_init_helper(name, params, devices)
+            return self._models[name].load_into_memory()
+        else:
+            return False, f"Model {name} not present"
+
+    @POST
+    @methods
+    def unload_model(self, name: str) -> Tuple[bool, str]:
+        """Unload a model from system with given `name`.
+
+        Frees up resources allocated to the model."""
+        if name in self._model_params:
+            return self._models[name].unload()
+        else:
+            return False, f"Model {name} not present"
 
     def _init_dataloaders(self):
         """Initialize the dataloaders.
@@ -1457,7 +1558,7 @@ class Trainer:
                 load_state = torch.load(os.path.join(self._savedir, weights))
                 try:
                     for name in self._models.names:
-                        self._models.load_weights(name, load_state["models"][name])
+                        self._models[name].load_weights({"name": name, "weights": load_state["models"][name]})
                 except Exception as e:
                     return False,\
                         self._loge(f"Could not load weights {weights}. Error occured {e}" +
@@ -1736,8 +1837,8 @@ class Trainer:
             optimizers = {}
             devices = {}
             for model_name, model_params in self._model_params.items():
-                models[model_name] = self._model_defs[model_name]["model"](**model_params)
-                optim_name = self._model_defs[model_name]["optimizer"]
+                models[model_name] = self._model_params[model_name]["model"](**model_params)
+                optim_name = self._model_params[model_name]["optimizer"]
                 optimizers[model_name] = {"name": optim_name,
                                           "optimizer": self._optimizer_params
                                           [optim_name]["function"](
@@ -2045,6 +2146,7 @@ class Trainer:
         in instance scope. If both aren't present it's initialized with default
         params from :mod:`torch.optim`
 
+
         Args:
             request: http request forwarded from the daemon
 
@@ -2059,11 +2161,21 @@ class Trainer:
             class YourOptimizer:
                 # code
 
-            module_exports = {"model_names": ["model_1", "model_2"],
-                              "model_params": {"model_1": {"param_1": 123, "param_2": "bleh"},
-                                               "model_2": {"param_1": True, "param_2": False}}
-                              "model_defs": {"model_1": {"model": SomeModel, "optimizer": "Adam"},
-                                             "model_2": {"model": AnotherModel, "optimizer": YourOptimizer}}}
+            module_exports = {"model_params": {"model_1": {"model": SomeModel, "optimizer": "Adam",
+                                                           "param_1": 123, "param_2": "bleh"},
+                                               "model_2": {"model": AnotherModel,
+                                                           "optimizer": "YourOptimizer",
+                                                           "param_1": True, "param_2": False}}
+                              "optimizers": {"YourOptimizer": {"function": YourOptimizer,
+                                                               "params": {"lr": 0.01, "theta": 0.9}}}}
+
+        In the above example`Adam`'s parameteres are omitted here for `model_1`
+        so first they'll be searched in existing optimizers with trainer, else
+        no params will be given to the function that retuns the `Adam` instance.
+
+        In case `Adam` isn't present in the optimizers at all, it will be
+        searched in :mod:`torch.optim` and in case even there it's not found, an
+        error will be raised.
 
         Returns:
             A tuple of status and message
@@ -2073,47 +2185,25 @@ class Trainer:
         status, response = self.add_module(request, checks)
         if status:
             module_exports = response
-            if "model_names" not in module_exports:
-                return False, self._logw(f"Model name not sent in data")
+            if "model_params" not in module_exports:
+                return False, self._logw(f"Model params not sent in data")
+            elif "optimizers" not in module_exports:
+                return False, self._logw(f"Optimizers not sent in data")
             else:
-                status, models = self._get_new_models(module_exports["model_names"],
-                                                      module_exports["model_defs"],
-                                                      module_exports["model_params"])
-                if not status:
-                    return status, models
-                else:
-                    # CHECK: How to force destruction of those models and resources and
-                    #        initialize new ones? Does thread work?
-                    try:
-                        names = []
-                        for name in models["models"]:
-                            model = models["models"][name]
-                            names.append(name)
-                            params = {"name": name,
-                                      "optimizer": models["optimizers"][name],
-                                      "optimizer_name": models["optim_names"][name],
-                                      "device": self.device}
-                            self._models.add(model, params)
-                        return True, self._logd(f"Added model/s {names} successfully")
-                    except Exception as e:
-                        return False, self._loge(f"Some weird error occured {e}" +
-                                                 f"\n{traceback.format_exc()}")
+                return self._add_new_models_helper(module_exports["model_params"],
+                                                   module_exports["optimizers"])
         else:
             return status, response
 
     # TODO: Any change in state of trainer vars should have a rollback mechanism
     #       E.g., if some of the params change here and then an error is raised.
-    #
-    # TODO: model initialization is repetitive here and should be delegated to a
-    #       subroutine of _init_models. Fix.
-    def _get_new_models(self, model_names: List[str], model_defs: Dict[str, Callable],
-                        model_params: Dict):
+    def _add_new_models_helper(self, model_params: Dict[str, Dict[str, Union[str, Dict, Callable]]],
+                               optimizers: Dict[str, Dict[str, Any]]):
         """Extract ``models`` from the ``model_names``, ``model_defs`` and ``model_params``
 
         Args:
-            model_names: Names of the models
-            model_defs: Definitions for the models
-            model_params:
+            model_params: Model parameters
+            optimizers: Optimizers
 
         Returns:
             A :class:`tuple` of ``status``, ``response`` where if
@@ -2121,55 +2211,69 @@ class Trainer:
 
         """
         try:
-            if not all(x in model_params and x in model_defs for x in model_names):
-                return False, self._logd(f"Some of the model_names not in given module")
-            models = {"models": {}, "optimizers": {}, "optim_names": {}}
+            model_names = [*model_params.keys()]
+            status = {k: "" for k in model_names}
             for model in model_names:
-                _def = model_defs[model]["model"]
-                _params = model_params[model]
-                if "__inherit" in _params:
-                    if "__add" in _params:  # FIXME: add params from self, stupid hack
+                model_func = model_params[model]["model"]
+                _params = model_params[model]["params"]
+                if "__inherit" in _params:  # HACK
+                    if "__add" in _params:  # FIXME: add params from self, stupid HACK
                         add_params = _params["__add"]
                     else:
                         add_params = []
                     inherit_name = _params["__inherit"]
-                    sig = inspect.signature(_def)
+                    sig = inspect.signature(model_func)
                     model_args = {}
                     for x in sig.parameters:
                         if x not in add_params:
                             model_args[x] = self._model_params[inherit_name][x]
                         else:
-                            model_args[x] = getattr(self, x)  # FIXME: Bad hack
+                            model_args[x] = getattr(self, x)  # FIXME: Bad HACK
                 else:
                     model_args = _params
-                if model not in self._model_defs:
-                    self._model_defs[model] = {}
-                else:
+                if model in self._model_params:
                     self._logw(f"Will overwrite model, optimizer params and defs for {model}")
-                self._model_defs[model]["model"] = _def
-                self._model_params[model] = model_args.copy()
+                    self._backup_model_params[model] = copy.deepcopy(self._model_params[model])
+                self._model_params[model]["params"] = model_args.copy()
+                self._model_params[model]["model"] = model_func
+                self._model_params[model]["optimizer"] = model_params["optimizer"]
+                self._model_params[model]["gpus"] = model_params["gpus"]
                 self._logd(f"Updated model_params and model_def for {model}")
-                models["models"][model] = _def(**model_args)
-                if isinstance(model_defs[model]["optimizer"], str):
-                    optim_name = model_defs[model]["optimizer"]
-                    self._model_defs[model]["optimizer"] = optim_name
-                    self._logd(f"Updated optimizer params for {model}")
-                    models["optim_names"][model] = optim_name
-                    if "optimizer_params" in model_defs and hasattr(torch.optim, optim_name):
-                        models["optimizers"][model] = getattr(torch.optim, optim_name)(
-                            **model_defs[model]["optimizer_params"])
-                        self._logd(f"Initialized optimizer for {model} in add_model with given params")
-                    elif optim_name in self._optimizer_params:
-                        models["optimizers"][model] = self._optimizer_params[optim_name]["function"]\
-                            (models["models"][model].parameters(),
-                             **self._optimizer_params[optim_name]["params"])
-                        self._logd(f"Initialized optimizer for {model} in add_model with self params")
+                self.allocate_devices(model)
+                self._models[model] = self._model_init_helper(model)
+                if model_params["load"]:
+                    _status, response = self._models[model].load_into_memory()
+                    if _status:
+                        status[model] = True
                     else:
-                        models["optimizers"][model] = getattr(torch.optim, optim_name)()
-                        self._logw(f"Initialized optimizer for {model} in add_model with default params")
+                        if model in self._backup_model_params[model]:
+                            self._model_params[model] = copy.deepcopy(self._backup_model_params[model])
+                            status[model] = False, "Reverted"
+                        else:
+                            status[model] = False, response
                 else:
-                    False, self._logd(f"Unrecognized optimizer for model {model}")
-            return True, models
+                    status[model] = True
+                # models["models"][model] = model_func(**model_args)
+                # if isinstance(model_defs[model]["optimizer"], str):
+                #     optim_name = model_defs[model]["optimizer"]
+                #     self._model_defs[model]["optimizer"] = optim_name
+                #     self._logd(f"Updated optimizer params for {model}")
+                #     models["optim_names"][model] = optim_name
+                #     if "optimizer_params" in model_defs and hasattr(torch.optim, optim_name):
+                #         models["optimizers"][model] = getattr(torch.optim, optim_name)(
+                #             **model_defs[model]["optimizer_params"])
+                #         self._logd(f"Initialized optimizer for {model} in add_model with given params")
+                #     elif optim_name in self._optimizer_params:
+                #         models["optimizers"][model] = self._optimizer_params[optim_name]["function"]\
+                #             (models["models"][model].parameters(),
+                #              **self._optimizer_params[optim_name]["params"])
+                #         self._logd(f"Initialized optimizer for {model} in add_model with self params")
+                #     else:
+                #         models["optimizers"][model] = getattr(torch.optim, optim_name)()
+                #         self._logw(f"Initialized optimizer for {model} in add_model with default params")
+                # else:
+                #     False, self._logd(f"Unrecognized optimizer for model {model}")
+            return True, status
         except Exception as e:
             return False, f"{e}"
 
@@ -2749,22 +2853,10 @@ class Trainer:
                 "cpu_info": cpu_info(),
                 "memory": memory_info()}
 
-    # @prop
-    # @property
-    # def devices(self):
-    #     """The devices allocated to the trainer.
-
-    #     Devices can be allocated both to the trainer or the models individually
-    #     or spread across the models. The devices are provided as
-    #     trainer_params[\"gpus\"]. For example:
-
-    #     """
-    #     return self._device
-
     @prop
     @property
     def devices(self) -> Dict[str, List[int]]:
-        """How the devices are allocated to the trainer.
+        """Used to keep track of which device(s) is(are) allocated to which model(s).
 
         Depending on the trainer and model parameters, the model(s) can be
         parallelized over multiple devices or reside on a single device. Device
@@ -2775,9 +2867,13 @@ class Trainer:
         """
         return self._devices
 
-    @devices.setter
-    def devices(self, model: str, gpus: List[int]) -> None:
-        self._devices[model] = gpus
+    @prop
+    @property
+    def allocated_devices(self) -> List[int]:
+        devices = []
+        for x in self._devices.values():
+            devices.extend(x)
+        return devices
 
     # FIXME: self.models creates problems
     @prop

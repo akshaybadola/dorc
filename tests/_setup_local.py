@@ -76,9 +76,9 @@ class ClassificationTestStep:
 
 
 config = {}
-config["optimizer"] = {"Adam": {"function": torch.optim.Adam,
-                                "params": {"lr": 0.01,
-                                           "weight_decay": 0}}}
+config["optimizers"] = {"Adam": {"function": torch.optim.Adam,
+                                 "params": {"lr": 0.01,
+                                            "weight_decay": 0}}}
 config["criteria"] = {"criterion_ce_loss":
                       {"function": torch.nn.CrossEntropyLoss, "params": {}}}
 config["uid"] = "test_trainer"
@@ -111,8 +111,7 @@ config["dataloader_params"] = {"train": {"batch_size": 32,
                                         "num_workers": 0,
                                         "shuffle": False,
                                         "pin_memory": False}}
-config["model_params"] = {"net": {"params": {}, "gpus": "auto"}}
-config["model_defs"] = {"net": {"model": Net, "optimizer": "Adam"}}
+config["model_params"] = {"net": {"model": Net, "optimizer": "Adam", "params": {}, "gpus": "auto"}}
 config["update_functions"] = {"train": ClassificationTrainStep("net", "criterion_ce_loss"),
                               "val": ClassificationTestStep("net", "criterion_ce_loss"),
                               "test": ClassificationTestStep("net", "criterion_ce_loss")}

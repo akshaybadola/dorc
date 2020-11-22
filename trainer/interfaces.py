@@ -109,9 +109,13 @@ class FlaskInterface:
     def reserved_gpus(self) -> List[int]:
         return requests.get(self._daemon_url + "_devices").json()
 
-    def reserve_gpus(self, gpus) -> List[Union[bool, None, str]]:
+    def reserve_gpus(self, gpus: List[int]) -> List[Union[bool, None, str]]:
         return requests.post(self._daemon_url + "_devices",
-                             json={"gpus": gpus, "port": self.api_port})
+                             json={"action": "reserve", "gpus": gpus, "port": self.api_port})
+
+    def free_gpus(self, gpus: List[int]):
+        return requests.post(self._daemon_url + "_devices",
+                             json={"action": "free", "gpus": gpus, "port": self.api_port})
 
     def _update_config(self, config: Dict, overrides: Iterable[Union[int, float, str]]):
         def _check(conf, seq):

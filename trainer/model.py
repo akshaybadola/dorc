@@ -29,7 +29,9 @@ class Model:
         self._optimizer_func = optimizer["function"]
         self._optimizer_params = optimizer["params"]
         self._gpus = gpus
-        self._init()
+        self._model = None
+        self._optimizer = None
+        self._loaded = False
 
     def __call__(self, x):
         return self._model(x)
@@ -43,20 +45,34 @@ class Model:
     def forward(self, x):
         return self.model.forward(x)
 
-    def _init(self):
-        self._model = self._model_def(**self._model_params)
-        self._optimizer = self._optimizer_func(self._model.parameters(), **self._optimizer_params)
-        if self._gpus == [-1] or self._gpus == []:
-            self._device = torch.device("cpu")
-        elif len(self._gpus) == 1:
-            self._device = torch.device(f"cuda:{self._gpus[0]}")
-            self._model = self._model.to(self._device)
-            self._model._to_device = lambda x: x.cuda(self._gpus[0])
-        else:
-            self._device = "dataparallel"
-            self._model = self._model.to(torch.device(f"cuda:{self._gpus[0]}"))
-            self._model = torch.nn.DataParallel(self._model, device_ids=self._gpus)
-            self._model._to_device = lambda x: x.cuda(self._gpus[0])
+    def load_into_memory(self):
+        try:
+            self._model = self._model_def(**self._model_params)
+            self._optimizer = self._optimizer_func(self._model.parameters(),
+                                                   **self._optimizer_params)
+            if self._gpus == [-1] or self._gpus == []:
+                self._device = torch.device("cpu")
+            elif len(self._gpus) == 1:
+                self._device = torch.device(f"cuda:{self._gpus[0]}")
+                self._model = self._model.to(self._device)
+                self._model._to_device = lambda x: x.cuda(self._gpus[0])
+            else:
+                self._device = "dataparallel"
+                self._model = self._model.to(torch.device(f"cuda:{self._gpus[0]}"))
+                self._model = torch.nn.DataParallel(self._model, device_ids=self._gpus)
+                self._model._to_device = lambda x: x.cuda(self._gpus[0])
+            self._loaded = True
+            return True, f"Loaded {self.name}"
+        except Exception as e:
+            return False, f"Error occured {e}"
+
+    def unload(self):
+        del self._model
+        del self._optimizer
+        self._model = None
+        self._optimizer = None
+        self._loaded = False
+        return True, f"Unloaded {self.name}"
 
     def reinit(self):
         self._init()
@@ -75,6 +91,10 @@ class Model:
     @property
     def name(self) -> str:
         return self._name
+
+    @property
+    def loaded(self) -> bool:
+        return self._loaded
 
     @property
     def device(self) -> torch.device:
@@ -180,8 +200,18 @@ class Model:
                 self._optimizer.load_state_dict(state["optimizer"]["state_dict"])
             else:
                 warnings.append("optimizer state dict not given")
-            status, message = self.load_weights({"name": state["name"],
-                                                 "weights": state["state_dict"]})
+            self_keys = self.weights.keys()
+            new_keys = state["state_dict"].keys()
+            if set(self_keys) == set(new_keys):
+                status, message = self.load_weights({"name": state["name"],
+                                                     "weights": state["state_dict"]})
+            elif (len(self_keys) == len(new_keys) and
+                  [f"module.{x}" in new_keys for x in self_keys]):
+                weights = {x: state["state_dict"][f"module.{x}"] for x in self_keys}
+                status, message = self.load_weights({"name": state["name"],
+                                                     "weights": weights})
+            else:
+                status, message = False, f"Keys differ"
             if not status:
                 return status, message
             else:

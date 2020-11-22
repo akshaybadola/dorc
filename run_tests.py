@@ -1,6 +1,7 @@
 import os
 from subprocess import Popen, PIPE, run
 
+cov_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trainer", "*")
 os.chdir("tests")
 test_files = ["test_checks.py",
               "test_task.py",
@@ -32,4 +33,4 @@ for i, f in enumerate(test_files):
     x, y = p.communicate()
     out.append([f, x.decode("utf-8")])
     err.append([f, y.decode("utf-8")])
-run("coverage report -i --include=/home/joe/projects/trainer/trainer/*", shell=True)
+run(f"coverage report -i --include={cov_path}", shell=True)

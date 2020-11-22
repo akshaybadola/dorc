@@ -66,7 +66,7 @@ class ModelTest(unittest.TestCase):
     def test_model_load(self):
         model = get_model("net", self.config, [0, 1])
         status, message = model.load({"name": "net",
-                                      "optimizer": {"name": "adam",
+                                      "optimizer": {"name": "Adam",
                                                     **config["optimizer"]["Adam"],
                                                     "state_dict": None},
                                       "params": {}, "gpus": [0],

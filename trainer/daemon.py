@@ -345,6 +345,13 @@ sys.path.append("{self.data_dir}")
         """
         return self._trackers
 
+    @property
+    def reserved_devices(self) -> List[int]:
+        devices = []
+        for x in self._devices.values():
+            devices.extend(x)
+        return devices
+
     def fwd_ports_func(self) -> None:
         """Forward ports at one minute interval to `self.trackers`
 
@@ -1479,20 +1486,26 @@ sys.path.append("{self.data_dir}")
             """
             return self.__version__
 
+        # FIXME: We're not checking overlap
         @self.app.route("/_devices", methods=["GET", "POST"])
         def __devices():
             if request.method == "POST":
                 try:
                     data = request.json
-                    self._devices[data["port"]] = data["gpus"]
-                    return _dump([True, None])
+                    if "action" == "reserve":
+                        reserved = self.reserved_devices
+                        available = [x for x in data["gpus"] if x not in reserved]
+                        if data["port"] not in self._devices:
+                            self._devices[data["port"]] = []
+                        self._devices[data["port"]].extend(available)
+                        return _dump([True, self._devices[data["port"]]])
+                    elif "action" == "free":
+                        self._devices[data["port"]] = list(set(self._devices[data["port"]]) - set(data["gpus"]))
+                        return _dump([True, self._devices[data["port"]]])
                 except Exception as e:
                     return _dump([False, f"{e}"])
             elif request.method == "GET":
-                retval = []
-                for x in self._devices.values():
-                    retval.extend(x)
-                return _dump(retval)
+                return _dump(self.reserved_devices)
 
         # @flask_login.login_required
         # @self.app.route("/api", methods=["GET"])

@@ -2060,9 +2060,13 @@ class Trainer:
     def load_weights(self, request):
         """Load weights for given model names.
 
-        The weights file must be sent in the request along with the model names."""
+        The weights file must be sent in the request along with the model names
+        and must be loadable from :meth:`torch.load` with all the model names
+        present in the keys for the file.
+
+        """
         if "model_names" not in request.form:
-            return False, self._logd(f"Model name not sent in data")
+            return False, self._logd(f"Model names not sent in data")
         try:
             model_names = json.loads(request.form["model_names"])
             weights = torch.load(request.files["file"], map_location="cpu")

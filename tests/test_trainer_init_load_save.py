@@ -1,10 +1,10 @@
 import os
 import shutil
-import json
-import time
 from datetime import datetime
 import unittest
 import sys
+import json
+import torch
 from _setup_local import config
 sys.path.append("../")
 from trainer.device import all_devices, useable_devices
@@ -57,14 +57,28 @@ class TrainerTestInitLoadSave(unittest.TestCase):
         self.assertEqual(self.trainer.load_saves(data),
                          (False, "[load_saves()] No such file"))
 
-    # def test_trainer_load_weights(self):
-    #     req = FakeRequest()
-    #     req.form["model_names"] = json.dumps(["net", "net_2"])
-    #     req.files["file"] = None
-    #     status, response = self.trainer.load_weights(req)
-    #     self.assertFalse(status)
-    #     with open()
-    #     req.files["file"] = None
+    def test_trainer_load_weights(self):
+        req = FakeRequest()
+        with self.subTest(i="no_file_given"):
+            req.form["model_names"] = json.dumps(["net", "net_2"])
+            status, response = self.trainer.load_weights(req)
+            self.assertFalse(status)
+        with self.subTest(i="weights_for_only_one_model_given"):
+            tmp = open("_temp_weights.pth")
+            req.form["model_names"] = json.dumps(["net", "net_2"])
+            req.files["file"] = tmp
+            status, response = self.trainer.load_weights(req)
+            tmp.close()
+            self.assertStatus(False)
+            self.assertIn("given weights", response.lower())
+        with self.subTest(i="correct_params"):
+            net = torch.load("_test_weights.pth")
+            weights = net["net"]
+            torch.save({"net": weights, "net_2": weights}, "_temp_weights.pth")
+            tmp = open("_temp_weights.pth")
+            status, response = self.trainer.load_weights(req)
+            tmp.close()
+            self.assertTrue(status)
 
     @classmethod
     def tearDownClass(cls):

@@ -140,13 +140,26 @@ class TrainerTestModels(unittest.TestCase):
         self.assertEqual(self.trainer._models["net_1"].gpus, [0, 1])
         self.assertEqual(self.trainer._models["net_2"].gpus, [])
 
-    @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
-    def test_trainer_init_models_many_models_auto_no_parallel(self):
+    @unittest.skipIf(len(all_devices()) < 2, f"Cannot run without at least 2 GPUs.")
+    def test_trainer_init_models_two_models_two_gpus_auto_no_parallel(self):
+        bleh = self.Net
+
+        class Net2(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.a = bleh()
+                self.b = bleh()
+
+            def forward(x):
+                x_a = self.a(x)
+                x_b = self.b(x)
+                return x_a + x_b
+
         self.params["model_params"] = {"net_1": {"model": self.Net,
                                                  "optimizer": "Adam",
                                                  "params": {},
                                                  "gpus": "auto"},
-                                       "net_2": {"model": self.Net,
+                                       "net_2": {"model": Net2,
                                                  "optimizer": "Adam",
                                                  "params": {},
                                                  "gpus": "auto"}}
@@ -159,8 +172,8 @@ class TrainerTestModels(unittest.TestCase):
         self.trainer._init_models()
         self.assertIn("net_1", self.trainer._models)
         self.assertIn("net_2", self.trainer._models)
-        self.assertEqual(self.trainer._models["net_1"].gpus, [0, 1])
-        self.assertEqual(self.trainer._models["net_2"].gpus, [])
+        self.assertEqual(self.trainer._models["net_1"].gpus, [1])
+        self.assertEqual(self.trainer._models["net_2"].gpus, [0])
 
     def test_trainer_get_new_models(self):
         pass

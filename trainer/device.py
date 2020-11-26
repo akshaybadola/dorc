@@ -2,6 +2,7 @@ from typing import List, Dict, Any, Union, Tuple
 from threading import Thread, Event
 import time
 import psutil
+import numpy as np
 import pynvml as nv
 
 
@@ -28,6 +29,23 @@ def gpu_util(handles: Dict[int, Any]) -> Union[Dict[int, Dict[str, Union[int, fl
         return {"gpu": util.gpu, "memory": 100 * (mem.used / mem.total)}
     if NVML_PRESENT:
         return {gpu_id: _get_util(h) for gpu_id, h in handles.items()}
+    else:
+        return None
+
+
+def gpu_ranking(handles: Dict[int, Any]) -> Union[Dict[int, int], None]:
+    ranking = ["geforce rtx 3080", "geforce rtx 3080", "geforce rtx 2080 ti",
+               "geforce gtx 1080 ti", "geforce rtx 2080",
+               "geforce rtx 2070", "geforce gtx 1080",
+               "geforce gtx 1070", "geforce gtx 1060"]
+    ranking.reverse()
+    if NVML_PRESENT:
+        retval = {}
+        for key, handle in handles.items():
+            mem = int(np.round(nv.nvmlDeviceGetMemoryInfo(handle).total / 1024 / 1024 / 1024))
+            name = nv.nvmlDeviceGetName(handle).decode("utf-8").lower()
+            retval[key] = {"compute": ranking.index(name), "memory": mem}
+        return retval
     else:
         return None
 

@@ -18,7 +18,8 @@ from multiprocessing.pool import ThreadPool
 from types import SimpleNamespace
 from torch.utils.data import Dataset, DataLoader
 
-from .device import init_nvml, gpu_util, gpu_name, cpu_info, memory_info, DeviceMonitor
+from .device import (init_nvml, gpu_ranking, gpu_util, gpu_name,
+                     cpu_info, memory_info, DeviceMonitor)
 from .util import gen_file_and_stream_logger, deprecated, _dump, concat
 from .task import Signals
 from .epoch import Epoch
@@ -649,23 +650,30 @@ class Trainer:
                     self._logw(f"{model_name} not in known models")
             remaining = set(self._gpus) - set(self.allocated_devices)
             if len(remaining) > 0:
+                ranking = [*gpu_ranking(self._device_handles).items()]
+                num_params = {x: 0 for x in auto}
+                for i, model_name in enumerate(auto):
+                    self.devices[model_name] = []
+                    temp_model = self._model_init_helper(model_name)
+                    temp_model.load_into_memory()
+                    num_params[model_name] = np.sum([np.prod(x.shape)
+                                                     for x in temp_model.weights.values()])
+                    del temp_model
+                num_params = [*num_params.items()]
+                num_params.sort(key=lambda x: x[1], reverse=True)
+                ranking = sorted(ranking, key=lambda x: (x[1]["memory"], x[1]["compute"]),
+                                 reverse=True)
                 # NOTE: `auto` takes precedence over `parallel``
                 if len(auto) < len(remaining):
-                    # set the bigger model as model parallel
-                    pass
-                elif len(auto) == len(remaining):
-                    # put the bigger model on to the bigger GPU
-                    pass
-                else:
-                    # if gpus remain at all then put the bigger model on gpu and smaller
-                    # on cpu
-                    pass
-                for model_name in auto:
-                    if model_name in self._model_params:
-                        # self.devices[name] = auto_devices[name]
-                        pass
-                    else:
-                        self._logw(f"{model_name} not in known models")
+                    # FIXME: need some to be parallel and some over a single gpu
+                    raise NotImplementedError
+                elif len(auto) >= len(remaining):
+                    # NOTE: put the bigger model on to the GPU with more ram
+                    for i, (model_name, _) in enumerate(num_params):
+                        if i < len(ranking):
+                            self.devices[model_name] = [ranking[i][0]]
+                        else:
+                            self.devices[model_name] = []
                 remaining = set(self._gpus) - set(self.allocated_devices)
                 if len(parallel) >= len(remaining):
                     # parallel_devices = self.best_parallel_devices(parallel)
@@ -2883,6 +2891,11 @@ class Trainer:
 
         """
         return self._devices
+
+    # @devices.setter
+    # def devices(self, x: Union[int, List[int]]):
+    #     if isinstance(x, int):
+    #         self._devices
 
     @prop
     @property

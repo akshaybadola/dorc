@@ -1,8 +1,15 @@
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Union, Tuple
 from threading import Thread, Event
 import time
 import psutil
 import pynvml as nv
+
+
+try:
+    nv.nvmlInit()
+    NVML_PRESENT = True
+except nv.NVMLError_LibraryNotFound:
+    NVML_PRESENT = False
 
 
 def cpu_info() -> Dict[str, Union[int, float]]:
@@ -14,25 +21,32 @@ def memory_info() -> Dict[str, int]:
     return {"total": info.total, "used": info.used}
 
 
-def gpu_util(handles: Dict[int, Any]) -> Dict[int, Dict[str, Union[int, float]]]:
+def gpu_util(handles: Dict[int, Any]) -> Union[Dict[int, Dict[str, Union[int, float]]], None]:
     def _get_util(h):
         util = nv.nvmlDeviceGetUtilizationRates(h)
         mem = nv.nvmlDeviceGetMemoryInfo(h)
         return {"gpu": util.gpu, "memory": 100 * (mem.used / mem.total)}
-    return {gpu_id: _get_util(h) for gpu_id, h in handles.items()}
+    if NVML_PRESENT:
+        return {gpu_id: _get_util(h) for gpu_id, h in handles.items()}
+    else:
+        return None
 
 
-def gpu_temp(handles: Dict[int, Any]) -> Dict[int, Dict[str, int]]:
+def gpu_temp(handles: Dict[int, Any]) -> Union[Dict[int, Dict[str, int]], None]:
     def _get_temp(h):
         temp = nv.nvmlDeviceGetTemperature(h, nv.NVML_TEMPERATURE_GPU)
         thresh = nv.nvmlDeviceGetTemperatureThreshold(
             h, nv.NVML_TEMPERATURE_THRESHOLD_SLOWDOWN)
         return {"temp": temp, "thresh": thresh}
-    return {gpu_id: _get_temp(h) for gpu_id, h in handles.items()}
+    if NVML_PRESENT:
+        return {gpu_id: _get_temp(h) for gpu_id, h in handles.items()}
+    else:
+        return None
 
 
 def all_devices() -> List[int]:
-    nv.nvmlInit()
+    if not NVML_PRESENT:
+        return []
     x = 0
     inds = []
     while True:
@@ -46,7 +60,8 @@ def all_devices() -> List[int]:
 
 
 def useable_devices() -> List[int]:
-    nv.nvmlInit()
+    if not NVML_PRESENT:
+        return []
     x = 0
     inds = []
     while True:
@@ -64,8 +79,9 @@ def useable_devices() -> List[int]:
     return inds
 
 
-def init_nvml(gpus: List[int]) -> Dict[int, Any]:
-    nv.nvmlInit()
+def init_nvml(gpus: List[int]) -> Union[Dict[int, Any], Tuple[None, None]]:
+    if not NVML_PRESENT:
+        return None, None
     remove = []
     handles = {}
     for x in gpus:
@@ -79,8 +95,11 @@ def init_nvml(gpus: List[int]) -> Dict[int, Any]:
     return handles, remove
 
 
-def gpu_name(handle) -> str:
-    return nv.nvmlDeviceGetName(handle).decode("utf-8")
+def gpu_name(handle) -> Union[str, None]:
+    if NVML_PRESENT:
+        return nv.nvmlDeviceGetName(handle).decode("utf-8")
+    else:
+        None
 
 
 class DeviceMonitor:
@@ -136,7 +155,7 @@ class DeviceMonitor:
             return None
 
     @property
-    def gpu_temp(self):
+    def gpu_temp(self) -> Dict[int, Dict[str, int]]:
         if self._handles:
             return gpu_temp(self._handles)
         else:

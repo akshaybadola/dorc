@@ -31,7 +31,7 @@ class ChecksTest(unittest.TestCase):
 
     def test_all_predicates_true(self):
         self.checks.clear()
-        self.checks.add(4 < 5, "4 < 5, Should be Tue")
+        self.checks.add(4 < 5, "4 < 5, Should be True")
         self.checks.add(6 > 5, "6 > 5, Should be True")
         self.checks.check_all_true()
         self.assertTrue(self.checks.status)

@@ -101,7 +101,7 @@ module_exports = {"A": A, "B": B, "f": f, "g": g}
                                                          "from _meh import config",
                                                          "config")
         self.assertTrue(status)
-        self.assertTrue("optimizer" in result)
+        self.assertTrue("optimizers" in result)
         self.assertTrue("criteria" in result)
 
     def test_add_module(self):

@@ -57,6 +57,7 @@ class TrainerTestDevice(unittest.TestCase):
                 self.assertEqual(self.trainer._gpus,
                                  case if isinstance(case, list) else [case])
 
+    @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
     def test_check_trainer_set_gpus(self):
         have_gpus = all_devices()
         useable_gpus = useable_devices()
@@ -71,16 +72,22 @@ class TrainerTestDevice(unittest.TestCase):
             self.trainer._maybe_init_gpus()
             self.assertEqual(self.trainer._gpus, useable_gpus)
 
+    @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
     def test_check_trainer_set_device_one_gpu_no_cuda_given_AND_gpus_given(self):
         self.trainer._trainer_params["cuda"] = False
-        self.trainer._trainer_params["gpus"] = [0, 1]
-        self.trainer._check_gpus_param()
-        self.trainer._maybe_init_gpus()
-        self.assertEqual(self.trainer._gpus, [0, 1])
-        self.trainer._set_device()
-        self.assertEqual(self.trainer._gpus, [-1])
-        self.trainer._init_models()
-        self.assertEqual(self.trainer._models["net"]._device, torch.device("cpu"))
+        gpus = {"one_gpu": [0], "two_gpus": [0, 1]}
+        for i in gpus:
+            if i == "two_gpus" and len(all_devices() < 2):
+                continue
+            with self.subTest(i=i):
+                self.trainer._trainer_params["gpus"] = gpus[i]
+                self.trainer._check_gpus_param()
+                self.trainer._maybe_init_gpus()
+                self.assertEqual(self.trainer._gpus, [0, 1])
+                self.trainer._set_device()
+                self.assertEqual(self.trainer._gpus, [-1])
+                self.trainer._init_models()
+                self.assertEqual(self.trainer._models["net"]._device, torch.device("cpu"))
 
     def test_check_trainer_set_device_cuda_given_AND_no_gpus_given(self):
         self.trainer._trainer_params["gpus"] = []
@@ -91,6 +98,7 @@ class TrainerTestDevice(unittest.TestCase):
         self.trainer._init_models()
         self.assertEqual(self.trainer._models["net"]._device, torch.device("cpu"))
 
+    @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
     def test_check_trainer_set_device_one_gpu_one_model(self):
         # if one gpu and one model, set model._device even when not specified in
         # params? when have_cuda and cuda_given
@@ -102,6 +110,7 @@ class TrainerTestDevice(unittest.TestCase):
         self.trainer._init_models()
         self.assertEqual(self.trainer._models["net"]._device, torch.device(0))
 
+    @unittest.skipIf(len(all_devices()) < 2, f"Cannot run without at least 2 GPUs.")
     def test_check_trainer_set_device_many_gpus_one_model(self):
         self.trainer._trainer_params["gpus"] = [0, 1]
         self.trainer._check_gpus_param()

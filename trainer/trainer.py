@@ -587,14 +587,14 @@ class Trainer:
             load_models = [k for k, v in self._model_params.items()
                            if "load" in v and v["load"]]
         self.allocate_devices(load_models)
-        for model_name in load_models.keys():
+        for model_name in load_models:
             self._models[model_name] = self._model_init_helper(model_name)
             status, response = self._models[model_name].load_into_memory()
             if not status:
                 self._loge(response)
 
-    def allocate_devices(self, load_models: [] = Union[str, List[str]],
-                         unload_models: [] = Union[str, List[str]]):
+    def allocate_devices(self, load_models: Union[str, List[str]] = [],
+                         unload_models: Union[str, List[str]] = []):
         """Spread the devices over the load_models models.
 
         First remove the devices from self.devices and then allocate according
@@ -611,6 +611,8 @@ class Trainer:
             load_models = [load_models]
         if isinstance(unload_models, str):
             unload_models = [unload_models]
+        load_models = [*load_models]
+        unload_models = [*unload_models]
         for model_name in unload_models:
             if model_name in self._model_params:
                 self.devices[model_name] = []

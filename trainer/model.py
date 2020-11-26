@@ -105,7 +105,7 @@ class Model:
         :attr:`_gpus` list.
 
         """
-        if self._gpus == [-1]:
+        if self._gpus == [-1] or self._gpus == []:
             return torch.device("cpu")
         else:
             return torch.device(f"cuda:{self._gpus[0]}")
@@ -165,10 +165,10 @@ class Model:
         return {"name": self._name,
                 "params": self._model_params,
                 "optimizer": {"name": self._optimizer_name,
-                              "state_dict": self._optimizer.state_dict(),
+                              "state_dict": self._optimizer and self._optimizer.state_dict(),
                               "params": self._optimizer_params},
                 "gpus": self._gpus,
-                "state_dict": self._model.state_dict()}
+                "state_dict": self._model and self._model.state_dict()}
 
     def load(self, state: Dict[str, Any]) -> Tuple[bool, Union[str, None]]:
         """Load the entire model state.
@@ -186,18 +186,24 @@ class Model:
         warnings = []
         try:
             # status = {"model": None, "optimizer": None, "gpus": None}
+            if not self.loaded:
+                return False, "Model not loaded into memory"
             if state["name"] != self._name:
-                return False, "Different model name in state"
+                return False, f"Different model name in state {state['name']}, {self._name}"
             if state["optimizer"]["name"] != self._optimizer_name:
-                warnings.append("Different gpus in state")
+                state_name = state["optimizer"]["name"]
+                self_name = self._optimizer_name
+                warnings.append(f"Different optimizers in state {state_name}, {self_name}")
             if state["gpus"] != self._gpus:
-                warnings.append("Different gpus in state")
-            self._model = self._model_def(**state["params"])
-            self._optimizer = self._optimizer_func(self._model.parameters(),
-                                                   **state["optimizer"]["params"])
-            # can be None if a new optimizer is specified
+                warnings.append(f"Different gpus in state {state['gpus']}, {self._gpus}")
+            if not state["state_dict"]:
+                return False, "No point loading an empty state_dict"
+                warnings.append("Was not loaded. Loading into memory")
             if state["optimizer"]["state_dict"]:
-                self._optimizer.load_state_dict(state["optimizer"]["state_dict"])
+                try:
+                    self._optimizer.load_state_dict(state["optimizer"]["state_dict"])
+                except Exception as e:
+                    return False, f"{e}"
             else:
                 warnings.append("optimizer state dict not given")
             self_keys = self.weights.keys()

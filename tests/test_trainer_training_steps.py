@@ -6,18 +6,20 @@ import torch
 import sys
 from _setup_local import config
 sys.path.append("../")
+from trainer.device import all_devices
 from trainer.model import Model
 from trainer.autoloads import ClassificationTrainStep, ClassificationTestStep
 
 
 def get_model_batch(name, config, gpus):
     _name = "net"
-    model_def = config["model_defs"][_name]["model"]
+    model_def = config["model_params"][_name]["model"]
     params = config["model_params"][_name]["params"]
-    optimizer = {"name": "adam",
-                 **config["optimizer"]["Adam"]}
-    return (Model(name, model_def, params, optimizer, gpus),
-            [torch.rand(8, 1, 28, 28), torch.Tensor([0]*8).long()])
+    optimizer = {"name": "Adam",
+                 **config["optimizers"]["Adam"]}
+    model = Model(name, model_def, params, optimizer, gpus)
+    model.load_into_memory()
+    return (model, [torch.rand(8, 1, 28, 28), torch.Tensor([0]*8).long()])
 
 
 def get_step(model, step):
@@ -37,12 +39,20 @@ class TrainingStepsTest(unittest.TestCase):
         os.mkdir(".test_dir")
         os.mkdir(".test_dir/test_session")
 
+    def test_train_step_no_gpu(self):
+        model, batch = get_model_batch("net", self.config, [])
+        train_step = get_step(model, "train")
+        retval = train_step(batch)
+        self.assertTrue(all(x in retval for x in train_step.func.returns))
+
+    @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
     def test_train_step_single_gpu(self):
         model, batch = get_model_batch("net", self.config, [0])
         train_step = get_step(model, "train")
         retval = train_step(batch)
         self.assertTrue(all(x in retval for x in train_step.func.returns))
 
+    @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
     def test_val_step_single_gpu(self):
         model, batch = get_model_batch("net", self.config, [0])
         val_step = get_step(model, "val")
@@ -50,6 +60,7 @@ class TrainingStepsTest(unittest.TestCase):
         self.assertTrue(all(x in retval for x in val_step.func.returns))
 
     # NOTE: how do we test that it is actually parallelized?
+    @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
     def test_dataparallel(self):
         model, batch = get_model_batch("net", self.config, [0, 1])
         train_step = get_step(model, "train")
@@ -61,6 +72,7 @@ class TrainingStepsTest(unittest.TestCase):
     def test_distributed_data_parallel(self):
         pass
 
+    @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
     def test_model_parallel(self):
         pass
 

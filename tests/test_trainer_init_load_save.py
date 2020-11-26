@@ -5,7 +5,7 @@ import unittest
 import sys
 import json
 import torch
-from _setup_local import config
+from _setup_local import config, Net
 sys.path.append("../")
 from trainer.device import all_devices, useable_devices
 from trainer.trainer import Trainer
@@ -41,12 +41,12 @@ class TrainerTestInitLoadSave(unittest.TestCase):
         os.mkdir(f".test_dir/test_session/{time_str}")
         cls.data_dir = f".test_dir/test_session/{time_str}"
         cls.params = {"data_dir": cls.data_dir, **cls.config}
-        cls.trainer = SubTrainer(False, **cls.params)
-        cls.trainer.reserved_gpus = []
-        cls.trainer.reserve_gpus = lambda x: [True, None]
-        cls.trainer._trainer_params["cuda"] = True
 
     def test_trainer_load_saves_bad_params(self):
+        self.trainer = SubTrainer(False, **self.params)
+        self.trainer.reserved_gpus = []
+        self.trainer.reserve_gpus = lambda x: [True, None]
+        self.trainer._trainer_params["cuda"] = True
         data = {}
         self.assertEqual(self.trainer.load_saves(data),
                          (False, "[load_saves()] Missing params \"weights\""))
@@ -58,24 +58,34 @@ class TrainerTestInitLoadSave(unittest.TestCase):
                          (False, "[load_saves()] No such file"))
 
     def test_trainer_load_weights(self):
+        self.params["model_params"] = {"net_1": {"model": Net, "optimizer": "Adam",
+                                                 "params": {}, "gpus": "auto"},
+                                       "net_2": {"model": Net, "optimizer": "Adam",
+                                                 "params": {}, "gpus": "auto"}}
+        self.trainer = SubTrainer(False, **self.params)
+        self.trainer.reserved_gpus = []
+        self.trainer.reserve_gpus = lambda x: [True, None]
+        self.trainer._trainer_params["cuda"] = True
+        self.trainer._init_device()
+        self.trainer._init_models()
         req = FakeRequest()
         with self.subTest(i="no_file_given"):
-            req.form["model_names"] = json.dumps(["net", "net_2"])
+            req.form["model_names"] = json.dumps(["net_1", "net_2"])
             status, response = self.trainer.load_weights(req)
             self.assertFalse(status)
         with self.subTest(i="weights_for_only_one_model_given"):
-            tmp = open("_temp_weights.pth")
-            req.form["model_names"] = json.dumps(["net", "net_2"])
+            tmp = open("_temp_weights.pth", "rb")
+            req.form["model_names"] = json.dumps(["net_1", "net_2"])
             req.files["file"] = tmp
             status, response = self.trainer.load_weights(req)
             tmp.close()
-            self.assertStatus(False)
+            self.assertFalse(status)
             self.assertIn("given weights", response.lower())
         with self.subTest(i="correct_params"):
             net = torch.load("_test_weights.pth")
             weights = net["net"]
-            torch.save({"net": weights, "net_2": weights}, "_temp_weights.pth")
-            tmp = open("_temp_weights.pth")
+            torch.save({"net_1": weights, "net_2": weights}, "_temp_weights.pth")
+            tmp = open("_temp_weights.pth", "rb")
             status, response = self.trainer.load_weights(req)
             tmp.close()
             self.assertTrue(status)

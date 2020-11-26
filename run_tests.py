@@ -10,7 +10,7 @@ test_files = ["test_checks.py",
               "test_model.py",
               "test_trainer_device.py",
               "test_trainer_models.py",
-              "test_training_steps.py",
+              "test_trainer_training_steps.py",
               "test_trainer_metrics.py",
               "test_trainer.py",
               "test_epoch.py",
@@ -27,6 +27,7 @@ test_files = [f for f in test_files if not f.startswith("*")]
 out = []
 err = []
 for i, f in enumerate(test_files):
+    # CHECK: What was this for?
     # if i+1 > 12:
     #     break
     append = "-a" if not i else ""
@@ -36,4 +37,8 @@ for i, f in enumerate(test_files):
     x, y = p.communicate()
     out.append([f, x.decode("utf-8")])
     err.append([f, y.decode("utf-8")])
+    if out[-1]:
+        print(out[-1][1])
+    if err:
+        print(err[-1][1])
 run(f"coverage report -i --include={cov_path}", shell=True)

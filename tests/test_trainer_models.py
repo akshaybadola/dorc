@@ -58,6 +58,7 @@ class TrainerTestModels(unittest.TestCase):
             self.assertIn("net", self.trainer._models)
             self.assertEqual(self.trainer._models["net"].gpus, [])
 
+    @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
     def test_trainer_init_models_one_model_one_gpu(self):
         self.params["model_params"] = {"net": {"model": self.Net,
                                                "optimizer": "Adam",
@@ -73,6 +74,7 @@ class TrainerTestModels(unittest.TestCase):
         self.assertIn("net", self.trainer._models)
         self.assertEqual(self.trainer._models["net"].gpus, [0])
 
+    @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
     def test_trainer_init_models_many_models_no_auto_no_parallel_gpus_sufficient(self):
         self.params["model_params"] = {"net_1": {"model": self.Net,
                                                  "optimizer": "Adam",
@@ -94,6 +96,7 @@ class TrainerTestModels(unittest.TestCase):
         self.assertEqual(self.trainer._models["net_1"].gpus, [0])
         self.assertEqual(self.trainer._models["net_2"].gpus, [1])
 
+    @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
     def test_trainer_init_models_many_models_no_auto_no_parallel_gpus_deficient(self):
         self.params["model_params"] = {"net_1": {"model": self.Net,
                                                  "optimizer": "Adam",
@@ -115,6 +118,7 @@ class TrainerTestModels(unittest.TestCase):
         self.assertEqual(self.trainer._models["net_1"].gpus, [0, 1])
         self.assertEqual(self.trainer._models["net_2"].gpus, [])
 
+    @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
     def test_trainer_init_models_many_models_no_auto_no_parallel_gpus_conflict(self):
         self.params["model_params"] = {"net_1": {"model": self.Net,
                                                  "optimizer": "Adam",
@@ -136,6 +140,7 @@ class TrainerTestModels(unittest.TestCase):
         self.assertEqual(self.trainer._models["net_1"].gpus, [0, 1])
         self.assertEqual(self.trainer._models["net_2"].gpus, [])
 
+    @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
     def test_trainer_init_models_many_models_auto_no_parallel(self):
         self.params["model_params"] = {"net_1": {"model": self.Net,
                                                  "optimizer": "Adam",
@@ -156,7 +161,6 @@ class TrainerTestModels(unittest.TestCase):
         self.assertIn("net_2", self.trainer._models)
         self.assertEqual(self.trainer._models["net_1"].gpus, [0, 1])
         self.assertEqual(self.trainer._models["net_2"].gpus, [])
-
 
     def test_trainer_get_new_models(self):
         pass

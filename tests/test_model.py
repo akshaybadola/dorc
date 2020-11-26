@@ -74,6 +74,7 @@ class ModelTest(unittest.TestCase):
     @unittest.skipIf(len(all_devices()) < 2, f"Cannot run without at least 2 gpus.")
     def test_model_dump_multi_gpus(self):
         model = get_model("net", self.config, [0, 1])
+        model.load_into_memory()
         dump = model.dump()
         expected = {"name": str, "params": dict,
                     "optimizer": dict, "gpus": list,
@@ -95,6 +96,7 @@ class ModelTest(unittest.TestCase):
     @unittest.skipIf(not all_devices(), f"Cannot run without gpus.")
     def test_model_load_weights(self):
         model = get_model("net", self.config, [0, 1])
+        model.load_into_memory()
         weights = model.dump()["state_dict"]
         status, message = model.load_weights({"name": "net", "weights": weights})
         self.assertTrue(status)

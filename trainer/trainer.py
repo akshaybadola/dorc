@@ -589,9 +589,12 @@ class Trainer:
         self.allocate_devices(load_models)
         for model_name in load_models:
             self._models[model_name] = self._model_init_helper(model_name)
-            status, response = self._models[model_name].load_into_memory()
-            if not status:
-                self._loge(response)
+            if self._models[model_name]:
+                status, response = self._models[model_name].load_into_memory()
+                if not status:
+                    self._loge(response)
+            else:
+                self._models[model_name] = None
 
     def allocate_devices(self, load_models: Union[str, List[str]] = [],
                          unload_models: Union[str, List[str]] = []):
@@ -646,15 +649,23 @@ class Trainer:
                     self._logw(f"{model_name} not in known models")
             remaining = set(self._gpus) - set(self.allocated_devices)
             if len(remaining) > 0:
-                # who takes precedence `auto` or `parallel`?
-                if len(auto) >= len(remaining):
-                    # auto_devices = self.best_auto_devices(auto)
-                    for model_name in auto:
-                        if model_name in self._model_params:
-                            # self.devices[name] = auto_devices[name]
-                            pass
-                        else:
-                            self._logw(f"{model_name} not in known models")
+                # NOTE: `auto` takes precedence over `parallel``
+                if len(auto) < len(remaining):
+                    # set the bigger model as model parallel
+                    pass
+                elif len(auto) == len(remaining):
+                    # put the bigger model on to the bigger GPU
+                    pass
+                else:
+                    # if gpus remain at all then put the bigger model on gpu and smaller
+                    # on cpu
+                    pass
+                for model_name in auto:
+                    if model_name in self._model_params:
+                        # self.devices[name] = auto_devices[name]
+                        pass
+                    else:
+                        self._logw(f"{model_name} not in known models")
                 remaining = set(self._gpus) - set(self.allocated_devices)
                 if len(parallel) >= len(remaining):
                     # parallel_devices = self.best_parallel_devices(parallel)

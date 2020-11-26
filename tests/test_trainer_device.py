@@ -77,13 +77,13 @@ class TrainerTestDevice(unittest.TestCase):
         self.trainer._trainer_params["cuda"] = False
         gpus = {"one_gpu": [0], "two_gpus": [0, 1]}
         for i in gpus:
-            if i == "two_gpus" and len(all_devices() < 2):
+            if i == "two_gpus" and len(all_devices()) < 2:
                 continue
             with self.subTest(i=i):
                 self.trainer._trainer_params["gpus"] = gpus[i]
                 self.trainer._check_gpus_param()
                 self.trainer._maybe_init_gpus()
-                self.assertEqual(self.trainer._gpus, [0, 1])
+                self.assertEqual(self.trainer._gpus, gpus[i])
                 self.trainer._set_device()
                 self.assertEqual(self.trainer._gpus, [-1])
                 self.trainer._init_models()

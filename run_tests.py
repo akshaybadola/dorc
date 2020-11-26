@@ -26,19 +26,22 @@ test_files = ["test_checks.py",
 test_files = [f for f in test_files if not f.startswith("*")]
 out = []
 err = []
-for i, f in enumerate(test_files):
-    # CHECK: What was this for?
-    # if i+1 > 12:
-    #     break
-    append = "-a" if not i else ""
-    print(f"Testing file {f}, {i+1} out of {len(test_files)}")
-    p = Popen(f"python -m coverage run {append} --source=.. -m unittest {f}",
-              shell=True, stdout=PIPE, stderr=PIPE)
-    x, y = p.communicate()
-    out.append([f, x.decode("utf-8")])
-    err.append([f, y.decode("utf-8")])
-    if out[-1]:
-        print(out[-1][1])
-    if err:
-        print(err[-1][1])
-run(f"coverage report -i --include={cov_path}", shell=True)
+try:
+    for i, f in enumerate(test_files):
+        # CHECK: What was this for?
+        # if i+1 > 12:
+        #     break
+        append = "-a" if not i else ""
+        print(f"Testing file {f}, {i+1} out of {len(test_files)}")
+        p = Popen(f"python -m coverage run {append} --source=.. -m unittest {f}",
+                  shell=True, stdout=PIPE, stderr=PIPE)
+        x, y = p.communicate()
+        out.append([f, x.decode("utf-8")])
+        err.append([f, y.decode("utf-8")])
+        if out[-1]:
+            print(out[-1][1])
+        if err:
+            print(err[-1][1])
+    run(f"coverage report -i --include={cov_path}", shell=True)
+except KeyboardInterrupt:
+    run(f"coverage report -i --include={cov_path}", shell=True)

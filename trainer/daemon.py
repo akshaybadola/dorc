@@ -43,19 +43,6 @@ from .auth import __unti__, __inti__, User
 session_method = Tag("session_method")
 
 
-# def _dump(*args):
-#     if len(args) > 1:
-#         if args[0] in [True, False]:
-#             dump({"status": args[0], "payload": args[1:]})
-#         else:
-#             dump(args)
-#     else:
-#         if isinstance(args, list) and args[0] in [True, False]:
-#             dump({"status": args[0], "payload": args[1:]})
-#         else:
-#             dump(args)
-
-
 def get_hostname() -> str:
     p = Popen("hostname", stdout=PIPE, stderr=PIPE)
     out, err = p.communicate()
@@ -1034,6 +1021,8 @@ sys.path.append("{self.data_dir}")
                 print(self._logd(f"SENDING DATA: {_data}"))
                 response = requests.request("POST", f"http://{server}/upload_session",
                                             files=_files, data=_data, cookies=cookies)
+                for f in _files.values():
+                    f.close()
                 if "task_id" in str(response.content):
                     self._debug_and_put(task_id, True, "Sent clone request successfully" +
                                         f"Response: {response.content}" +

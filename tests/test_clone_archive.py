@@ -143,9 +143,7 @@ class CloneHTTPTest(unittest.TestCase):
         config = {":".join(["optimizer", "Adam", "params", "lr"]): 0.05,
                   "uid": "test_monkey_trainer",
                   ":".join(["trainer_params", "seed"]): 2222}
-        # savedir = os.path.join(new_daemon.data_dir, key, "savedir")
-        # [open(os.path.join(savedir, x), "rb") for x in os.listdir(savedir)]
-        shutil.copy("/home/joe/forward.py", os.path.join(new_daemon.data_dir, key, "savedir"))
+        shutil.copy("_forward.py", os.path.join(new_daemon.data_dir, key, "savedir"))
         response = requests.request("POST", new_host + "clone_to",
                                     json={"session_key": key,
                                           "saves": True,

@@ -25,8 +25,9 @@ class DaemonHTTPTest(unittest.TestCase):
 
     def test_sessions_view(self):
         response = requests.request("GET", self.host + "sessions", allow_redirects=False)
-        self.assertEqual(response.status_code, 302)
-        self.assertTrue("/login" in response.content.decode())
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("not", response.content.decode().lower())
+        self.assertIn("authorized", response.content.decode().lower())
         response = requests.request("POST", self.host + "login",
                                     data={"username": "admin", "password": "admin"})
         self.assertEqual(response.status_code, 200)

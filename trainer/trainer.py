@@ -20,7 +20,8 @@ from torch.utils.data import Dataset, DataLoader
 
 from .device import (init_nvml, gpu_ranking, gpu_util, gpu_name,
                      cpu_info, memory_info, DeviceMonitor)
-from .util import gen_file_and_stream_logger, deprecated, _dump, concat
+from .exceptions import ParamsError
+from .util import gen_file_and_stream_logger, deprecated, _dump, concat, diff_as_sets
 from .task import Signals
 from .epoch import Epoch
 from .mods import Modules as Modules
@@ -166,7 +167,7 @@ class Trainer:
         self.__props.add("unique_id")
         self._model_params = model_params
         self._criteria_params = criteria
-        self._optimizer_params = optimizers
+        self._optimizers = optimizers
         self._data = data
         self._dataloader_params = dataloader_params
         self._trainer_params = trainer_params
@@ -263,9 +264,11 @@ class Trainer:
 
         """
         self._logi("Performing Sanity Check")
-        _check_model_params(self)   # checks model params and defs both
-        _check_trainer_params(self)  # checks optimizer and stuff also
-        _check_data_params(self)     # checks data and dataloaders
+        status, message = _check_model_params(self)   # checks model params and defs both
+        status, message = _check_trainer_params(self)  # checks optimizer and stuff also
+        status, message = _check_data_params(self)     # checks data and dataloaders
+        if not status:
+            raise ParamsError("data", message)
     # END: Checks
 
     # START: Init Funcs
@@ -291,6 +294,7 @@ class Trainer:
 
         """
         # CHECK: Why's this commented?
+        # What if we're resuming and devices are already initialized?
         # if self._devices_initialized:
         #     return
         self._check_gpus_param()
@@ -587,7 +591,11 @@ class Trainer:
         else:
             load_models = [k for k, v in self._model_params.items()
                            if "load" in v and v["load"]]
-        self.allocate_devices(load_models)
+        if self.gpus and self.gpus != [-1]:
+            self.allocate_devices(load_models)
+        else:
+            for model_name in load_models:
+                self.devices[model_name] = []
         for model_name in load_models:
             self._models[model_name] = self._model_init_helper(model_name)
             if self._models[model_name]:
@@ -596,6 +604,14 @@ class Trainer:
                     self._loge(response)
             else:
                 self._models[model_name] = None
+
+    def load_models_state(self, model_state):
+        for model in self.loaded_models:
+            status, message = self._models[model].load(model_state[model])
+            if not status:
+                self._loge(f"Loading model {model} failed. Error {message}")
+                return False, message
+        return True, None
 
     def allocate_devices(self, load_models: Union[str, List[str]] = [],
                          unload_models: Union[str, List[str]] = []):
@@ -695,19 +711,16 @@ class Trainer:
                     else:
                         self._logw(f"{model_name} not in known models")
 
-    def _model_init_helper(self, model_name, model_params=None, optim_name=None, optim_params=None):
+    def _model_init_helper(self, model_name):
         model = self._model_params[model_name]["model"]
-        if model_params is None:
-            model_params = self._model_params[model_name]["params"]
+        model_params = self._model_params[model_name]["params"]
         try:
-            if optim_name is None:
-                optim_name = self._model_params[model_name]["optimizer"]
-            if optim_name in self._optimizer_params:
-                optim_func = self._optimizer_params[optim_name]["function"]
-                if not optim_params:
-                    optim_params = self._optimizer_params[optim_name]["params"]
+            optim_name = self._model_params[model_name]["optimizer"]
+            if optim_name in self._optimizers:
+                optim_func = self._optimizers[optim_name]["function"]
             elif hasattr(torch.optim, optim_name):
                 optim_func = getattr(torch.optim, optim_name)
+            optim_params = self._optimizers[optim_name]["params"]
             optimizer = {"name": optim_name,
                          "function": optim_func,
                          "params": optim_params}
@@ -720,7 +733,7 @@ class Trainer:
     @prop
     @property
     def loaded_models(self):
-        return [name for name, model in self._models if model.loaded]
+        return [name for name, model in self._models.items() if model.loaded]
 
     @POST
     @methods
@@ -763,8 +776,21 @@ class Trainer:
         integrated, but more may be added as the data loading and feeding part
         is agnostic of the framework.
 
-        """
+        Data can be given as either:
 
+            a. ``data["train"]`` etc. in the parameters
+            b. Or for a custom dataloader can be given as a function which
+               provides the dataloader along with params.
+
+        Data and dataloader can be skipped entirely (aside from "train") if both
+        data[step] and dataloader_params[step] are None.
+
+        If however e.g., ``data["val"]`` is ``None`` and
+        ``dataloader_params["val"]`` is not ``None``, it implies that "val" data
+        was not to be skipped. Then the second case is checked and a "function"
+        has to be present which will provide the dataloader.
+
+        """
         self._logi("Initializing Dataloaders")
 
         # FIXME: Remove this and streamline data and loaders
@@ -778,7 +804,6 @@ class Trainer:
             elif loader and hasattr(loader.dataset, "_get_raw"):
                 self._logw(name + " dataset has \"_get_raw\"" +
                            " Drawing samples from validation data is available!")
-
         for loader, params in self._dataloader_params.items():
             if loader == "train":
                 if self._data is None:
@@ -806,6 +831,27 @@ class Trainer:
                     self._logi("No Test loader. Will not do testing")
                     self.test_loader = None
                 _check_raw(self.test_loader, "Test")
+        return True, None
+
+    def _restore_dataloader_params(self, params):
+        self._logd("Restoring dataloader_params")
+        if any([(y is not None and "collate_fn" in y or callable(y))
+                for x, y in params.items()]):
+            self._logw("collate_fn will not be restored")
+        for k, v in params.items():
+            if v is not None and set(v.keys()) != set(self._dataloader_params[k].keys()):
+                self._logw(f"Dataloader params for {k} differ. Not restoring")
+            elif v is not None:
+                for a, b in v.items():
+                    if a != "collate_fn":
+                        value = params[k][a]
+                        if isinstance(value, dict):
+                            for x, y in value.items():
+                                if isinstance(y, str) and not y.startswith("callable_"):
+                                    self._dataloader_params[k][a][x] = y
+                        else:
+                            if isinstance(value, str) and not value.startswith("callable_"):
+                                self._dataloader_params[k][a] = value
 
     # CHECK: Should I use namedtuple instead?
     def _init_metrics(self):
@@ -848,7 +894,7 @@ class Trainer:
                             for _x in self._extra_metrics[x][k]["inputs"]:
                                 if isinstance(_x, tuple):
                                     assert _x[0] == "models" and\
-                                        all(_ in self._models.names for _ in _x[1]),\
+                                        all(_ in self.models for _ in _x[1]),\
                                         "Required model not in self._models"
                             # assert all(all(_d in self.__dict__[d[0]].keys() for _d in d[1])
                             #            for d in self._extra_metrics[x][k]["inputs"]
@@ -1578,8 +1624,9 @@ class Trainer:
             if method == "load":
                 load_state = torch.load(os.path.join(self._savedir, weights))
                 try:
-                    for name in self._models.names:
-                        self._models[name].load_weights({"name": name, "weights": load_state["models"][name]})
+                    for name in self.models:
+                        self._models[name].load_weights(
+                            {"name": name, "weights": load_state["models"][name]})
                 except Exception as e:
                     return False,\
                         self._loge(f"Could not load weights {weights}. Error occured {e}" +
@@ -1861,10 +1908,10 @@ class Trainer:
                 models[model_name] = self._model_params[model_name]["model"](**model_params)
                 optim_name = self._model_params[model_name]["optimizer"]
                 optimizers[model_name] = {"name": optim_name,
-                                          "optimizer": self._optimizer_params
+                                          "optimizer": self._optimizers
                                           [optim_name]["function"](
                                               models[model_name].parameters(),
-                                              **self._optimizer_params[optim_name]["params"])}
+                                              **self._optimizers[optim_name]["params"])}
                 devices[model_name] = self._device
                 # CHECK: This may not actually be needed
                 #        May be needed if weights are updated.
@@ -1953,7 +2000,7 @@ class Trainer:
         :rtype: None
 
         """
-        if model_name not in self._models.names:
+        if model_name not in self.models:
             return False, self._loge(f"No such model {model_name}")
         else:
             for name in self._models:
@@ -2097,11 +2144,12 @@ class Trainer:
         if not all(x in weights for x in model_names):
             return False, self._logd(f"Check save file! " +
                                      f"Not all {model_names} in given weights {weights.keys()}")
-        if not all(x in self._models.names for x in model_names):
+        if not all(x in self.models for x in model_names):
             return False, self._logd(f"Some models currently not in scope")
         try:
             for model_name in model_names:
-                status, err = self._models[model_name].load_weights(weights[model_name])
+                status, err = self._models[model_name].load_weights(
+                    {"name": model_name, "weights": weights[model_name]})
                 if err:
                     return False, self._loge(f"Error while updating component {err}")
             return True, self._logd(f"Updated Models {model_names}")
@@ -2288,10 +2336,10 @@ class Trainer:
                 #         models["optimizers"][model] = getattr(torch.optim, optim_name)(
                 #             **model_defs[model]["optimizer_params"])
                 #         self._logd(f"Initialized optimizer for {model} in add_model with given params")
-                #     elif optim_name in self._optimizer_params:
-                #         models["optimizers"][model] = self._optimizer_params[optim_name]["function"]\
+                #     elif optim_name in self._optimizers:
+                #         models["optimizers"][model] = self._optimizers[optim_name]["function"]\
                 #             (models["models"][model].parameters(),
-                #              **self._optimizer_params[optim_name]["params"])
+                #              **self._optimizers[optim_name]["params"])
                 #         self._logd(f"Initialized optimizer for {model} in add_model with self params")
                 #     else:
                 #         models["optimizers"][model] = getattr(torch.optim, optim_name)()
@@ -2326,23 +2374,34 @@ class Trainer:
         "Dump everything except weights"
         try:
             dump_path = os.path.join(self._data_dir, "session_state")
-            state = self._get_state(False)
+            state = self._get_state(True)
             with open(dump_path, "w") as f:
                 f.write(_dump(state))
             return True, "Dumped"
         except Exception as e:
             return False, f"{e}" + f"\n{traceback.format_exc()}"
 
-    def _get_state(self, model_weights=True):
+    @property
+    def _save_and_load_keys(self):
+        """Keys which should be present in save and load state"""
+        # TODO: add "hooks_to_run" and other keys to state
+        return ["epoch", "iterations", "models", "model_params",
+                "criteria_params", "trainer_params",
+                "data", "dataloader_params", "optimizers", "metrics"]
+
+    def _get_state(self, model_names_only=False):
         save_state = {}
         save_state["epoch"] = self.epoch
         if hasattr(self, "given_name"):
             save_state["given_name"] = self.given_name
         save_state["iterations"] = self.iterations
-        save_state["models"] = self._models.dump() if model_weights else self._models.names
+        save_state["models"] = self .models if model_names_only else\
+            {x: self._models[x].dump() for x in self._models}
         save_state["model_params"] = copy.deepcopy(self._model_params)
         save_state["criteria_params"] = copy.deepcopy(self._criteria_params)
+        save_state["data"] = self._data
         save_state["dataloader_params"] = {}
+        save_state["optimizers"] = copy.deepcopy(self._optimizers)
         for k, v in self._dataloader_params.items():
             if v is None:
                 save_state["dataloader_params"][k] = None
@@ -2412,7 +2471,12 @@ class Trainer:
             self.fix_state(save_state, save_path)
             not_saved = try_save()
 
-    def fix_state(self, save_state, save_path):
+    def fix_state(self, save_state: Dict, save_path: str):
+        """Fix serialization errors in trainer state.
+
+        Used to save with :func:`torch.save`.
+
+        """
         tmp_path = save_path + "_tmp"
 
         def find_error_key(state_dict):
@@ -2425,61 +2489,61 @@ class Trainer:
         state_dict = save_state
         keys = []
         while True:
-            if isinstance(state_dict, dict):
-                error_key = find_error_key(state_dict)
-            else:
+            error_key = find_error_key(state_dict)
+            if error_key is None:
                 break
-            if error_key:
+            else:
                 keys.append(error_key)
                 state_dict = state_dict[error_key]
         x = save_state
-        for key in keys[:-1]:
-            x = x[key]
-        x[keys[-1]] = type(x[keys[-1]]).__qualname__
-        self._logw(f"Value with keychain {keys} could not be saved." +
-                   f" Replaced with name = {x[keys[-1]]}")
-        if "not_saved" not in save_state:
-            save_state["not_saved"] = [keys]
+        if keys:
+            for key in keys[:-1]:
+                x = x[key]
+            x[keys[-1]] = type(x[keys[-1]]).__qualname__
+            self._logw(f"Value with keychain {keys} could not be saved." +
+                       f" Replaced with name = {x[keys[-1]]}")
+            if "not_saved" not in save_state:
+                save_state["not_saved"] = [keys]
+            else:
+                save_state["not_saved"].append(keys)
+            os.remove(tmp_path)
         else:
-            save_state["not_saved"].append(keys)
-        os.remove(tmp_path)
+            self._logw(f"Nothing to fix in state")
 
-    # DONE: Unique Id check
-    #       - We only resume with same id
-    # DONE: Check if {models, metrics, dataloaders, update_funcs} are resumed correctly as
-    #       there may be callables in the saved_state. trainer shouldn't allow callables
-    #       - Callables are not resumed
     # TODO: Right now, the list of saves and resume_path etc are given as full paths while
     #       they should be relative paths to .savedir/unique_id/"_".join(model_names)
     def _resume_from_path(self, resume_path):
-        self._have_resumed = True
         saved_state = torch.load(resume_path)
-        # not_saved = saved_state["not_saved"]
+        self._resume_from_state(saved_state)
+
+    def _resume_from_state(self, saved_state):
+        """Resume the trainer from a given state.
+
+        Trainer can only be resumed if the models and dataloaders are
+        identical. If either of them differs, it's essentially a new training
+        session and should be run as such. Everything else (mostly parameters)
+        can be changed in the resume state.
+
+        """
+        self._backup_state = self._get_state()
+        self._have_resumed = True
+        diff = diff_as_sets(self._save_and_load_keys, saved_state.keys())
+        if diff:
+            return self._loge(f"Could not load saved_state. Missing keys {diff}")
+        data_name = saved_state["data"]["name"]
+        if data_name != self._data["name"]:
+            return self._loge("Cannot load saved_state, Different datasets: " +
+                              f"{data_name}, {self._data}")
+        diff = (diff_as_sets(self.models, saved_state["model_params"].keys()),
+                diff_as_sets(saved_state["model_params"].keys(), self.models))
+        if diff[0] or diff[1]:
+            return self._loge("Could not load saved_state. " +
+                              f"Models differ {diff}")
         self.epoch = saved_state["epoch"]
         self.iterations = saved_state["iterations"]
         self._model_params = saved_state["model_params"]
         self._criteria_params = saved_state["criteria_params"]
-
-        # NOTE: restore dataloader_params
-        self._logd("Restoring dataloader_params")
-        if any([("collate_fn" in y or callable(y))
-                for x, y in saved_state["dataloader_params"].items()]):
-            self._logw("collate_fn will not be restored")
-        for k, v in saved_state["dataloader_params"].items():
-            if set(v.keys()) != set(self._dataloader_params[k].keys()):
-                self._logw(f"Dataloader params for {k} differ. Not restoring")
-            else:
-                for a, b in v.items():
-                    if a != "collate_fn":
-                        value = saved_state["dataloader_params"][k][a]
-                        if isinstance(value, dict):
-                            for x, y in value.items():
-                                if isinstance(y, str) and not y.startswith("callable_"):
-                                    self._dataloader_params[k][a][x] = y
-                        else:
-                            if isinstance(value, str) and not value.startswith("callable_"):
-                                self._dataloader_params[k][a] = value
-
+        self._restore_dataloader_params(saved_state["dataloader_params"])
         # NOTE: restore trainer_params
         self._logd("Restoring trainer_params")
         for k, v in saved_state["trainer_params"].items():
@@ -2487,14 +2551,19 @@ class Trainer:
                 self._logw(f"callable {k} not restored in trainer_params")
             else:
                 self._trainer_params[k] = saved_state["trainer_params"][k]
-
         # NOTE: sanity check after param updates
         self._sanity_check()
-        # FIXME: Init models again only if model or model parameters have changed
-        self._init_models()
+        # CHECK: Which models should be reinitialized?
         self._init_device()
-        self._init_dataloaders()
-
+        self._optimizers = saved_state["optimizers"]
+        status, message = self.load_models_state(saved_state["models"])
+        if not status:
+            self._rollback_resume()
+            return status, message
+        status, message = self._init_dataloaders()
+        if not status:
+            self._rollback_resume()
+            return status, message
         # Only if criteria and/or optimizer have changed.  In fact, there might
         # be a mismatch if criteria change suddenly as the model has changed,
         # but resume_weights should not really be concerned about that, at
@@ -2510,31 +2579,29 @@ class Trainer:
         self._init_epoch_runner()
         self._init_modules()
 
-        # NOTE: The model and optimizer checks are in Models
-        # NOTE: restore model
-        self._logd("Restoring models and optimizers")
-        default = [*self._optimizer_params.keys()][0]
-        for k in saved_state["models"].keys():
-            if "optimizer" in saved_state["models"][k]:
-                self._logw(f"Optimizer shouldn't be in saved_state for model {k}")
-                x = saved_state.pop("optimizer")
-                saved_state["models"][k]["optimizer_name"] = x
-            elif "optimizer_name" not in saved_state["models"][k]:
-                optim_name = default
-                self._logw(f"No optimizer_name in saved_state for model {k}. Using {default}")
-            else:
-                optim_name = saved_state["models"][k]["optimizer_name"]
-                if optim_name not in self._optimizer_params:
-                    self._logw(f"{optim_name} not a known optimizer for model {k}. Using {default}")
-                    optim_name = default
-            optim = self._optimizer_params[optim_name]
-            saved_state["models"][k]["optimizer_name"] = optim_name
-            saved_state["models"][k]["optimizer"] = optim["function"](self._models[k].parameters(),
-                                                                      **optim["params"])
-        self._models.load(saved_state["models"])
-        diff = set(self._metrics.keys()).difference(saved_state["metrics"].keys())
+        # NOTE: The model and optimizer checks are in `Model` now
+        # self._logd("Restoring models and optimizers")
+        # default = [*self._optimizers.keys()][0]
+        # for k in saved_state["models"].keys():
+        #     if "optimizer" in saved_state["models"][k]:
+        #         self._logw(f"Optimizer shouldn't be in saved_state for model {k}")
+        #         x = saved_state.pop("optimizer")
+        #         saved_state["models"][k]["optimizer_name"] = x
+        #     elif "optimizer_name" not in saved_state["models"][k]:
+        #         optim_name = default
+        #         self._logw(f"No optimizer_name in saved_state for model {k}. Using {default}")
+        #     else:
+        #         optim_name = saved_state["models"][k]["optimizer_name"]
+        #         if optim_name not in self._optimizers:
+        #             self._logw(f"{optim_name} not a known optimizer for model {k}. Using {default}")
+        #             optim_name = default
+        #     optim = self._optimizers[optim_name]
+        #     saved_state["models"][k]["optimizer_name"] = optim_name
+        #     saved_state["models"][k]["optimizer"] = optim["function"](self._models[k].parameters(),
+        #                                                               **optim["params"])
+        # self._models.load(saved_state["models"])
 
-        # NOTE: setup metrics
+        diff = set(self._metrics.keys()).difference(saved_state["metrics"].keys())
         if diff:
             self._logw(f"Some metric _steps_ aren't there in saved state {diff}")
         for k in self._metrics.keys():
@@ -2905,12 +2972,16 @@ class Trainer:
             devices.extend(x)
         return devices
 
-    # FIXME: self.models creates problems
     @prop
     @property
     def models(self):
         "Return the names of the models available with the server"
-        return [x.name for x in self._models]
+        return [*self._models.keys()]
+
+    @prop
+    @property
+    def optimizers(self):
+        return self._optimizers
 
     @prop
     @property
@@ -3140,7 +3211,7 @@ class Trainer:
             update_key = self.iterations / self._hooks_run_iter_frequency
         else:
             update_key = self.epoch
-        model_names = "_".join(self._models.names)
+        model_names = "_".join(self.models)
         save_name = os.path.join(self._savedir, "_".join([str(self._unique_id),
                                                           model_names,
                                                           "{:03}".format(update_key)]))
@@ -3149,7 +3220,7 @@ class Trainer:
     @prop
     @property
     def _save_path_without_epoch(self):
-        model_names = "_".join(self._models.names)
+        model_names = "_".join(self.models)
         save_name = os.path.join(self._savedir, "_".join([str(self._unique_id),
                                                           model_names]))
         return save_name
@@ -3224,7 +3295,7 @@ class Trainer:
     @prop
     @property
     def data(self):
-        pass
+        return self._data["name"]
 
     # TODO: Allow extra_metrics, update_funcs and any other params to be updated
     @prop

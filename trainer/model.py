@@ -1,3 +1,4 @@
+import pathlib
 from typing import List, Dict, Any, Union, Tuple, Callable
 import torch
 import traceback
@@ -32,6 +33,7 @@ class Model:
         self._model = None
         self._optimizer = None
         self._loaded = False
+        self._backup_path = ""
 
     def __call__(self, x):
         return self._model(x)
@@ -66,13 +68,32 @@ class Model:
         except Exception as e:
             return False, f"Error occured {e}"
 
-    def unload(self):
-        del self._model
-        del self._optimizer
-        self._model = None
-        self._optimizer = None
-        self._loaded = False
-        return True, f"Unloaded {self.name}"
+    def unload(self, backup_path: Union[pathlib.Path, str]):
+        """Unload the model.
+
+        Unloading frees up all resources and deletes all state. Model is
+        backedup up to a default path in case it's needed to be loaded again.
+
+        """
+        try:
+            if backup_path == "RAM":
+                # simply backup to RAM
+                self._model = self._model.cpu()
+                self._optimizer = self._optimizer.cpu()
+                self._loaded = False
+                self._backup_path = "RAM"
+                return True, f"Unloaded {self.name} to RAM"
+            else:
+                torch.save(self.dump(), backup_path)
+                del self._model
+                del self._optimizer
+                self._model = None
+                self._optimizer = None
+                self._loaded = False
+                self._backup_path = backup_path
+                return True, f"Unloaded {self.name} to {backup_path}"
+        except Exception as e:
+            return False, f"Error occured {e}"
 
     def reinit(self):
         self._init()
@@ -91,6 +112,10 @@ class Model:
     @property
     def name(self) -> str:
         return self._name
+
+    @property
+    def backup_path(self) -> str:
+        return self._backup_path
 
     @property
     def loaded(self) -> bool:
@@ -123,7 +148,10 @@ class Model:
             Union[torch.Tensor, torch.nn.Module]:
         if isinstance(x, torch.Tensor):
             return x.to(self.device)
-        else:  # What to do for a module?
+        # TODO: Test if this is correct for a module
+        elif isinstance(x, torch.nn.Module):
+            return x.to(self.device)
+        else:
             return x
 
     def _check(self) -> Tuple[bool, str]:
@@ -150,7 +178,8 @@ class Model:
         try:
             if self.name != state_dict["name"] and not force:
                 return False, "Names don't match. Set force=True to force loading weights"
-            self._model.load_state_dict(self.to(state_dict["weights"]))
+            self._model.load_state_dict({k: self.to(v)
+                                         for k, v in state_dict["weights"].items()})
             return True, None
         except Exception as e:
             return False, f"{e}" + f"\n{traceback.format_exc()}"
@@ -161,7 +190,13 @@ class Model:
         Returns a dictionary with keys ``[name, params, optimizer, gpus,
         state_dict]``
 
+        If the model is backed up to :attr:`backup_path` then that state is
+        returned.
+
         """
+        if not self.loaded:
+            if self.backup_path and self.backup_path != "RAM":
+                return torch.load(self.backup_path)
         return {"name": self._name,
                 "params": self._model_params,
                 "optimizer": {"name": self._optimizer_name,

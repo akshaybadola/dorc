@@ -918,7 +918,8 @@ sys.path.append("{self.data_dir}")
             self._sessions[name]["sessions"][time_str].pop("config")
             if "port" in self._sessions[name]["sessions"][time_str]:
                 port = self._sessions[name]["sessions"][time_str].pop("port")
-                self._devices.pop(port)
+                if port in self._devices:
+                    self._devices.pop(port)
             if "iface" in self._sessions[name]["sessions"][time_str]:
                 self._sessions[name]["sessions"][time_str].pop("iface")
         if time_str is None:

@@ -179,7 +179,7 @@ class DaemonModulesTest(unittest.TestCase):
         time.sleep(1)
         response = requests.request("GET", self.host + f"check_task?task_id={task_id}",
                                     cookies=self.cookies)
-        result = json.loads(response.content)
+        status, result = json.loads(response.content)
         self.assertTrue(result["result"])
         self.assertIn("_module_test_module_a", self.daemon._modules)
         with open("./._test_py_file.py", "rb") as f:
@@ -193,7 +193,7 @@ class DaemonModulesTest(unittest.TestCase):
         time.sleep(1)
         response = requests.request("GET", self.host + f"check_task?task_id={task_id}",
                                     cookies=self.cookies)
-        result = json.loads(response.content)
+        status, result = json.loads(response.content)
         self.assertTrue(result["result"])
         self.assertIn("_module_test_module_b", self.daemon._modules)
         requests.request("POST", self.host + "delete_global_module",
@@ -220,9 +220,9 @@ import os
 file_dir = os.path.abspath(os.path.dirname(__file__))
 dataset = MnistDataset(os.path.join(file_dir, "training.pt"))
 """
-        if not os.path.exists("./.test_data_dir"):
-            os.mkdir("./.test_data_dir")
-        t_dir = "./.test_data_dir"
+        if not os.path.exists("./._test_data_dir"):
+            os.mkdir("./._test_data_dir")
+        t_dir = "./._test_data_dir"
         with open(os.path.join(t_dir, "__init__.py"), "w") as f:
             f.write(py_string)
         shutil.copy(".data/MNIST/processed/training.pt", t_dir)

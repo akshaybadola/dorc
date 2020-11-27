@@ -8,6 +8,12 @@ import torch
 import warnings
 
 
+def diff_as_sets(a: Iterable, b: Iterable) -> set:
+    a = set([*a])
+    b = set([*b])
+    return a - b
+
+
 def concat(l: Iterable[List]) -> List:
     """Concat all items in a given list of lists"""
     temp = []

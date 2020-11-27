@@ -1,17 +1,22 @@
 import os
+from .util import diff_as_sets
 import torch
 
 
 def _check_model_params(cls):
-    assert isinstance(cls._model_params, dict), "_model_params has to be a dict"
-    assert len(cls._model_params) > 0, "_model_params can't be empty"
-    assert all(isinstance(x, dict) for x in cls._model_params.values()),\
-        "all the _model_params should be dict"
-    for key in ["model", "optimizer", "params"]:
-        assert all(key in v for v in cls._model_params.values()),\
-            "Some required keys not there in model_params"
-    assert all(callable(v["model"]) for v in cls._model_params.values()),\
-        "model definition should be a callabe"
+    if not isinstance(cls._model_params, dict):
+        return False, "model_params has to be a dict"
+    if not len(cls._model_params) > 0:
+        return False, "model_params can't be empty"
+    if not all(isinstance(x, dict) for x in cls._model_params.values()):
+        return False, "all the model_params are not dict"
+    for name, params in cls._model_params.items():
+        diff = diff_as_sets(["model", "optimizer", "params", "gpus"], params.keys())
+        if diff:
+            return False, "{diff} not there in model_params for {name}"
+        if not callable(params["model"]):
+            return False, f"Model definition for {name} not a callable"
+    return True, None
 
 
 def _check_trainer_params(cls):
@@ -25,14 +30,14 @@ def _check_trainer_params(cls):
     # has to have attribute forward.
     assert all(isinstance(x, dict)
                for x in [cls._trainer_params, cls._criteria_params,
-                         cls._optimizer_params])
+                         cls._optimizers])
     assert all(len(x) > 0 for x in [cls._trainer_params, cls._criteria_params,
-                                    cls._optimizer_params])
+                                    cls._optimizers])
     assert all(isinstance(x, dict) and callable(x["function"])
                and hasattr(x["function"], "forward")
                for x in cls._criteria_params.values())
     assert all(isinstance(x, dict) and issubclass(x["function"], torch.optim.Optimizer)
-               for x in cls._optimizer_params.values())
+               for x in cls._optimizers.values())
     # TODO: This is no longer relevant
     if "anneal" in cls._trainer_params:
         assert all(x in cls._trainer_params
@@ -74,6 +79,7 @@ def _check_trainer_params(cls):
         assert all(x in cls._update_functions
                    for x in cls._trainer_params["training_steps"]),\
             "Steps in update_functions and training_steps should match"
+    return True, None
 
 
 # assert anneal_lr_on in some metric
@@ -122,13 +128,33 @@ def _check_data_params(cls):
     :rtype: None
 
     """
-    assert all([x in cls._dataloader_params for x in ["train", "val", "test"]])
-    assert cls._dataloader_params["train"] is not None
-    if cls._data is None:
-        for x in ["train", "val", "test"]:
-            if cls._dataloader_params[x] is not None:
-                assert "function" in cls._dataloader_params[x],\
-                    "dataloader_params for data subset cannot be None if data is None"
+    diff = diff_as_sets(cls._dataloader_params.keys(), ["train", "val", "test"])
+    if diff:
+        return False, f"Missing {diff} in dataloader_params"
+    if cls._dataloader_params["train"] is None:
+        return False, "train_dataloader params cannot be None"
+    if cls._data["name"] is None:
+        return False, "Name of the dataset must be given"
+    # NOTE: either provide only `name` in data or all [train, val, test]
+    diff = diff_as_sets(["train", "val", "test"], cls._data.keys())
+    if not diff:
+        if cls._data["train"] is None:
+            return False, "training data cannot be None if data is given"
     else:
-        assert all([x in cls._data for x in ["train", "val", "test"]])
-        assert cls._data["train"] is not None, "Training data cannot be None"
+        for d in diff:
+            cls._data[d] = None
+    steps = [x for x in cls._data.keys() if x != "name"]
+    for d in steps:
+        if cls._data[d] is None and cls._dataloader_params[d] is not None and\
+           "function" not in cls._dataloader_params[d]:
+            return False, f"'function' for dataloader_params[{d}] cannot be None " +\
+                f"if data[{d}] is None and dataloader_params for {d} is not None"
+    return True, None
+    # if cls._data is None:
+    #     for x in ["train", "val", "test"]:
+    #         if cls._dataloader_params[x] is not None:
+    #             assert "function" in cls._dataloader_params[x],\
+    #                 "dataloader_params for data subset cannot be None if data is None"
+    # else:
+    #     assert all([x in cls._data for x in ["train", "val", "test"]])
+    #     assert cls._data["train"] is not None, "Training data cannot be None"

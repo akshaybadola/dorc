@@ -51,7 +51,7 @@ class CloneHTTPTest(unittest.TestCase):
         time.sleep(1)
         response = requests.request("GET", self.host + "sessions",
                                     cookies=self.cookies)
-        sessions = json.loads(response.content)
+        status, sessions = json.loads(response.content)
         key_py = [*sessions.keys()][0]
         key_zip = [*sessions.keys()][1]
         config = {":".join(["optimizer", "Adam", "params", "lr"]): 0.05,
@@ -61,7 +61,8 @@ class CloneHTTPTest(unittest.TestCase):
                                     json={"session_key": key_py, "config": config},
                                     cookies=self.cookies)
         time.sleep(.5)
-        task_id = json.loads(response.content)["task_id"]
+        status, resp = json.loads(response.content)
+        task_id = resp["task_id"]
         pprint.pprint(requests.request("GET", self.host + f"check_task?task_id={task_id}",
                                        cookies=self.cookies).content)
         keys = [*self.daemon._sessions["meh_session"]["sessions"].keys()]
@@ -70,7 +71,8 @@ class CloneHTTPTest(unittest.TestCase):
                                     json={"session_key": "meh_session/" + keys[-1]},
                                     cookies=self.cookies)
         time.sleep(1)
-        task_id = json.loads(response.content)["task_id"]
+        status, resp = json.loads(response.content)
+        task_id = resp["task_id"]
         pprint.pprint(requests.request("GET", self.host + f"check_task?task_id={task_id}",
                                        cookies=self.cookies).content)
         port = self.daemon._sessions["meh_session"]["sessions"][keys[-1]]["port"]
@@ -85,7 +87,8 @@ class CloneHTTPTest(unittest.TestCase):
                                     json={"session_key": key_zip, "config": config},
                                     cookies=self.cookies)
         time.sleep(.5)
-        task_id = json.loads(response.content)["task_id"]
+        status, resp = json.loads(response.content)
+        task_id = resp["task_id"]
         pprint.pprint(requests.request("GET", self.host + f"check_task?task_id={task_id}",
                                        cookies=self.cookies).content)
         keys = [*self.daemon._sessions["meh_session"]["sessions"].keys()]
@@ -94,7 +97,8 @@ class CloneHTTPTest(unittest.TestCase):
                                     json={"session_key": "meh_session/" + keys[-1]},
                                     cookies=self.cookies)
         time.sleep(1)
-        task_id = json.loads(response.content)["task_id"]
+        status, resp = json.loads(response.content)
+        task_id = resp["task_id"]
         pprint.pprint(requests.request("GET", self.host + f"check_task?task_id={task_id}",
                                        cookies=self.cookies).content)
         port = self.daemon._sessions["meh_session"]["sessions"][keys[-1]]["port"]
@@ -134,7 +138,7 @@ class CloneHTTPTest(unittest.TestCase):
         time.sleep(1)
         response = requests.request("GET", new_host + "sessions",
                                     cookies=new_cookies)
-        sessions = json.loads(response.content)
+        status, sessions = json.loads(response.content)
         key = [*sessions.keys()][1]
         config = {":".join(["optimizer", "Adam", "params", "lr"]): 0.05,
                   "uid": "test_monkey_trainer",

@@ -88,7 +88,8 @@ config["trainer_params"] = {"gpus": "", "cuda": False, "seed": 1111,
                             "resume_weights": False, "init_weights": False,
                             "training_steps": ["train", "val", "test"],
                             "check_func": None, "max_epochs": 100, "load_all": True}
-config["data"] = {"train": datasets.MNIST('.data',
+config["data"] = {"name": "mnist",
+                  "train": datasets.MNIST('.data',
                                           train=True,
                                           download=True,
                                           transform=transforms.Compose([

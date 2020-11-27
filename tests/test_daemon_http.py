@@ -50,21 +50,25 @@ class DaemonHTTPTest(unittest.TestCase):
             print(response.content)
         time.sleep(1)
         response = requests.request("GET", self.host + "sessions", cookies=self.cookies)
-        self.assertIsInstance(json.loads(response.content), dict)
-        meh = [*json.loads(response.content).keys()][0]
-        self.assertTrue("meh_session" in meh)
+        response = json.loads(response.content)
+        self.assertIsInstance(response[0], bool)
+        self.assertIsInstance(response[1], dict)
+        meh = [*response[1].keys()][0]
+        self.assertIn("meh_session", meh)
 
     def test_unload_session(self):
         response = requests.request("GET", self.host + "sessions", cookies=self.cookies)
-        self.assertIsInstance(json.loads(response.content), dict)
-        meh = [*json.loads(response.content).keys()][0]
+        response = json.loads(response.content)
+        self.assertIsInstance(response[0], bool)
+        self.assertIsInstance(response[1], dict)
+        meh = [*response[1].keys()][0]
         response = requests.request("POST", self.host + "unload_session",
                                     json=json.dumps({"session_key": meh}),
                                     cookies=self.cookies)
         task_id = json.loads(response.content)["task_id"]
         response = requests.request("GET", self.host + f"check_task?task_id={task_id}",
                                     cookies=self.cookies)
-        self.assertTrue("task_id" in json.loads(response.content))
+        self.assertIn("task_id", json.loads(response.content))
 
     def test_load_session(self):
         "First unload then load"
@@ -103,23 +107,27 @@ class DaemonHTTPTest(unittest.TestCase):
         #     return trainer
         # trainer = test()
 
-        self.assertIsInstance(json.loads(response.content), dict)
-        meh = [*json.loads(response.content).keys()][0]
+        response = json.loads(response.content)
+        self.assertIsInstance(response[0], bool)
+        self.assertIsInstance(response[1], dict)
+        meh = [*response[1].keys()][0]
         response = requests.request("POST", self.host + "unload_session",
                                     json=json.dumps({"session_key": meh}),
                                     cookies=self.cookies)
-        task_id = json.loads(response.content)["task_id"]
+        self.assertIn("task_id", json.loads(response.content)[1])
+        task_id = json.loads(response.content)[1]["task_id"]
         response = requests.request("GET", self.host + f"check_task?task_id={task_id}",
                                     cookies=self.cookies)
-        self.assertTrue("task_id" in json.loads(response.content))
+        self.assertIn("task_id", json.loads(response.content)[1])
         response = requests.request("POST", self.host + "load_session",
                                     json=json.dumps({"session_key": meh}),
                                     cookies=self.cookies)
-        task_id = json.loads(response.content)["task_id"]
+        self.assertIn("task_id", json.loads(response.content)[1])
+        task_id = json.loads(response.content)[1]["task_id"]
         time.sleep(1)
         response = requests.request("GET", self.host + f"check_task?task_id={task_id}",
                                     cookies=self.cookies)
-        self.assertTrue("task_id" in json.loads(response.content))
+        self.assertIn("task_id", json.loads(response.content)[1])
 
     @classmethod
     def shutdown_daemon(cls, host):

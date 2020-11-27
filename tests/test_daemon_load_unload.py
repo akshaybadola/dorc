@@ -51,10 +51,11 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
         time.sleep(1)
         response = requests.request("GET", self.host + "sessions",
                                     cookies=self.cookies)
-        sessions = json.loads(response.content)
+        status, sessions = json.loads(response.content)
+        self.assertTrue(status)
         # shutdown the daemon
         response = self.shutdown_daemon(self.host)
-        self.assertTrue("shutting down" in str(response.content).lower())
+        self.assertIn("shutting down", str(response.content).lower())
         time.sleep(.5)
         key = [*sessions.keys()][0]
         data_dir = os.path.join(self.daemon.data_dir, key)
@@ -71,8 +72,9 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
         host = "http://" + ":".join([self.hostname, str(self.port + 5) + "/"])
         time.sleep(1)
         response = requests.request("GET", host + "sessions", cookies=self.cookies)
-        meh = json.loads(response.content)
-        self.assertTrue("loaded" in meh[key])
+        status, meh = json.loads(response.content)
+        self.assertTrue(status)
+        self.assertIn("loaded", meh[key])
         self.assertFalse(meh[key]["loaded"])
         responses = []
         for m in meh.keys():
@@ -83,11 +85,13 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
         # Give it some time to purge
         time.sleep(1)
         for r in responses:
-            task_id = json.loads(r.content)["task_id"]
+            status, resp = json.loads(r.content)
+            task_id = resp["task_id"]
             with self.subTest(i=str(task_id)):
                 content = requests.request("GET", host + f"check_task?task_id={task_id}",
                                            cookies=self.cookies).content
-                self.assertTrue(json.loads(content)["result"])
+                status, resp = json.loads(content)
+                self.assertTrue(resp["result"])
         # import ipdb; ipdb.set_trace()
         self.shutdown_daemon(host)
         # And some time to shutdown

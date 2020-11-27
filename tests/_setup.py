@@ -77,9 +77,9 @@ class Net(torch.nn.Module):
 
 
 config = {}
-config["optimizer"] = {"Adam": {"function": torch.optim.Adam,
-                                "params": {"lr": 0.01,
-                                           "weight_decay": 0}}}
+config["optimizers"] = {"Adam": {"function": torch.optim.Adam,
+                                 "params": {"lr": 0.01,
+                                            "weight_decay": 0}}}
 config["criteria"] = {"criterion_ce_loss":
                       {"function": torch.nn.CrossEntropyLoss, "params": {}}}
 config["uid"] = "test_trainer"
@@ -88,8 +88,9 @@ config["trainer_params"] = {"gpus": "", "cuda": False, "seed": 1111,
                             "resume": False, "resume_best": False,
                             "resume_weights": False, "init_weights": False,
                             "training_steps": ["train", "val", "test"],
-                            "check_func": None, "max_epochs": 100}
-config["data"] = {"train": datasets.MNIST('.data',
+                            "check_func": None, "max_epochs": 100, "load_all": True}
+config["data"] = {"name": "mnist",
+                  "train": datasets.MNIST('.data',
                                           train=True,
                                           download=True,
                                           transform=transforms.Compose([
@@ -112,8 +113,7 @@ config["dataloader_params"] = {"train": {"batch_size": 32,
                                         "num_workers": 0,
                                         "shuffle": False,
                                         "pin_memory": False}}
-config["model_params"] = {"net": {"params": {}, "gpus": "auto"}}
-config["model_defs"] = {"net": {"model": Net, "optimizer": "Adam"}}
+config["model_params"] = {"net": {"model": Net, "optimizer": "Adam", "params": {}, "gpus": "auto"}}
 config["update_functions"] = {"train": gm.autoloads.ClassificationTrainStep("net", "criterion_ce_loss"),
                               "val": gm.autoloads.ClassificationTestStep("net", "criterion_ce_loss"),
                               "test": gm.autoloads.ClassificationTestStep("net", "criterion_ce_loss")}

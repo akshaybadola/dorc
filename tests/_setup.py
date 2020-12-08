@@ -82,7 +82,6 @@ config["optimizers"] = {"Adam": {"function": torch.optim.Adam,
                                             "weight_decay": 0}}}
 config["criteria"] = {"criterion_ce_loss":
                       {"function": torch.nn.CrossEntropyLoss, "params": {}}}
-config["uid"] = "test_trainer"
 config["extra_metrics"] = None
 config["trainer_params"] = {"gpus": "", "cuda": False, "seed": 1111,
                             "resume": False, "resume_best": False,
@@ -114,6 +113,11 @@ config["dataloader_params"] = {"train": {"batch_size": 32,
                                         "shuffle": False,
                                         "pin_memory": False}}
 config["model_params"] = {"net": {"model": Net, "optimizer": "Adam", "params": {}, "gpus": "auto"}}
-config["update_functions"] = {"train": gm.autoloads.ClassificationTrainStep("net", "criterion_ce_loss"),
-                              "val": gm.autoloads.ClassificationTestStep("net", "criterion_ce_loss"),
-                              "test": gm.autoloads.ClassificationTestStep("net", "criterion_ce_loss")}
+steps = {x: gm.autoloads.ClassificationStep(["net"],
+                                            {"net": "criterion_ce_loss"},
+                                            {"net": lambda x: True})
+         for x in ["train", "val", "test"]}
+steps["train"].train = True
+steps["val"].train = False
+steps["test"].train = False
+config["update_functions"] = steps

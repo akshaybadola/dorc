@@ -1,32 +1,12 @@
 import os
 import shutil
 import unittest
-from functools import partial
 import torch
 import sys
 from _setup_local import config
+from util import get_step, get_model, get_model_batch, get_batch
 sys.path.append("../")
 from trainer.device import all_devices
-from trainer.model import Model
-from trainer.autoloads import ClassificationTrainStep, ClassificationTestStep
-
-
-def get_model_batch(name, config, gpus):
-    _name = "net"
-    model_def = config["model_params"][_name]["model"]
-    params = config["model_params"][_name]["params"]
-    optimizer = {"name": "Adam",
-                 **config["optimizers"]["Adam"]}
-    model = Model(name, model_def, params, optimizer, gpus)
-    model.load_into_memory()
-    return (model, [torch.rand(8, 1, 28, 28), torch.Tensor([0]*8).long()])
-
-
-def get_step(model, step):
-    return partial(ClassificationTrainStep("net", "bce_loss") if step == "train" else
-                   ClassificationTestStep("net", "bce_loss"),
-                   {"net": model},
-                   {"bce_loss": torch.nn.functional.cross_entropy})
 
 
 class TrainingStepsTest(unittest.TestCase):
@@ -40,22 +20,22 @@ class TrainingStepsTest(unittest.TestCase):
         os.mkdir(".test_dir/test_session")
 
     def test_train_step_no_gpu(self):
-        model, batch = get_model_batch("net", self.config, [])
-        train_step = get_step(model, "train")
-        retval = train_step(batch)
-        self.assertTrue(all(x in retval for x in train_step.func.returns))
+        model = get_model("net", config, [])
+        train_step = get_step({"net": model}, config, "train")
+        retval = train_step(get_batch())
+        self.assertTrue(all(x in retval for x in train_step.returns))
 
     @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
     def test_train_step_single_gpu(self):
         model, batch = get_model_batch("net", self.config, [0])
-        train_step = get_step(model, "train")
-        retval = train_step(batch)
-        self.assertTrue(all(x in retval for x in train_step.func.returns))
+        train_step = get_step({"net": model}, "train")
+        retval = train_step(get_batch())
+        self.assertTrue(all(x in retval for x in train_step.returns))
 
     @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
     def test_val_step_single_gpu(self):
         model, batch = get_model_batch("net", self.config, [0])
-        val_step = get_step(model, "val")
+        val_step = get_step({"net": model}, "val")
         retval = val_step(batch)
         self.assertTrue(all(x in retval for x in val_step.func.returns))
 
@@ -63,9 +43,9 @@ class TrainingStepsTest(unittest.TestCase):
     @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
     def test_dataparallel(self):
         model, batch = get_model_batch("net", self.config, [0, 1])
-        train_step = get_step(model, "train")
+        train_step = get_step({"net": model}, "train")
         retval = train_step(batch)
-        self.assertTrue(all(x in retval for x in train_step.func.returns))
+        self.assertTrue(all(x in retval for x in train_step.returns))
         self.assertIsInstance(model._model, torch.nn.DataParallel)
         self.assertEqual(retval["outputs"].device, torch.device(0))
 

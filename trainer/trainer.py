@@ -125,7 +125,7 @@ class Trainer:
 
     def __init__(self, model_params, criteria, optimizers, update_functions,
                  extra_metrics, trainer_params, data, dataloader_params, data_dir,
-                 uid="uid_deprecated", production=False):
+                 production=False):
         """Initializes the :class:`Trainer` object. This is supposed to be a catch all
         trainer which is robust and easy to train and can generate graphs
         automatically etc.
@@ -135,9 +135,6 @@ class Trainer:
 
         `optimizers`, `update_functions` contain callables and as
         such aren't part of config but model and training definitions.
-
-        `uid` simply identifies the trainer and should remain the same
-        throughout the trainer's life.
 
         :param model: model which is a :class:`torch.nn.Module`
         :param model_params: model params where (k, v) are (:class:`str` model_name,
@@ -163,8 +160,6 @@ class Trainer:
         # appended to the list. _init_property_vars should check if everything in __props
         # is a property or not
         self.__props = set()
-        self._unique_id = uid
-        self.__props.add("unique_id")
         self._model_params = model_params
         self._criteria_params = criteria
         self._optimizers = optimizers
@@ -184,7 +179,7 @@ class Trainer:
         if not os.path.exists(self._logdir):
             os.mkdir(self._logdir)
         self._logfile, self._logger = gen_file_and_stream_logger(
-            self._logdir, "_".join(["trainer", self._unique_id]), "debug", "debug")
+            self._logdir, "trainer", "debug", "debug")
         log = Log(self._logger, self.production)
         self._logd = log._logd
         self._loge = log._loge
@@ -586,7 +581,7 @@ class Trainer:
         # TODO: Model parallel and sharding
         # NOTE: if only one model load it
         self._models = {}
-        if self.trainer_params["load_all"]:
+        if "load_all" in self.trainer_params and self.trainer_params["load_all"]:
             load_models = self.model_params.keys()
         else:
             load_models = [k for k, v in self._model_params.items()
@@ -761,7 +756,7 @@ class Trainer:
         Dataloaders are initialized from a ``{step, data, params}`` in which the
         corresponding dataloaders are initialized with the given data.
 
-        ``step`` here corresponds to the ``train\val\test`` step and so are
+        ``step`` here corresponds to the ``train\\val\\test`` step and so are
         ``data`` and ``params`` respectively. As such separate datasets can
         always be initialized with different paramters at any given instance.
 
@@ -2223,7 +2218,7 @@ class Trainer:
         Args:
             request: http request forwarded from the daemon
 
-        Example: ``file_which_is_sent.py``
+        Example: ``file_which_is_sent.py``::
 
             class SomeModel:
                 # code
@@ -2511,7 +2506,7 @@ class Trainer:
             self._logw(f"Nothing to fix in state")
 
     # TODO: Right now, the list of saves and resume_path etc are given as full paths while
-    #       they should be relative paths to .savedir/unique_id/"_".join(model_names)
+    #       they should be relative paths to .savedir/"_".join(model_names)
     def _resume_from_path(self, resume_path):
         saved_state = torch.load(resume_path)
         self._resume_from_state(saved_state)
@@ -2891,13 +2886,6 @@ class Trainer:
 
     @prop
     @property
-    @deprecated
-    def unique_id(self):
-        "DEPRECATED: Unique id to refer to the trainer. It's replaced with the timestamp"
-        return self._unique_id
-
-    @prop
-    @property
     def current_state(self):
         "Current global state of the state machine"
         return self._current_state
@@ -3212,8 +3200,7 @@ class Trainer:
         else:
             update_key = self.epoch
         model_names = "_".join(self.models)
-        save_name = os.path.join(self._savedir, "_".join([str(self._unique_id),
-                                                          model_names,
+        save_name = os.path.join(self._savedir, "_".join([model_names,
                                                           "{:03}".format(update_key)]))
         return save_name
 
@@ -3221,15 +3208,13 @@ class Trainer:
     @property
     def _save_path_without_epoch(self):
         model_names = "_".join(self.models)
-        save_name = os.path.join(self._savedir, "_".join([str(self._unique_id),
-                                                          model_names]))
+        save_name = os.path.join(self._savedir, "_".join(model_names))
         return save_name
 
     @prop
     @property
     def _checkpoint_path(self):
         # model_names = "_".join(self._models.names)
-        # save_name = "_".join([str(self._unique_id), model_names, "checkpoint"])
         return os.path.join(self._save_path_without_epoch + "_checkpoint" + ".pth")
 
     @prop

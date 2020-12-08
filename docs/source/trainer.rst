@@ -60,6 +60,14 @@ trainer.epoch module
    :undoc-members:
    :show-inheritance:
 
+trainer.exceptions module
+-------------------------
+
+.. automodule:: trainer.exceptions
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 trainer.helpers module
 ----------------------
 
@@ -80,6 +88,14 @@ trainer.model module
 --------------------
 
 .. automodule:: trainer.model
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+trainer.model\_step module
+--------------------------
+
+.. automodule:: trainer.model_step
    :members:
    :undoc-members:
    :show-inheritance:

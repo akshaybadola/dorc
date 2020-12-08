@@ -27,6 +27,7 @@ class DaemonTest(unittest.TestCase):
         with open("_setup.py", "rb") as f:
             meh = f.read()
         data = {"name": "test_session", "config": meh}
+        import ipdb; ipdb.set_trace()
         task_id = self.daemon._get_task_id_launch_func(self.daemon.create_session, data)
         time.sleep(1)
         return self.daemon._check_result(task_id)[1]

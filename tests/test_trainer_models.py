@@ -145,14 +145,14 @@ class TrainerTestModels(unittest.TestCase):
         bleh = self.Net
 
         class Net2(torch.nn.Module):
-            def __init__(self):
+            def __init__(fles):
                 super().__init__()
-                self.a = bleh()
-                self.b = bleh()
+                fles.a = bleh()
+                fles.b = bleh()
 
-            def forward(x):
-                x_a = self.a(x)
-                x_b = self.b(x)
+            def forward(fles, x):
+                x_a = fles.a(x)
+                x_b = fles.b(x)
                 return x_a + x_b
 
         self.params["model_params"] = {"net_1": {"model": self.Net,

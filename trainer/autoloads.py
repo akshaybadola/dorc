@@ -1,39 +1,27 @@
-from typing import List, Dict, Union, Iterable
-import abc
+from typing import List, Dict, Union, Iterable, Callable, Tuple
 import torch
+import abc
 
 
-# TODO: to_string also has to be better implemented so that
-#       most of the function is exported automatically and
-#       only the relevant parts need to be filled in.
 # TODO: Automatic separate code for parallel and non parallel
 #       execution
-# TODO: Currently there's no way of specifying which optimizer
-#       to use. That has to be incorporated. Not sure how to
-#       proceed.
 class ModelStep(abc.ABC):
     """A ModelStep is an abstract class for data processing by the model.
 
     It's a class around a function by which inputs are sent through the model,
     outputs and losses are collected, loss is sent backward and other such tasks
-    in a systematic manner. It provides a standard interface for processing data
-    with the :class:`Trainer`.
+    in a systematic manner. It provides a standard interface for sending and
+    collecting data from the models with the :class:`Trainer`.
 
     A contrived example demonstrating the need and execution flow::
 
         class ExampleModelStep(ModelStep):
-            def __init__(self, model_names: List[str],
-                         criteria_names: List[str], test: bool = False):
-                self._model_names = model_names
-                self._criteria_names = criteria_names
-                self._test = test
-                self._returns = {"losses", "outputs", "labels", "total"}
-
-            def __call__(self, models, criteria, batch):
-                model_1 = models[self._model_names["foo"]]  # assuming foo is in models
-                model_2 = models[self._model_names["bar"]]
-                criterion_1 = criteria[self._criteria_names["foo"]]  # criterion for foo
-                criterion_2 = criteria[self._criteria_names["bar"]]  # criterion for bar
+            def __call__(self, batch):
+                # assuming self._model_names["foo"] is in self.models
+                model_1 = self.models[self._model_names["foo"]]
+                model_2 = self.models[self._model_names["bar"]]
+                criterion_1 = self.criteria[self._criteria_names["foo"]]  # criterion for foo
+                criterion_2 = self.criteria[self._criteria_names["bar"]]  # criterion for bar
                 inputs, labels = batch
                 inputs = model_1.to_(inputs)
                 labels = model_1.to_(labels)
@@ -53,44 +41,185 @@ class ModelStep(abc.ABC):
                         "outputs": {"foo": inter_vals.detach(), "bar": final_vals.detach()},
                         "labels": labels.detach(), "total": len(labels)}
 
-        model_names = ["foo", "bar"]
-        criteria_names = {"foo": lambda x: x, "bar": lambda x: x}
-        train_step = ExampleModelStep(model_names, criteria_names, False)
-        # Can be specialized in trainer as:
-        train_step_func = functools.partial(models, criteria)
+
+        def check_foo(foo):
+            try:
+                foo(torch.randn(some_shape))
+                return True
+            except Exception:
+                return False
+
+        # etc.
+
+    Assuming trainer.models is `{"Foo": Foo, "Bar": Bar, "OtherFoo": OtherFoo}`
+    and in model_params the criteria are given as `{"foo": "ce_loss", "bar": "mse_loss"}`
+    with critera as `{"ce_loss": torch.nn.CrossEntropyLoss, "mse_loss": torch.nn.MSELoss}`
+    then::
+
+        example_step = ExampleModelStep(model_names={"foo": "Foo", "bar": "Bar"},
+                                        criteria_names={"foo": "ce_loss", "bar": "mse_loss"},
+                                        checks={"foo": check_foo, "bar": check_bar})
+        example_step.returns = {"losses", "outputs", "labels", "total"}
+
+        # In trainer the models and criteria will always be thus:
+        example_step.models = trainer.models
+        example_step.criteria = trainer.criteria
+        example_step.train = True  # set to train
+
         # Executed anywhere with a batch
-        retval = train_step_func(batch)
+        retval = example_step(batch)
+
+        # later at test time
+        example_step.test = True
+        retval = example_step(batch)
+
+        # much later, change only one model, checks performed automatically
+        example_step.set_models({"foo": NewModelFoo})
+        retval = example_step(batch)
 
     """
 
+    def __init__(self, model_names: Union[Dict[str, str], Iterable[str]],
+                 criteria_names: Dict[str, str],
+                 checks: Dict[str, Callable], **kwargs):
+        self._test = False
+        self.models = None
+        self.criteria = None
+        if isinstance(model_names, dict):
+            self._model_names = model_names
+        else:
+            self._model_names = {x: x for x in model_names}
+        if not all(self._model_names[x] in criteria_names for x in self._model_names):
+            raise AttributeError("Must have criterion for each model")
+        self._criteria_names = criteria_names
+        if not all(self._model_names[x] in checks for x in self._model_names):
+            raise AttributeError("Must have checks for each model")
+        self._checks = checks
+        self._returns = None
+        self._mode = None
+
     @abc.abstractmethod
-    def __call__(self, models: Dict[str, torch.nn.Module],
-                 criteria: Dict[str, Union[torch.nn.Module, callable]],
-                 batch: Iterable) -> Dict:
+    def __call__(self, batch: Iterable) -> Dict:
         """Call the Step
 
         Args:
-            models: Models from the trainer
-            criteria: Criteria from the trainer
             batch: A data specific iterable of values
+
+        :meth:`__call__` is provided by the user and can have different modes.
+        Standard modes are `train` and `test`.
+
+        The execution flow and artefacts accumulated can depend on the
+        modes. They have to be implemented by the user.
+
         """
         pass
+
+    def set_models(self, models: Dict[str, str]) -> Dict[str, bool]:
+        """Set the models which will be used.
+
+        It's only a name mapping. `models` are handled by the trainer, but which
+        model will be called is determined dynamically at run time. However
+        because :attr:`checks` are `model` and `step` specific so they're
+        checked here.
+
+        Args:
+            models: :class:`dict` of models which will be set
+
+        ``models`` must be a :class:`dict` like ``{"internal_name": {"external_name": model}}``.
+
+        """
+        if not all(x in self._model_names for x in models):
+            return False
+        statuses = {}
+        for key, val in models.items():
+            status = self.check_model(key, self.models[val])
+            if status:
+                self._model_names[key] = val
+        return statuses
+
+    def set_checks(self, checks: Dict[str, Callable[[torch.nn.Module], bool]]):
+        """Set the checks for the models and criteria.
+
+        Args:
+            checks: A :class:`dict` of {model_name: check_func} where check_func
+                    is a function which takes a :class:`torch.nn.Module`
+                    as input and returns an instance of :class:`bool`
+
+        For example, one can verify that the output from each model is of a
+        certain shape.  Criteria are more dynamic and are not checked here.
+
+        """
+        if not all(x in self._model_names for x in checks):
+            raise ValueError("All model names should be in checks")
+        self._checks = checks
+
+    def check_model(self, model_name: str, model: torch.nn.Module) -> bool:
+        return self._checks[model_name](model)
+
+    @property
+    def model_names(self) -> Dict[str, str]:
+        """Return the model names."""
+        return self._model_names
+
+    @property
+    def mode(self):
+        """:attr:`mode` can be other than :attr:`test` and :attr:`train`"""
+        if self._mode is not None:
+            return self._mode
+        else:
+            return "train" if self._train else "test"
+
+    @mode.setter
+    def mode(self, mode):
+        self._mode = mode
+
+    @property
+    def train(self):
+        return not self._test
+
+    @train.setter
+    def train(self, x):
+        self._test = not x
 
     @property
     def test(self):
         return self._test
 
+    @test.setter
+    def test(self, x):
+        self._test = x
+
     @property
     def returns(self):
+        """Names of artefacts returned by :meth:`__call__`.
+
+        The step function can be different modes according to the modes
+        supported. :attr:`returns` can be different for different modes.::
+
+            self._returns["train"] == {"loss", "total"}
+            self._returns["test"] == {"loss", "outputs", "label", "total"}
+            self._returns["other"] == {"loss", "outputs", "label", "total", "other_metric"}
+
+        "total" should always be returned by the step function and is implied.
+
+        """
         return self._returns
 
+    @returns.setter
+    def returns(self, x: Iterable[str]):
+        if "total" not in x:
+            raise AttributeError("\"total\" must be present in returns")
+        self._returns = x
 
-class ClassificationTrainStep:
+
+class ClassificationStep(ModelStep):
     """Standard Classification training step.
 
+    Arguments for parent class :class:`ModelStep`.
+
     Args:
-        model_name: Name of the model
-        criterion_name: Name of the model
+        model_names: Name of the model
+        criteria_names: Name of the model
 
     All `steps` are given `models`, `criteria`, `batch` as input. It's up to the
     `step` to determine how to use any or all of them.
@@ -104,54 +233,33 @@ class ClassificationTrainStep:
     from :mod:`torch.nn` or :mod:`torch.nn.functional`
 
     """
-    def __init__(self, model_name: str, criterion_name: str):
-        self._model_name = model_name
-        self._criterion_name = criterion_name
-        # self.returns = {("metric", "loss"), ("", "outputs"), ("", "labels"), ("", "total")}
-        self.returns = {"loss", "outputs", "labels", "total"}
+    def __call__(self, batch):
+        """Call the Step. In this example models must have a key "net" which corresponds
+        to a model which is compatible with this function.
 
-    def __call__(self, models: Dict[str, torch.nn.Module],
-                 criteria: Dict[str, Union[torch.nn.Module, callable]],
-                 batch: Iterable):
-        model = models[self._model_name]
+        Args:
+            batch: A data specific iterable of values
+
+        """
+
+        # "net" is the model name set at initialization
+        # self._model_names["net"] refers to any other model that may
+        # have been set later.
+        net = self._model_names["net"]
+        model = self.models[net]  # model initially named "net"
+        criterion = self.criteria[self._criteria_names[net]]  # criterion for "net"
         inputs, labels = batch
         inputs = model.to_(inputs)
         labels = model.to_(labels)
-        model.train()
-        model._optimizer.zero_grad()
+        if self.train:
+            model.train()
+            model.optimizer.zero_grad()
         outputs = model(inputs)
-        loss = criteria[self._criterion_name](outputs, labels)
-        loss.backward()
+        loss = criterion(outputs, labels)
+        if self.train:
+            loss.backward()
         return {"loss": loss.detach().item(), "outputs": outputs.detach(),
                 "labels": labels.detach(), "total": len(labels)}
-
-
-class ClassificationTestStep:
-    """Standard Classification test step.
-
-    Similar to :class:`ClassificationTrainStep` but doesn't perform the backward
-    step. Actually I think it can be a single class with :attr:``_test``
-    determining whether to send loss backward or not.
-
-    """
-
-    def __init__(self, model_name, criterion_name):
-        self._model_name = model_name
-        self._criterion_name = criterion_name
-        self.returns = {"loss", "outputs", "labels", "total"}
-        # self.returns = {("metric", "loss"), ("", "outputs"), ("", "labels"), ("", "total")}
-
-    def __call__(self, models, criteria, batch):
-        model = models[self._model_name]
-        inputs, labels = batch
-        model.eval()
-        with torch.no_grad():
-            inputs = model.to_(inputs)
-            labels = model.to_(labels)
-            outputs = model(inputs)
-            loss = criteria[self._criterion_name](outputs, labels)
-            return {"loss": loss.detach().item(), "outputs": outputs.detach(),
-                    "labels": labels.detach(), "total": len(labels)}
 
 
 # Example of using extra metrics

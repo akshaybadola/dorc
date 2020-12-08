@@ -81,7 +81,6 @@ config["optimizers"] = {"Adam": {"function": torch.optim.Adam,
                                             "weight_decay": 0}}}
 config["criteria"] = {"criterion_ce_loss":
                       {"function": torch.nn.CrossEntropyLoss, "params": {}}}
-config["uid"] = "test_trainer"
 config["extra_metrics"] = None
 config["trainer_params"] = {"gpus": "", "cuda": False, "seed": 1111,
                             "resume": False, "resume_best": False,

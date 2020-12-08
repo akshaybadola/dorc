@@ -35,7 +35,7 @@ from .mods import Modules
 from .helpers import Tag
 from .interfaces import FlaskInterface
 # from .util import _dump as dump
-from .util import _dump
+from .util import _dump, diff_as_sets
 from ._log import Log
 from .auth import __unti__, __inti__, User
 
@@ -162,6 +162,7 @@ class Daemon:
         self._trackers = trackers
         self.daemon_name = daemon_name
         self.register = register
+        # FIXME: have_internet shouldn't be here
         # NOTE: fwd_hosts and fwd_ports are hard coded
         self.fwd_port_start = 8181    # starts with 8181
         if "droid" not in get_hostname().lower():
@@ -169,6 +170,25 @@ class Daemon:
             self._have_internet.start()
         else:
             self._have_internet = None
+        self._init_data_dirs(data_dir, production)
+        self._init_flask_dirs(template_dir, static_dir)
+        self._init_root_dir(root_dir)
+        self._init_app()
+        self._init_resources()
+        self._init_logger()
+        self._init_modules()
+        self._init_auth()
+        self._init_flags()
+        self._logi("Initialized Daemon")
+        self._maybe_fwd_ports()
+
+    def _init_data_dirs(self, data_dir, production):
+        """Initialize the directory structure.
+
+        :attr:`data_dir` is the root directory where all the modules and
+        training sessions are stored.
+
+        """
         self.data_dir = os.path.abspath(data_dir)
         # NOTE: init data_dir
         if not os.path.exists(self.data_dir):
@@ -182,7 +202,8 @@ class Daemon:
         # NOTE: init modules_dir
         self.modules_dir = os.path.join(self.data_dir, "global_modules")
         create_module(self.modules_dir,
-                      [os.path.join(os.path.dirname(__file__), "autoloads.py")])
+                      [os.path.join(os.path.dirname(__file__), x)
+                       for x in ["autoloads.py", "model_step.py"]])
         # NOTE: Append data_dir path
         self.env_str = f"""
 import sys
@@ -196,7 +217,9 @@ sys.path.append("{self.data_dir}")
                                    [self.modules_dir, self.datasets_dir,
                                     self.tmp_dir])]
         self._session_exclude_dirs = ["modules", "datasets"]
-        # NOTE: init template and static dirs
+
+    def _init_flask_dirs(self, template_dir, static_dir):
+        "Initialize flask template and static dirs"
         if template_dir is None:
             self._template_dir = os.path.join(os.path.dirname(os.path.dirname(
                 os.path.abspath(__file__))), "dist")
@@ -207,18 +230,27 @@ sys.path.append("{self.data_dir}")
                 os.path.abspath(__file__))), "dist")
         else:
             self._static_dir = static_dir
+
+    def _init_root_dir(self, root_dir):
         # NOTE: root_dir is relative (CHECK why?)
         if root_dir is None:
             self._root_dir = os.path.join(os.path.dirname(os.path.dirname(
                 os.path.abspath(__file__))))
         else:
             self._root_dir = root_dir
-        if not os.path.exists(self._template_dir) or not os.path.exists(self._static_dir)\
-           or not self._root_dir:
-            print("FATAL ERROR! Cannot initialize with template, static and root dirs")
-            return
-        self.app = Flask(__name__, static_folder=self._static_dir,
-                         template_folder=self._template_dir)
+        if not os.path.exists(self._root_dir):
+            raise FileExistsError(f"FATAL ERROR! root dir {self._root_dir} doesn't exist")
+        if_run_file = os.path.join(self.root_dir, "if_run.py")
+        if not os.path.exists(if_run_file):
+            raise FileNotFoundError(f"FATAL ERROR! {if_run_file} doesn't exist")
+
+    def _init_app(self):
+        "Initialize the :class:`Flask` app"
+        if not os.path.exists(self._template_dir) and not os.path.exists(self._static_dir):
+            self.app = Flask(__name__)
+        else:
+            self.app = Flask(__name__, static_folder=self._static_dir,
+                             template_folder=self._template_dir)
         # NOTE: FIXME Fix for CSRF etc.
         #       see https://flask-cors.corydolphin.com/en/latest/api.html#using-cors-with-cookies
         CORS(self.app, supports_credentials=True)
@@ -228,7 +260,8 @@ sys.path.append("{self.data_dir}")
         self.use_https = False
         self.verify_user = True
         self._last_free_port = self.port
-        # NOTE: Daemon Resources
+
+    def _init_resources(self):
         self._threads = {}
         self._task_q = Queue()
         self._sessions = {}
@@ -239,7 +272,8 @@ sys.path.append("{self.data_dir}")
         self._task_id = 0
         self.__task_ids = []
         self._results = []
-        # NOTE: Logger
+
+    def _init_logger(self):
         self._logger = logging.getLogger("daemon_logger")
         log_file = os.path.join(self.data_dir, "logs")
         formatter = logging.Formatter(datefmt='%Y/%m/%d %I:%M:%S %p', fmt='%(asctime)s %(message)s')
@@ -253,18 +287,18 @@ sys.path.append("{self.data_dir}")
         self._loge = log._loge
         self._logi = log._logi
         self._logw = log._logw
-        # NOTE: Module Loader
+
+    def _init_modules(self):
+        "Initialize Module Loader, modules and datasets"
         self._module_loader = Modules(self.data_dir, self._logd, self._loge,
                                       self._logi, self._logw)
-        # NOTE: Initialize modules and datasets
         self._load_available_global_modules()
         self._load_available_global_datasets()
-        self._logi("Initialized Daemon")
-        # NOTE: Initialize login manager
+
+    def _init_auth(self):
+        "Initialize login manager and users"
         self.login_manager = flask_login.LoginManager()
         self.login_manager.init_app(self.app)
-        # NOTE: login_view just creates a redirect. Annoying.
-        # self.login_manager.login_view = "__login"
         try:
             self._ids = __ids__
             self._users = __users__
@@ -273,6 +307,12 @@ sys.path.append("{self.data_dir}")
             self._users = {"admin": User(0, "admin"),
                            "joe": User(1, "joe")}
         self._passwords = lambda x: __inti__(x)     # {"admin": "admin", "joe": "admin"}
+
+    def _init_flags(self):
+        self._already_scanned = False
+        self._testing = False
+
+    def _maybe_fwd_ports(self):
         self._fwd_ports_event = None
         self._fwd_ports_thread = None
         self._fwd_procs = None
@@ -285,7 +325,13 @@ sys.path.append("{self.data_dir}")
             self.fwd_ports_thread.start()
         else:
             print(f"Not registering with trackers")
-        # self._fwd_ports()
+
+    @property
+    def root_dir(self) -> Path:
+        """Directory for execution context of :class:`~subprocess.Popen` processes.
+
+        Used only by :meth:`_create_trainer`"""
+        return self._root_dir
 
     @property
     def hostname(self) -> str:
@@ -304,12 +350,12 @@ sys.path.append("{self.data_dir}")
 
     @property
     def fwd_procs(self) -> Dict:
-        "A :class:`dict` mapping trackers and SSH :class:`subprocess.Popen` processes"
+        "A :class:`dict` mapping trackers and SSH :class:`~subprocess.Popen` processes"
         return self._fwd_procs
 
     @property
     def fwd_ports_event(self) -> mp.Event:
-        """Event :class:`multiprocessing.Event` which controls `self.fwd_port_thread`"""
+        """Event :class:`~multiprocessing.Event` which controls `self.fwd_port_thread`"""
         return self._fwd_ports_event
 
     @property
@@ -322,7 +368,7 @@ sys.path.append("{self.data_dir}")
 
     @property
     def trackers(self) -> List[str]:
-        """List of user@host strings where a tracker is present.
+        """List of `user@host` strings where a tracker is present.
 
         Trackers are http servers which map the hostnames to forwarded ports on
         that machine. Each `daemon` when started, can register with a list of
@@ -334,6 +380,11 @@ sys.path.append("{self.data_dir}")
 
     @property
     def reserved_devices(self) -> List[int]:
+        """A :class:`dict` mapping trainers to devices allocated to them.
+
+        Used by trainers to manage GPUs among themselves.
+
+        """
         devices = []
         for x in self._devices.values():
             devices.extend(x)
@@ -438,6 +489,7 @@ sys.path.append("{self.data_dir}")
                         _register(tracker, daemon_name, port)
 
     def _init_context(self):
+        """Initialize the flask SSL context."""
         self.api_crt = "res/server.crt"
         self.api_key = "res/server.key"
         self.api_ca_cert = "res/ca-crt.pem"
@@ -475,7 +527,7 @@ sys.path.append("{self.data_dir}")
         return self._last_free_port
 
     def _create_id(self) -> int:
-        # 0 reserverd for instance
+        # NOTE: 0 reserverd for instance
         self._task_id += 1
         self.__task_ids.append(self._task_id)
         return self._task_id
@@ -495,6 +547,12 @@ sys.path.append("{self.data_dir}")
             return None
 
     def _wait_for_task(self, func: Callable, task_id: int, args) -> Any:
+        """Call function `func` and wait until it finishes.
+
+        The function upon completion will put the result with `task_id` on to
+        the :attr:`_task_q`.
+
+        """
         func(task_id, *args)
         result = self._check_result(task_id)
         while result is None:
@@ -502,7 +560,12 @@ sys.path.append("{self.data_dir}")
             result = self._check_result(task_id)
         return result[1]
 
-    def _update_init_file(self, init_file: str, module_names: List[str]):
+    def _update_init_file(self, init_file: Path, module_names: List[str]):
+        """Update the `init_file` with the `module_names`.
+
+        Each module is inserted as an import statement at the top of file.
+
+        """
         lines = []
         for m in module_names:
             lines.append(f"from . import {m}\n")
@@ -510,6 +573,7 @@ sys.path.append("{self.data_dir}")
             f.writelines(lines)
 
     def _load_available_global_modules(self):
+        "Scan the :attr:`modules_dir` and load all modules"
         mods_dir = self.modules_dir
         self._modules = self._module_loader.read_modules_from_dir(
             mods_dir, excludes=[lambda x: x.startswith("__")])
@@ -517,6 +581,7 @@ sys.path.append("{self.data_dir}")
                                self._modules.keys())
 
     def _load_available_global_datasets(self):
+        "Scan the :attr:`datasets_dir` and load all."
         json_filenames = [x for x in os.listdir(self.datasets_dir)
                           if x.endswith(".json")]
         for x in json_filenames:
@@ -526,6 +591,7 @@ sys.path.append("{self.data_dir}")
                                self._modules.keys())
 
     def _dataset_valid_p(self, data_dict):
+        """Check a given dataset based on names that it exports."""
         if len(data_dict.keys()) != 1:
             return False, "Too many modules. Shouldn't happen."
         if "dataset" not in [*data_dict.values()][0]:
@@ -569,13 +635,25 @@ sys.path.append("{self.data_dir}")
     def _get_dataset_name(self, mod_name):
         return self._get_with_prefix(mod_name, "dataset")
 
-    def _load_dataset(self, task_id, data):
+    def _load_dataset(self, task_id: int, data: Dict[str, Any]):
+        """Load a dataset from a given data spec.
+
+        The spec `data` should contain keys ['name', 'description', 'type',
+        'data_file'].  `type` and `description` are informational while name
+        should be unique.  A duplicate name overwrites the previous dataset.
+
+        `data_file` should a readable binary IO stream.
+
+        """
         name = self._get_dataset_name(data["name"])
         desc = data["description"]
         dtype = data["type"]
         file_bytes = data["data_file"]
         data_dir = self.datasets_dir
         result = self._module_loader.add_named_module(data_dir, file_bytes, name)
+        check_duplicate = ""
+        if name in self._datasets:
+            check_duplicate = f"{name} already exists in datasets. Will be overwritten\n"
         if result[0]:
             status, message = self._dataset_valid_p(result[1])
             if status:
@@ -585,21 +663,35 @@ sys.path.append("{self.data_dir}")
                 self._datasets[name]["type"] = dtype
                 with open(os.path.join(data_dir, name + ".json"), "w") as f:
                     json.dump({name: self._datasets[name]}, f)
-                self._task_q.put((task_id, True, message))
+                self._task_q.put((task_id, True, check_duplicate + message))
             else:
                 self._task_q.put((task_id, status, message))
         else:
             self._error_and_put(task_id, False, f"Could not add dataset. {result}")
 
     def _load_module(self, task_id, data):
+        """Load a module from a given data spec.
+
+        The spec `data` should contain 'name' and an optional
+        `description`. `name` should be unique and a duplicate name overwrites
+        the previous module.
+
+        `data_file` should a readable binary IO stream.
+
+        """
         mod_name = self._get_module_name(data["name"])
         mod_file = data["data_file"]
-        print("MODULE name", mod_name)
+        # FIXME: Not actually implemented
+        if "description" in data:
+            desc = data["description"]
+        check_duplicate = ""
+        if mod_name in self._modules:
+            check_duplicate = f"{mod_name} already exists in modules. Will be overwritten\n"
         mods_dir = self.modules_dir
         status, result = self._module_loader.add_named_module(mods_dir, mod_file, mod_name)
         if status:
             self._modules.update(result)
-            self._task_q.put((task_id, True))
+            self._task_q.put((task_id, True, check_duplicate + f"Added module {mod_name}"))
         else:
             self._error_and_put(task_id, False, f"Could not load module. {result}")
 
@@ -612,9 +704,15 @@ sys.path.append("{self.data_dir}")
             os.mkdir(mods_dir)
         raise NotImplementedError
 
-    # TODO: scan_sessions should be called at beginning and after that should
-    #       raise error (or atleast warn) unless testing
     def scan_sessions(self):
+        """Scan the :attr:`data_dir` for existing :class:`Trainer` sessions.
+
+        scan_sessions should be called only ONCE at beginning and after that
+        should raise error (or atleast warn) unless testing
+
+        """
+        if self._already_scanned and not self._testing:
+            self._logw("Scanning sessions again!")
         self._logd("Scanning Sessions")
         session_names = [x for x in os.listdir(self.data_dir) if
                          os.path.isdir(os.path.join(self.data_dir, x))
@@ -635,6 +733,7 @@ sys.path.append("{self.data_dir}")
                     except Exception as e:
                         self._sessions[s]["sessions"][d] = "Error " + str(e) +\
                             "\n" + traceback.format_exc()
+        self._already_scanned = True
 
     def create_session(self, task_id, data):
         """Creates a new training session from given data
@@ -688,8 +787,24 @@ sys.path.append("{self.data_dir}")
             shutil.rmtree(data_dir)
 
     # NOTE: Only load_session sends load=True to _create_trainer
-    def _create_trainer(self, task_id, name, time_str, data_dir, config,
-                        overrides=None, load=False):
+    def _create_trainer(self, task_id: int, name: str, time_str: str,
+                        data_dir: Path, config: dict, overrides=None, load=False):
+        """Create a trainer.
+
+        Args:
+            task_id: Unique task_id assigned to the task
+            name: Name for the trainer
+            time_str: Timestamp of creation
+            data_dir: Root data directory for the session
+            config: Parameters for the trainer
+            overrides: Changes made by the user after initial config
+            load: Whether to load into memory on start
+
+        A separate :class:`Flask` is created with :class:`~subprocess.Popen` which wraps
+        around a :class:`Trainer` instance and communicates with the
+        :class:`Daemon` via a proxy.
+
+        """
         self._logd(f"Trying to create trainer with data_dir {data_dir}")
         if not os.path.isabs(data_dir):
             data_dir = os.path.abspath(data_dir)
@@ -727,25 +842,39 @@ sys.path.append("{self.data_dir}")
                         json.dump(overrides, f)
                 cmd = f"python if_run.py {self.hostname} {port} {data_dir} {self.production} " +\
                     "--config-overrides True"
-                cwd = self._root_dir
+                cwd = self.root_dir
                 self._logd(f"Running command {cmd} in {cwd}")
                 p = Popen(shlex.split(cmd), env=os.environ, cwd=cwd)
                 self._sessions[name]["sessions"][time_str]["process"] = p
-                Thread(target=p.communicate).start()
-                # print("Popen?", type(p))
-                self._task_q.put((task_id, True))
+                time.sleep(1)
+                if p.poll() is None:
+                    self._task_q.put((task_id, True))
+                else:
+                    self._task_q.put((task_id, False, f"Trainer crashed"))
             except Exception as e:
                 self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
         else:
             self._error_and_put(task_id, False, "Check failed on config")
 
-    def _refresh_state(self, session_key):
+    def _refresh_state(self, session_key: str):
+        """Helper function to refresh session state.
+
+        Args:
+            session_key: Session Key
+
+        """
         name, time_str = session_key.split("/")
         with open(os.path.join(self._sessions[name]["path"], time_str,
                                "session_state"), "r") as f:
             self._sessions[name]["sessions"][time_str]["state"] = json.load(f)
 
-    def _unload_finished_session(self, session_key):
+    def _unload_finished_session(self, session_key: str):
+        """Helper function to unload a session which has finished
+
+        Args:
+            session_key: Session Key
+
+        """
         self._logd(f"Unloading finished session {session_key}")
         self._refresh_state(session_key)
         name, time_str = session_key.split("/")
@@ -785,7 +914,13 @@ sys.path.append("{self.data_dir}")
             return True
 
     def _session_alive_p(self, session_name: str, timestamp: str) -> bool:
-        "Check if a given session is still alive"
+        """Check whether a session is alive.
+
+        Args:
+            session_name: Session Name
+            timestemp: Session Timestamp
+
+        """
         status = self._check_session_valid(session_name, timestamp)
         if not status[0]:
             return status
@@ -811,7 +946,7 @@ sys.path.append("{self.data_dir}")
         pass
 
     @property
-    def _sessions_list(self):
+    def _sessions_list(self) -> List[Dict[str, dict]]:
         # return _dump(self._sessions)
         retval = {}
         for k, v in self._sessions.items():
@@ -826,7 +961,7 @@ sys.path.append("{self.data_dir}")
                 retval[key]["finished"] = self._session_finished_p(session["state"])
         return retval
 
-    def _check_username_password(self, data):
+    def _check_username_password(self, data: Dict[str, str]):
         if (data["username"] in self._users):
             __hash = hashlib.sha1(("2ads;fj4sak#)" + data["username"])
                                   .encode("utf-8")).hexdigest()
@@ -837,7 +972,18 @@ sys.path.append("{self.data_dir}")
         else:
             return False, None
 
-    def _get_config_file(self, name, time_str=None):
+    def _get_config_file(self, name: str, time_str: str = None):
+        """Get the config file for the session key.
+
+        Args:
+            name: Session Name
+            time_str: Session Timestamp
+
+        Session Key is reconstructed from `name` and `time_str`.  config_file is
+        searched as either a ``session_config.py`` file or a ``session_config``
+        directory with an ``__init__.py`` file at the top level.
+
+        """
         if time_str is not None:
             data_dir = os.path.join(self.data_dir, name, time_str)
         else:
@@ -868,7 +1014,18 @@ sys.path.append("{self.data_dir}")
             self._task_q.put((task_id, status, message))
 
     @property
-    def _session_methods(self):
+    def _session_methods(self) -> List[str]:
+        """Return list of `session_method`s.
+
+        A `session_method` is any method used for manipulating a method. It's
+        created by :meth:`_session_check_post` and :meth:`_session_check_get`
+        higher order functions.
+
+        The method eventually calls `_ + methname + _session_helper` and the
+        `methname_session` is exposed as an endpoint, e.g.,
+        :meth:`_load_session_helper` is exported as `load_session`
+
+        """
         return [x[1:].replace("_helper", "") for x in session_method.names]
 
     @session_method
@@ -1128,8 +1285,10 @@ sys.path.append("{self.data_dir}")
             return self.login_manager.unauthorized()
         if isinstance(request.json, dict):
             data = request.json
-        else:
+        elif isinstance(request.json, str):
             data = json.loads(request.json)
+        else:
+            return _dump([False, f"Invalid data {request.json}"])
         if "session_key" not in data:
             return _dump([False, f"Invalid data {data}"])
         else:
@@ -1178,42 +1337,43 @@ sys.path.append("{self.data_dir}")
         def __index():
             return render_template("index.html")
 
-        @self.app.route("/<filename>", methods=["GET"])
-        def __files(filename=None):
-            def read_file(mode):
-                with open(os.path.join(self._template_dir, filename), mode) as f:
-                    content = f.read()
-                return content
-            filename = escape(filename)
-            # FIXME: Cache isn't used as of now
-            # if filename in self._cache:
-            #     content = self._cache[filename]["content"]
-            #     mimetype = self._cache[filename]["mimetype"]
-            #     return Response(content, mimetype=mimetype)
-            if filename in os.listdir(self._template_dir):
-                if filename.endswith("css"):
-                    mode = "r"
-                    mimetype = "text/css"
-                elif filename.endswith("js"):
-                    mode = "r"
-                    mimetype = "text/css"
-                elif filename.endswith("png"):
-                    mode = "rb"
-                    mimetype = "image/png"
-                elif filename.endswith("jpg") or filename.endswith("jpeg"):
-                    mode = "rb"
-                    mimetype = "image/jpeg"
+        if self._template_dir:
+            @self.app.route("/<filename>", methods=["GET"])
+            def __files(filename: Union[Path, None] = None):
+                def read_file(mode):
+                    with open(os.path.join(self._template_dir, filename), mode) as f:
+                        content = f.read()
+                    return content
+                filename = escape(filename)
+                # FIXME: Cache isn't used as of now
+                # if filename in self._cache:
+                #     content = self._cache[filename]["content"]
+                #     mimetype = self._cache[filename]["mimetype"]
+                #     return Response(content, mimetype=mimetype)
+                if filename in os.listdir(self._template_dir):
+                    if filename.endswith("css"):
+                        mode = "r"
+                        mimetype = "text/css"
+                    elif filename.endswith("js"):
+                        mode = "r"
+                        mimetype = "text/css"
+                    elif filename.endswith("png"):
+                        mode = "rb"
+                        mimetype = "image/png"
+                    elif filename.endswith("jpg") or filename.endswith("jpeg"):
+                        mode = "rb"
+                        mimetype = "image/jpeg"
+                    else:
+                        print(filename)
+                        mode = "r"
+                        mimetype = "text/html"
+                    content = read_file(mode)
+                    self._cache[filename] = {}
+                    self._cache[filename]["content"] = content
+                    self._cache[filename]["mimetype"] = mimetype
+                    return Response(content, mimetype=mimetype)
                 else:
-                    print(filename)
-                    mode = "r"
-                    mimetype = "text/html"
-                content = read_file(mode)
-                self._cache[filename] = {}
-                self._cache[filename]["content"] = content
-                self._cache[filename]["mimetype"] = mimetype
-                return Response(content, mimetype=mimetype)
-            else:
-                return Response("Not found", status=404)
+                    return Response("Not found", status=404)
 
         # NOTE: Simplest way would be to proxy it
         #       Although a better way would be to get the function
@@ -1477,6 +1637,7 @@ sys.path.append("{self.data_dir}")
             return self.__version__
 
         # FIXME: We're not checking overlap
+        # FIXME: Should only be available to interfaces
         @self.app.route("/_devices", methods=["GET", "POST"])
         def __devices():
             if request.method == "POST":
@@ -1490,7 +1651,8 @@ sys.path.append("{self.data_dir}")
                         self._devices[data["port"]].extend(available)
                         return _dump([True, self._devices[data["port"]]])
                     elif "action" == "free":
-                        self._devices[data["port"]] = list(set(self._devices[data["port"]]) - set(data["gpus"]))
+                        self._devices[data["port"]] = list(set(self._devices[data["port"]])
+                                                           - set(data["gpus"]))
                         return _dump([True, self._devices[data["port"]]])
                 except Exception as e:
                     return _dump([False, f"{e}"])
@@ -1785,15 +1947,17 @@ sys.path.append("{self.data_dir}")
         # NOTE: This should be disabled for now. Only if the number of sessions
         #       gets too large should I use this, as otherwise all the session
         #       data should be sent to the client.
+        #
         # @self.app.route("/view_session", methods=["POST"])
         # def __view_session():
         #     # only views the progress and parameters. No trainer is started
         #     return _dump([False, "Doesn't do anything"])
 
-        # NOTE: Add session_methods.
-        #       Routes are added by removing "_" prefix and "_helper" suffix
-        #       from self._session_methods
-        # FIXME: Check if login is required for these routes. I'm not sure
+        # NOTE: Add session_methods.  Routes are added by removing "_" prefix
+        #       and "_helper" suffix from self._session_methods
+        #
+        # NOTE: Login is actually required here even though I didn't explicitly
+        #       ask for it. Strange
         for x in self._session_methods:
             self.app.add_url_rule("/" + x, x, partial(self._session_check_post, x),
                                   methods=["POST"])

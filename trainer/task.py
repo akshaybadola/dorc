@@ -2,7 +2,7 @@ from typing import Callable, Iterable, Dict, Any
 import time
 import traceback
 import multiprocessing as mp
-from abc import ABC, abstractmethod
+from abc import ABC, abstractmethod, abstractproperty
 from threading import Thread, Event
 
 
@@ -60,7 +60,7 @@ class Task(ABC):
     def running(self) -> bool:
         return self._running.is_set()
 
-    @abstractmethod
+    @abstractproperty
     def finished(self) -> bool:
         pass
 

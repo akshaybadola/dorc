@@ -92,14 +92,6 @@ trainer.model module
    :undoc-members:
    :show-inheritance:
 
-trainer.model\_step module
---------------------------
-
-.. automodule:: trainer.model_step
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 trainer.mods module
 -------------------
 

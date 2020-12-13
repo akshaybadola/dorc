@@ -33,18 +33,18 @@ def run_tests(force, ft, lt):
         lt = lt.rstrip(".") + ".py"
     test_files = [f for f in g_test_files if force or not f.startswith("*")]
     first = 0
-    last = len(test_files) - 1
+    last = len(test_files)
     if ft:
         first = test_files.index(ft)
     if lt:
-        last = test_files.index(lt)
+        last = test_files.index(lt) + 1
     out = []
     err = []
     try:
         for i in range(first, last):
             f = test_files[i]
             append = "-a" if not i == first else ""
-            print(f"Testing file {f}, {i+1} out of {len(test_files)}")
+            print(f"Testing file {f}, {i+1} out of {last}")
             p = Popen(f"python -m coverage run {append} --source=.. -m unittest {f}",
                       shell=True, stdout=PIPE, stderr=PIPE)
             x, y = p.communicate()
@@ -54,9 +54,9 @@ def run_tests(force, ft, lt):
                 print(out[-1][1])
             if err:
                 print(err[-1][1])
-        run(f"coverage report -i --include={cov_path}", shell=True)
+        run(f"coverage report -i --include={cov_path} --omit='*/_trainer*'", shell=True)
     except KeyboardInterrupt:
-        run(f"coverage report -i --include={cov_path}", shell=True)
+        run(f"coverage report -i --include={cov_path} --omit='*/_trainer*'", shell=True)
 
 
 def main():

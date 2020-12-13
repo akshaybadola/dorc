@@ -203,7 +203,7 @@ class Daemon:
         self.modules_dir = os.path.join(self.data_dir, "global_modules")
         create_module(self.modules_dir,
                       [os.path.join(os.path.dirname(__file__), x)
-                       for x in ["autoloads.py", "model_step.py"]])
+                       for x in ["autoloads.py"]])
         # NOTE: Append data_dir path
         self.env_str = f"""
 import sys

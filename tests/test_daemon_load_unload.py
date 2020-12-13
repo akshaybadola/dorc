@@ -27,10 +27,10 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
                                              "password": "AdminAdmin_33"}).cookies
 
     def test_load_unfinished_sessions(self):
-        """Restart daemon without removing all directories. Make sure unfinished
-        sessions are loaded
+        # """Restart daemon without removing all directories. Make sure unfinished
+        # sessions are loaded
 
-        """
+        # """
         # Create a couple of sessions
         data = {}
         data["name"] = "meh_session"
@@ -70,8 +70,13 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
         if daemon._fwd_ports_thread is not None:
             daemon._fwd_ports_thread.kill()
         host = "http://" + ":".join([self.hostname, str(self.port + 5) + "/"])
-        time.sleep(1)
-        response = requests.request("GET", host + "sessions", cookies=self.cookies)
+        for _ in range(3):
+            time.sleep(1)
+            try:
+                response = requests.request("GET", host + "sessions", cookies=self.cookies)
+                break
+            except Exception:
+                print(f"Checking again for {host}")
         status, meh = json.loads(response.content)
         self.assertTrue(status)
         self.assertIn("loaded", meh[key])

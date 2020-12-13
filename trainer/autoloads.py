@@ -233,6 +233,10 @@ class ClassificationStep(ModelStep):
     from :mod:`torch.nn` or :mod:`torch.nn.functional`
 
     """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.returns = {"loss", "outputs", "labels", "total"}
+
     def __call__(self, batch):
         """Call the Step. In this example models must have a key "net" which corresponds
         to a model which is compatible with this function.

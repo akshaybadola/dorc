@@ -113,6 +113,7 @@ config["dataloader_params"] = {"train": {"batch_size": 32,
                                         "shuffle": False,
                                         "pin_memory": False}}
 config["model_params"] = {"net": {"model": Net, "optimizer": "Adam", "params": {}, "gpus": "auto"}}
+config["log_levels"] = {"file": "error", "stream": "error"}
 steps = {x: gm.autoloads.ClassificationStep(["net"],
                                             {"net": "criterion_ce_loss"},
                                             {"net": lambda x: True})

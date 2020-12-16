@@ -115,3 +115,4 @@ config["model_params"] = {"net": {"model": Net, "optimizer": "Adam", "params": {
 config["update_functions"] = {"train": ClassificationTrainStep("net", "criterion_ce_loss"),
                               "val": ClassificationTestStep("net", "criterion_ce_loss"),
                               "test": ClassificationTestStep("net", "criterion_ce_loss")}
+config["log_levels"] = {"file": "error", "stream": "error"}

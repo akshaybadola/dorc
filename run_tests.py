@@ -1,4 +1,5 @@
 import os
+import sys
 from argparse import ArgumentParser
 from subprocess import Popen, PIPE, run
 
@@ -65,6 +66,8 @@ def main():
                         help="List tests and exit")
     parser.add_argument("-f", "--force", action="store_true",
                         help="Force run all tests")
+    parser.add_argument("-sf", "--single-file", default="",
+                        help="Run tests from only a single file")
     parser.add_argument("-lf", "--list-test-files", action="store_true",
                         help="List test files and exit")
     parser.add_argument("-ft", "--first-test-file", default="",
@@ -82,6 +85,24 @@ def main():
         print("\nTest files beginning with * are buggy and are skipped by default.\n" +
               "Use -f to force running all of them.")
         return
+    if args.single_file:
+        if not args.single_file.endswith(".py"):
+            args.single_file = args.single_file.rstrip(".") + ".py"
+        if args.single_file in g_test_files:
+            f = args.single_file
+            print(f"Testing a single file {f}")
+            p = Popen(f"python -m coverage run --source=.. -m unittest {f}",
+                      shell=True, stdout=PIPE, stderr=PIPE)
+            out, err = p.communicate()
+            if err:
+                print(err.decode("utf-8"))
+            if out:
+                print(out.decode("utf-8"))
+            run(f"coverage report -i --include={cov_path} --omit='*/_trainer*'", shell=True)
+            sys.exit(0)
+        else:
+            print(f"No such file {args.single_file}")
+            sys.exit(1)
     run_tests(args.force, args.first_test_file, args.last_test_file)
 
 

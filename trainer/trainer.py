@@ -125,7 +125,7 @@ class Trainer:
 
     def __init__(self, model_params, criteria, optimizers, update_functions,
                  extra_metrics, trainer_params, data, dataloader_params, data_dir,
-                 production=False):
+                 production=False, log_levels={"file": "debug", "stream": "info"}):
         """Initializes the :class:`Trainer` object. This is supposed to be a catch all
         trainer which is robust and easy to train and can generate graphs
         automatically etc.
@@ -179,7 +179,7 @@ class Trainer:
         if not os.path.exists(self._logdir):
             os.mkdir(self._logdir)
         self._logfile, self._logger = gen_file_and_stream_logger(
-            self._logdir, "trainer", "debug", "debug")
+            self._logdir, "trainer", log_levels["stream"], log_levels["file"])
         log = Log(self._logger, self.production)
         self._logd = log._logd
         self._loge = log._loge

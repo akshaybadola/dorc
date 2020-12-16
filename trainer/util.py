@@ -77,7 +77,7 @@ def get_backup_num(filedir, filename):
 
 
 def gen_file_and_stream_logger(logdir, log_file_name, file_loglevel=None,
-                               stream_loglevel=None):
+                               stream_loglevel=None, logger_level=None):
     logger = logging.getLogger('default_logger')
     formatter = logging.Formatter(datefmt='%Y/%m/%d %I:%M:%S %p', fmt='%(asctime)s %(message)s')
     if not os.path.exists(logdir):
@@ -90,17 +90,20 @@ def gen_file_and_stream_logger(logdir, log_file_name, file_loglevel=None,
         os.rename(log_file, log_file + '.' + str(backup_num))
     file_handler = logging.FileHandler(log_file)
     stream_handler = logging.StreamHandler(sys.stdout)
-    if stream_loglevel.lower() == "info":
+    if stream_loglevel is not None and hasattr(logging, stream_loglevel.upper()):
+        stream_handler.setLevel(getattr(logging, stream_loglevel.upper()))
+    else:
         stream_handler.setLevel(logging.INFO)
-    elif stream_loglevel.lower() == "debug":
-        stream_handler.setLevel(logging.DEBUG)
     stream_handler.setFormatter(formatter)
-    if file_loglevel.lower() == "info":
+    if file_loglevel is not None and hasattr(logging, file_loglevel.upper()):
+        file_handler.setLevel(getattr(logging, file_loglevel.upper()))
+    else:
         file_handler.setLevel(logging.INFO)
-    elif file_loglevel.lower() == "debug":
-        file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     logger.addHandler(stream_handler)
-    logger.setLevel(logging.DEBUG)
+    if logger_level is not None and hasattr(logging, logger_level.upper()):
+        logger.setLevel(getattr(logging, logger_level.upper()))
+    else:
+        logger.setLevel(logging.DEBUG)
     return log_file, logger

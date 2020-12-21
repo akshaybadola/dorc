@@ -1438,7 +1438,6 @@ sys.path.append("{self.data_dir}")
             except Exception as e:
                 return Response(_dump([False, f"Error occured {e}"]))
 
-
         @self.app.route("/sessions", methods=["GET"])
         @flask_login.login_required
         def __list_sessions():

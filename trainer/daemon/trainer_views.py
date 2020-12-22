@@ -23,8 +23,10 @@ class Trainer(MethodView):
                                                "content": {"application/json":
                                                            "Trainer not loaded"}}},
                           "success": {200: {"description": "Successful request",
-                                            "content": {"applicatoin/json":
+                                            "content": {"application/json":
                                                         {"schema": "Trainer not loaded"}}}}}
+        self.get.__doc__ = self.check_and_dispatch.__doc__
+        self.post.__doc__ = self.check_and_dispatch.__doc__
 
     def schema(self):
         """In case it's props then the schema description and summary can be pulled from
@@ -41,7 +43,17 @@ class Trainer(MethodView):
     def post(self, port: int, endpoint: str, category: str = None):
         return self.check_and_dispatch(request, port, category, endpoint)
 
-    def check_and_dispatch(self, request, port, category, endpoint):
+    def check_and_dispatch(self, request, port: int, category: str, endpoint: str):
+        """Fetch the result from trainer.
+
+        Args:
+            port: port of the trainer
+            category: category of request
+            endpoint: request endpoint
+
+        Returns:
+            Response from trainer
+        """
         sess_list = self.daemon._sessions_list
         if port not in [x["port"] for x in sess_list.values()]:
             # return make_response(f"Unloaded or invalid trainer {port}", 405)
@@ -58,8 +70,7 @@ class Trainer(MethodView):
         try:
             _json = _data = _files = None
             if request.json:
-                _json = request.json if isinstance(request.json, dict)\
-                    else json.loads(request.json)
+                _json = request.json if isinstance(request.json, dict) else json.loads(request.json)
             if request.form:
                 _data = dict(request.form)
             if request.files:

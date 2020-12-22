@@ -40,6 +40,7 @@ from .._log import Log
 from .auth import __unti__, __inti__, User
 from .util import get_hostname, have_internet, create_module, check_ssh_port, register_with_tracker
 from .trainer_views import Trainer
+from .check_task import CheckTask
 
 session_method = Tag("session_method")
 
@@ -1488,39 +1489,39 @@ sys.path.append("{self.data_dir}")
             """
             return _dump([preamble, docs])
 
-        @self.app.route("/check_task", methods=["GET"])
-        @flask_login.login_required
-        def __check_task():
-            """Check and return the status of a task submitted earlier.
+        # @self.app.route("/check_task", methods=["GET"])
+        # @flask_login.login_required
+        # def __check_task():
+        #     """Check and return the status of a task submitted earlier.
 
-            :methods: GET
-            :args: [task_id]
-            :retval: list[bool, dict[task_id, result, message]]
-            """
-            try:
-                task_id = int(request.args.get("task_id").strip())
-            except Exception as e:
-                return _dump([False, f"Bad params {e}" + "\n" + traceback.format_exc()])
-            if task_id not in self.__task_ids:
-                return _dump([False, f"No such task: {task_id}"])
-            else:
-                result = self._check_result(task_id)
-            if result is None:
-                return _dump([True, {"task_id": task_id, "result": 0,
-                                     "message": "Not yet processed"}])
-            else:
-                if len(result) == 2:
-                    self._logw(f"Result of length 2 for check_task {result}")
-                    return _dump([True, {"task_id": result[0], "result": True,
-                                         "message": "Successful"}])
-                elif len(result) == 3 and result[1]:
-                    return _dump([True, {"task_id": result[0], "result": True,
-                                         "message": result[2]}])
-                elif len(result) == 3 and not result[1]:
-                    return _dump([True, {"task_id": result[0], "result": False,
-                                         "message": result[2]}])
-                else:
-                    return _dump([True, result])
+        #     :methods: GET
+        #     :args: [task_id]
+        #     :retval: list[bool, dict[task_id, result, message]]
+        #     """
+        #     try:
+        #         task_id = int(request.args.get("task_id").strip())
+        #     except Exception as e:
+        #         return _dump([False, f"Bad params {e}" + "\n" + traceback.format_exc()])
+        #     if task_id not in self.__task_ids:
+        #         return _dump([False, f"No such task: {task_id}"])
+        #     else:
+        #         result = self._check_result(task_id)
+        #     if result is None:
+        #         return _dump([True, {"task_id": task_id, "result": 0,
+        #                              "message": "Not yet processed"}])
+        #     else:
+        #         if len(result) == 2:
+        #             self._logw(f"Result of length 2 for check_task {result}")
+        #             return _dump([True, {"task_id": result[0], "result": True,
+        #                                  "message": "Successful"}])
+        #         elif len(result) == 3 and result[1]:
+        #             return _dump([True, {"task_id": result[0], "result": True,
+        #                                  "message": result[2]}])
+        #         elif len(result) == 3 and not result[1]:
+        #             return _dump([True, {"task_id": result[0], "result": False,
+        #                                  "message": result[2]}])
+        #         else:
+        #             return _dump([True, result])
 
         @self.app.route("/_version", methods=["GET"])
         def __version():
@@ -1863,6 +1864,10 @@ sys.path.append("{self.data_dir}")
                               view_func=trainer_view)
         self.app.add_url_rule("/trainer/<int:port>/<category>/<endpoint>",
                               view_func=trainer_view)
+
+        check_task = CheckTask.as_view("check_task", self)
+        self.app.add_url_rule("/check_task",
+                              view_func=check_task)
 
         @atexit.register
         def cleanup():

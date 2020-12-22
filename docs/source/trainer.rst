@@ -1,13 +1,20 @@
 trainer package
 ===============
 
+Subpackages
+-----------
+
+.. toctree::
+
+   trainer.daemon
+
 Submodules
 ----------
 
-trainer.auth module
--------------------
+trainer.api module
+------------------
 
-.. automodule:: trainer.auth
+.. automodule:: trainer.api
    :members:
    :undoc-members:
    :show-inheritance:
@@ -32,14 +39,6 @@ trainer.config module
 ---------------------
 
 .. automodule:: trainer.config
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-trainer.daemon module
----------------------
-
-.. automodule:: trainer.daemon
    :members:
    :undoc-members:
    :show-inheritance:
@@ -147,6 +146,7 @@ trainer.version module
    :members:
    :undoc-members:
    :show-inheritance:
+
 
 Module contents
 ---------------

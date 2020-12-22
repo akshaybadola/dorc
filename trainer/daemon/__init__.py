@@ -26,124 +26,22 @@ from markupsafe import escape
 from functools import partial
 
 import flask_login
-from flask import Flask, render_template, request, Response
+from flask import Flask, render_template, request, Response, make_response
 from flask_cors import CORS
 from werkzeug import serving
 
-from .version import __daemon__version__
-from .mods import Modules
-from .helpers import Tag
-from .interfaces import FlaskInterface
-# from .util import _dump as dump
-from .util import _dump, diff_as_sets
-from ._log import Log
-from .auth import __unti__, __inti__, User
+from ..version import __daemon__version__
+from ..mods import Modules
+from ..helpers import Tag
+from ..interfaces import FlaskInterface
+from ..util import _dump, diff_as_sets
+from .._log import Log
 
+from .auth import __unti__, __inti__, User
+from .util import get_hostname, have_internet, create_module, check_ssh_port, register_with_tracker
+from .trainer_views import Trainer
 
 session_method = Tag("session_method")
-
-
-def get_hostname() -> str:
-    p = Popen("hostname", stdout=PIPE, stderr=PIPE)
-    out, err = p.communicate()
-    return out.decode("utf-8")
-
-
-def check_ssh_port(host: str, port: int) -> int:
-    timeout = 2
-    while True:
-        print(f"Checking port {port}")
-        out, err = b"", b""
-        ip_addr = host.split("@")[1]
-        p = Popen(f"nc -z -v {ip_addr} 22", shell=True, stdout=PIPE, stderr=PIPE)
-        try:
-            out, err = p.communicate(timeout=timeout)
-        except TimeoutExpired:
-            port = "UNREACHABLE"
-            break
-        p = Popen(shlex.split(f"ssh -R {port}:localhost:20202 {host} hostname"),
-                  stdout=PIPE, stderr=PIPE)
-        try:
-            out, err = p.communicate(timeout=timeout)
-        except Exception:
-            pass
-        print(f"Got values {out}, {err}")
-        if out.decode("utf-8") and "warn" in err.decode("utf-8").lower():
-            port += 101
-        elif out.decode("utf-8") and not err.decode("utf-8").lower():
-            break
-        p.kill()
-    return port
-
-
-def have_internet():
-    auth_cmd = ('curl -L -k -d username="15mcpc15" -d password="unmission@123"' +
-                ' -d mode=191 http://192.168.56.2:8090/login.xml')
-
-    def communicate(p, vals):
-        vals['out'], vals['err'] = p.communicate()
-
-    def connect(auth_cmd):
-        vals = {'out': None, 'err': None}
-        p = Popen(auth_cmd, shell=True, stdout=PIPE, stderr=PIPE)
-        t = Thread(target=communicate, args=[p, vals])
-        t.start()
-        t.join(timeout=5)
-        p.kill()
-        if vals['out'] and "You have successfully logged in" in vals['out'].decode('utf-8'):
-            return True
-        else:
-            return False
-
-    while True:
-        vals = {'out': None, 'err': None}
-        p = Popen("curl google.com".split(), stdout=PIPE, stderr=PIPE)
-        t = Thread(target=communicate, args=[p, vals])
-        t.start()
-        t.join(timeout=5)
-        p.kill()
-        if vals['out']:
-            if "the document has moved" not in vals['out'].decode('utf-8').lower():
-                connect(auth_cmd)
-        time.sleep(60)
-
-
-def register_with_tracker(tracker, host, port):
-    status = False
-    fwd_port = 11111
-    procs = []
-    while not status:
-        procs.append(Popen(shlex.split(f"ssh -N -L {fwd_port}:localhost:11111 {tracker}"),
-                           stdout=PIPE, stderr=PIPE))
-        time.sleep(3)
-        try:
-            print(f"Registering port {port} at {tracker}")
-            resp = requests.request("POST", f"http://localhost:{fwd_port}/",
-                                    json={"put": True,
-                                          "hostname": host,
-                                          "port": port}).content
-            status = True
-        except requests.ConnectionError as e:
-            print(f"Connection refused from server {e}")
-            resp = None
-            status = True
-        except Exception as e:
-            print(f"Register request at port {fwd_port} with {tracker} failed {e}. Trying again")
-            resp = None
-    for p in procs:
-        p.kill()
-    return resp
-
-
-def create_module(module_dir, module_files=[]):
-    if not os.path.exists(module_dir):
-        os.mkdir(module_dir)
-    if not os.path.exists(os.path.join(module_dir, "__init__.py")):
-        with open(os.path.join(module_dir, "__init__.py"), "w") as f:
-            f.write("")
-    for f in module_files:
-        shutil.copy(f, module_dir)
-
 
 Path = Union[str, pathlib.Path]
 
@@ -170,9 +68,10 @@ class Daemon:
             self._have_internet.start()
         else:
             self._have_internet = None
+        self._lib_dir = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+        self._init_root_dir(root_dir)
         self._init_data_dirs(data_dir, production)
         self._init_flask_dirs(template_dir, static_dir)
-        self._init_root_dir(root_dir)
         self._init_app()
         self._init_resources()
         self._init_logger()
@@ -202,7 +101,7 @@ class Daemon:
         # NOTE: init modules_dir
         self.modules_dir = os.path.join(self.data_dir, "global_modules")
         create_module(self.modules_dir,
-                      [os.path.join(os.path.dirname(__file__), x)
+                      [os.path.join(self._lib_dir, x)
                        for x in ["autoloads.py"]])
         # NOTE: Append data_dir path
         self.env_str = f"""
@@ -218,24 +117,11 @@ sys.path.append("{self.data_dir}")
                                     self.tmp_dir])]
         self._session_exclude_dirs = ["modules", "datasets"]
 
-    def _init_flask_dirs(self, template_dir, static_dir):
-        "Initialize flask template and static dirs"
-        if template_dir is None:
-            self._template_dir = os.path.join(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__))), "dist")
-        else:
-            self._template_dir = template_dir
-        if static_dir is None:
-            self._static_dir = os.path.join(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__))), "dist")
-        else:
-            self._static_dir = static_dir
-
+    # FIXME: These paths should be better
     def _init_root_dir(self, root_dir):
         # NOTE: root_dir is relative (CHECK why?)
         if root_dir is None:
-            self._root_dir = os.path.join(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__))))
+            self._root_dir = os.path.dirname(self._lib_dir)
         else:
             self._root_dir = root_dir
         if not os.path.exists(self._root_dir):
@@ -243,6 +129,17 @@ sys.path.append("{self.data_dir}")
         if_run_file = os.path.join(self.root_dir, "if_run.py")
         if not os.path.exists(if_run_file):
             raise FileNotFoundError(f"FATAL ERROR! {if_run_file} doesn't exist")
+
+    def _init_flask_dirs(self, template_dir, static_dir):
+        "Initialize flask template and static dirs"
+        if template_dir is None:
+            self._template_dir = os.path.join(self._root_dir, "dist")
+        else:
+            self._template_dir = template_dir
+        if static_dir is None:
+            self._static_dir = os.path.join(self._root_dir, "dist")
+        else:
+            self._static_dir = static_dir
 
     def _init_app(self):
         "Initialize the :class:`Flask` app"
@@ -1378,66 +1275,65 @@ sys.path.append("{self.data_dir}")
         # NOTE: Simplest way would be to proxy it
         #       Although a better way would be to get the function
         #       for the url rule and return value from it
-        @self.app.route("/trainer/<int:port>/<endpoint>", methods=["GET", "POST"])
-        @flask_login.login_required
-        def __trainer(port=None, endpoint=None):
-            sess_list = self._sessions_list
-            if port not in [x["port"] for x in sess_list.values()]:
-                return Response(_dump([False, f"Unloaded or invalid trainer {port}"]))
-            session = [*filter(lambda x: x["port"] == port, sess_list.values())][0]
-            if not session["loaded"]:
-                return _dump([False, "Trainer is not loaded"])
-            try:
-                print(f"{request.json}, {request.data}, {request.form}")
-                _json = _data = _files = None
-                if request.json:
-                    _json = request.json if isinstance(request.json, dict)\
-                        else json.loads(request.json)
-                if request.form:
-                    _data = dict(request.form)
-                if request.files:
-                    _files = request.files
-                response = requests.request(request.method, f"http://localhost:{port}/{endpoint}",
-                                            files=_files, json=_json, data=_data)
-                excluded_headers = ["content-encoding", "content-length",
-                                    "transfer-encoding", "connection"]
-                headers = [(name, value) for (name, value) in response.raw.headers.items()
-                           if name.lower() not in excluded_headers]
-                response = Response(response.content, response.status_code, headers)
-                return response
-            except Exception as e:
-                return Response(_dump([False, f"Error occured {e}"]))
+        # @self.app.route("/trainer/<int:port>/<endpoint>", methods=["GET", "POST"])
+        # @flask_login.login_required
+        # def __trainer(port=None, endpoint=None):
+        #     sess_list = self._sessions_list
+        #     if port not in [x["port"] for x in sess_list.values()]:
+        #         return Response(_dump([False, f"Unloaded or invalid trainer {port}"]))
+        #     session = [*filter(lambda x: x["port"] == port, sess_list.values())][0]
+        #     if not session["loaded"]:
+        #         return _dump([False, "Trainer is not loaded"])
+        #     try:
+        #         print(f"{request.json}, {request.data}, {request.form}")
+        #         _json = _data = _files = None
+        #         if request.json:
+        #             _json = request.json if isinstance(request.json, dict)\
+        #                 else json.loads(request.json)
+        #         if request.form:
+        #             _data = dict(request.form)
+        #         if request.files:
+        #             _files = request.files
+        #         response = requests.request(request.method, f"http://localhost:{port}/{endpoint}",
+        #                                     files=_files, json=_json, data=_data)
+        #         excluded_headers = ["content-encoding", "content-length",
+        #                             "transfer-encoding", "connection"]
+        #         headers = [(name, value) for (name, value) in response.raw.headers.items()
+        #                    if name.lower() not in excluded_headers]
+        #         response = Response(response.content, response.status_code, headers)
+        #         return response
+        #     except Exception as e:
+        #         return Response(_dump([False, f"Error occured {e}"]))
 
-        @self.app.route("/trainer/<int:port>/<category>/<endpoint>", methods=["GET", "POST"])
-        @flask_login.login_required
-        def __trainer_one(port=None, category=None, endpoint=None):
-            sess_list = self._sessions_list
-            if port not in [x["port"] for x in sess_list.values()]:
-                return Response(_dump([False, f"Unloaded or invalid trainer {port}"]))
-            session = [*filter(lambda x: x["port"] == port, sess_list.values())][0]
-            if not session["loaded"]:
-                return _dump([False, "Trainer is not loaded"])
-            try:
-                _json = _data = _files = None
-                if request.json:
-                    _json = request.json if isinstance(request.json, dict)\
-                        else json.loads(request.json)
-                if request.form:
-                    _data = dict(request.form)
-                if request.files:
-                    _files = request.files
-                response = requests.request(request.method,
-                                            f"http://localhost:{port}/{category}/{endpoint}",
-                                            files=_files, json=_json, data=_data)
-                excluded_headers = ["content-encoding", "content-length",
-                                    "transfer-encoding", "connection"]
-                headers = [(name, value) for (name, value) in response.raw.headers.items()
-                           if name.lower() not in excluded_headers]
-                response = Response(response.content, response.status_code, headers)
-                return response
-            except Exception as e:
-                return Response(_dump([False, f"Error occured {e}"]))
-
+        # @self.app.route("/trainer/<int:port>/<category>/<endpoint>", methods=["GET", "POST"])
+        # @flask_login.login_required
+        # def __trainer_one(port=None, category=None, endpoint=None):
+        #     sess_list = self._sessions_list
+        #     if port not in [x["port"] for x in sess_list.values()]:
+        #         return Response(_dump([False, f"Unloaded or invalid trainer {port}"]))
+        #     session = [*filter(lambda x: x["port"] == port, sess_list.values())][0]
+        #     if not session["loaded"]:
+        #         return _dump([False, "Trainer is not loaded"])
+        #     try:
+        #         _json = _data = _files = None
+        #         if request.json:
+        #             _json = request.json if isinstance(request.json, dict)\
+        #                 else json.loads(request.json)
+        #         if request.form:
+        #             _data = dict(request.form)
+        #         if request.files:
+        #             _files = request.files
+        #         response = requests.request(request.method,
+        #                                     f"http://localhost:{port}/{category}/{endpoint}",
+        #                                     files=_files, json=_json, data=_data)
+        #         excluded_headers = ["content-encoding", "content-length",
+        #                             "transfer-encoding", "connection"]
+        #         headers = [(name, value) for (name, value) in response.raw.headers.items()
+        #                    if name.lower() not in excluded_headers]
+        #         response = Response(response.content, response.status_code, headers)
+        #         return response
+        #     except Exception as e:
+        #         return Response(_dump([False, f"Error occured {e}"]))
 
         @self.app.route("/sessions", methods=["GET"])
         @flask_login.login_required
@@ -1961,6 +1857,12 @@ sys.path.append("{self.data_dir}")
         for x in self._session_methods:
             self.app.add_url_rule("/" + x, x, partial(self._session_check_post, x),
                                   methods=["POST"])
+
+        trainer_view = Trainer.as_view("trainer", self)
+        self.app.add_url_rule("/trainer/<int:port>/<endpoint>",
+                              view_func=trainer_view)
+        self.app.add_url_rule("/trainer/<int:port>/<category>/<endpoint>",
+                              view_func=trainer_view)
 
         @atexit.register
         def cleanup():

@@ -725,7 +725,7 @@ class Trainer:
             self._loge(f"Error occured {e}")
             return False
 
-    @prop
+    @prop                       # type: ignore
     @property
     def loaded_models(self):
         return [name for name, model in self._models.items() if model.loaded]
@@ -2249,7 +2249,7 @@ class Trainer:
             A tuple of status and message
 
         """
-        checks = []
+        checks : Iterable[Callable] = []
         status, response = self.add_module(request, checks)
         if status:
             module_exports = response
@@ -2352,13 +2352,13 @@ class Trainer:
     # END: Methods
 
     # START: Objects
-    @objects
+    @objects                    # type: ignore
     @property
     def epoch_runner(self):
         return self._epoch_runner
 
     @POST
-    @objects
+    @objects                    # type: ignore
     def task_runners(self):
         return self._task_runners
     # END: Objects
@@ -2871,7 +2871,7 @@ class Trainer:
     # END: Internal Controls Other
 
     # START: Properties
-    @prop
+    @prop                       # type: ignore
     @property
     def version(self):
         "Version of the server"
@@ -2884,13 +2884,13 @@ class Trainer:
     #     bleh = torch.cuda.is_available()
     #     return bleh
 
-    @prop
+    @prop                       # type: ignore
     @property
     def current_state(self):
         "Current global state of the state machine"
         return self._current_state
 
-    @prop
+    @prop                       # type: ignore
     @property
     def loop_type(self):
         """Loop type determines if the training monitor number of epochs or number of batches.
@@ -2900,32 +2900,32 @@ class Trainer:
         else:
             return "epoch"
 
-    @prop
+    @prop                       # type: ignore
     @property
     def logger(self):
         "Current :class:`logging.Logger` instance"
         return self._logger
 
-    @prop
+    @prop                       # type: ignore
     @property
     def logfile(self):
         "Logfile contents"
         return open(self._logfile).read()
 
-    @prop
-    @prop
+    @prop                       # type: ignore
+    @prop                       # type: ignore
     @property
     def saves(self):
         "A list of all the files in the Saves directory"
         return os.listdir(self._savedir)
 
-    @prop
+    @prop                       # type: ignore
     @property
     def gpus(self):
         "List of GPUs if avaiable on the system.  Returns [-1] if no available"
         return self._gpus
 
-    @prop
+    @prop                       # type: ignore
     @property
     def system_info(self):
         "System Info: cpu_util, mem_util, gpu_util"
@@ -2933,7 +2933,7 @@ class Trainer:
                 "cpu_info": cpu_info(),
                 "memory": memory_info()}
 
-    @prop
+    @prop                       # type: ignore
     @property
     def devices(self) -> Dict[str, List[int]]:
         """Used to keep track of which device(s) is(are) allocated to which model(s).
@@ -2952,26 +2952,26 @@ class Trainer:
     #     if isinstance(x, int):
     #         self._devices
 
-    @prop
+    @prop                       # type: ignore
     @property
     def allocated_devices(self) -> List[int]:
-        devices = []
+        devices : List[int] = []
         for x in self._devices.values():
             devices.extend(x)
         return devices
 
-    @prop
+    @prop                       # type: ignore
     @property
     def models(self):
         "Return the names of the models available with the server"
         return [*self._models.keys()]
 
-    @prop
+    @prop                       # type: ignore
     @property
     def optimizers(self):
         return self._optimizers
 
-    @prop
+    @prop                       # type: ignore
     @property
     def train_step_func(self):
         """The Training Step is a partial function of the `training_step` function, the
@@ -2980,7 +2980,7 @@ class Trainer:
         """
         return partial(self._train_step_func, self._models, self.criteria)
 
-    @prop
+    @prop                       # type: ignore
     @property
     def val_step_func(self):
         """The Validation Step is a partial function of the `validation_step` function,
@@ -2989,7 +2989,7 @@ class Trainer:
         """
         return partial(self._val_step_func, self._models, self.criteria)
 
-    @prop
+    @prop                       # type: ignore
     @property
     def test_step_func(self):
         """The Test Step is a partial function of the `test_step` function,
@@ -2998,7 +2998,7 @@ class Trainer:
         """
         return partial(self._val_step_func, self._models, self.criteria)
 
-    @prop
+    @prop                       # type: ignore
     @property
     def active_model(self):
         "Active model is both get and set by setting the _update_function"
@@ -3006,7 +3006,7 @@ class Trainer:
         #       "train" is assumed to be present as a step
         return self._update_functions["train"]._model_name
 
-    @prop
+    @prop                       # type: ignore
     @property
     def props(self):
         """Return all properties of the instance including `extras` and `methods`
@@ -3017,7 +3017,7 @@ class Trainer:
                 x != "props" and
                 (x in {"extras", "methods"} or not x.startswith("_"))]
 
-    @prop
+    @prop                       # type: ignore
     @property
     def epoch(self):
         "Current Epoch to train, if training type is epoch. See `loop_type`"
@@ -3027,13 +3027,13 @@ class Trainer:
     def epoch(self, epoch):
         self._epoch = epoch
 
-    @prop
+    @prop                       # type: ignore
     @property
     def max_epochs(self):
         "Max Epochs to train, if training type is epoch. See `loop_type`"
         return self._max_epochs
 
-    @prop
+    @prop                       # type: ignore
     @property
     def iterations(self):
         "Current iteration if training type is iterations. See `loop_type`"
@@ -3043,13 +3043,13 @@ class Trainer:
     def iterations(self, x):
         self._iterations = x
 
-    @prop
+    @prop                       # type: ignore
     @property
     def max_iterations(self):
         "Max iterations to run if training type is iterations. See `loop_type`"
         return self._max_iterations
 
-    @prop
+    @prop                       # type: ignore
     @property
     def controls(self):
         """Controls are primary functions through which training is controlled. They
@@ -3060,7 +3060,7 @@ class Trainer:
         """
         return control.members
 
-    @prop
+    @prop                       # type: ignore
     @property
     def methods(self):
         """Trainer methods are additional methods besides the controls to manage and
@@ -3071,19 +3071,19 @@ class Trainer:
         """
         return methods.members
 
-    @prop
+    @prop                       # type: ignore
     @property
     def all_props(self):
         return prop.members
 
-    @prop
+    @prop                       # type: ignore
     @property
     def _internals(self):
         """Internals are diagnostic tools to examine the state of the
         training. Currently only has one function: `_dump_state`."""
         return internals.members
 
-    @prop
+    @prop                       # type: ignore
     @property
     def extras(self):
         """Extras are experimental methods whose execution is more complicated and
@@ -3095,13 +3095,13 @@ class Trainer:
         return extras.members
 
     # START: State props
-    @prop
+    @prop                       # type: ignore
     @property
     def running(self):
         "Is the current loop running?"
         return self._running_event.is_set()
 
-    @prop
+    @prop                       # type: ignore
     @property
     @deprecated
     def current_run(self):
@@ -3111,7 +3111,7 @@ class Trainer:
         else:
             return self._epoch_runner.current_loop
 
-    @prop
+    @prop                       # type: ignore
     @property
     def paused(self):
         "Is the current loop paused?"
@@ -3123,7 +3123,7 @@ class Trainer:
         elif loop == "user":
             return not self._userfunc_running_event.is_set()
 
-    @prop
+    @prop                       # type: ignore
     @property
     def _current_aborted(self):
         loop = self.current_state.split("_")[0]
@@ -3134,12 +3134,12 @@ class Trainer:
         elif loop == "user":
             return self._userfunc_aborted_event.is_set()
 
-    @prop
+    @prop                       # type: ignore
     @property
     def _session_aborted(self):
         return self._session_aborted_event.is_set()
 
-    @prop
+    @prop                       # type: ignore
     @property
     def adhoc_paused(self):
         "Is the adhoc loop paused?"
@@ -3148,26 +3148,26 @@ class Trainer:
     # Are adhoc_aborted and userfunc_aborted needed?
     # If they can all be run together then there's no concept of a
     # "current_loop". current_loop therefore only applies to [train, val, test]
-    @prop
+    @prop                       # type: ignore
     @property
     def adhoc_aborted(self):
         "Was the adhoc loop aborted?"
         return self._adhoc_aborted_event.is_set()
 
-    @prop
+    @prop                       # type: ignore
     @property
     def userfunc_paused(self):
         "Is a given userfunc paused?"
         return not self._userfunc_running_event.is_set()
 
-    @prop
+    @prop                       # type: ignore
     @property
     def userfunc_aborted(self):
         "Was a given userfunc aborted?"
         return self._userfunc_aborted_event.is_set()
     # END: State props
 
-    @prop
+    @prop                       # type: ignore
     @property
     def best_save(self):
         """The path of the best save recorded. Probably should not be available to the client"""
@@ -3192,7 +3192,7 @@ class Trainer:
                 return None
 
     # Internal property. Will not be exposed outside
-    @prop
+    @prop                       # type: ignore
     @property
     def _save_path_with_epoch(self):
         if "iterations" in self._trainer_params["training_steps"]:
@@ -3204,20 +3204,20 @@ class Trainer:
                                                           "{:03}".format(update_key)]))
         return save_name
 
-    @prop
+    @prop                       # type: ignore
     @property
     def _save_path_without_epoch(self):
         model_names = "_".join(self.models)
         save_name = os.path.join(self._savedir, "_".join(model_names))
         return save_name
 
-    @prop
+    @prop                       # type: ignore
     @property
     def _checkpoint_path(self):
         # model_names = "_".join(self._models.names)
         return os.path.join(self._save_path_without_epoch + "_checkpoint" + ".pth")
 
-    @prop
+    @prop                       # type: ignore
     @property
     def trainer_params(self):
         """Trainer params govern the behaviour of the trainer.
@@ -3244,7 +3244,7 @@ class Trainer:
         """
         return self._trainer_params
 
-    @prop
+    @prop                       # type: ignore
     @property
     def model_params(self):
         """`model_params` is a :class:`dict` mapping model names and all the paramters
@@ -3270,20 +3270,20 @@ class Trainer:
         """
         return self._model_params
 
-    @prop
+    @prop                       # type: ignore
     @property
     def dataloader_params(self):
         """`dataloader_params` are the parameters given to the various dataloaders.
         Currently only torch dataloaders are supported. See """
         pass
 
-    @prop
+    @prop                       # type: ignore
     @property
     def data(self):
         return self._data["name"]
 
     # TODO: Allow extra_metrics, update_funcs and any other params to be updated
-    @prop
+    @prop                       # type: ignore
     @property
     def updatable_params(self):
         """All the parameters which can be updated by the user midway.
@@ -3298,7 +3298,7 @@ class Trainer:
         params["dataloader_params"] = self._dataloader_params
         return params
 
-    @prop
+    @prop                       # type: ignore
     @property
     def all_params(self):
         """All params is the entire config which can be serialized as JSON. It contains
@@ -3326,14 +3326,14 @@ class Trainer:
 
     # TODO: What about other losses
     #       `prop` can help
-    @prop
+    @prop                       # type: ignore
     @property
     def train_losses(self):
         """History of training losses"""
         return dict((k, v) for k, v in self._metrics["train"].items()
                     if k[0] == "loss")
 
-    @prop
+    @prop                       # type: ignore
     @property
     def progress(self):
         """Progress returns the number of steps and max steps of training (whether
@@ -3349,13 +3349,13 @@ class Trainer:
                 "cur_round": cur_round, "max_round": max_round}
 
     # FIXME: self.user_funcs MAY create problems
-    @prop
+    @prop                       # type: ignore
     @property
     def user_funcs(self):
         """Names of all the functions uploaded by the user"""
         return [x for x in self._user_funcs]
 
-    @prop
+    @prop                       # type: ignore
     @property
     def _current_user_func(self):
         """User function currently active. This function will be run if `run_user_func`
@@ -3367,14 +3367,14 @@ class Trainer:
         else:
             return lambda: None
 
-    @prop
+    @prop                       # type: ignore
     @property
     def metrics(self):
         "All the metrics used for evaluation"
         return self._metrics
 
     # TODO: Define what is a sample correctly
-    @prop
+    @prop                       # type: ignore
     @property
     def val_samples(self):
         """Metrics for model output if run on a small (possibly random) subset of
@@ -3383,7 +3383,7 @@ class Trainer:
                     if k[0] == "sample")
 
     # NOTE: Not sure if I want to use dir(self)
-    @prop
+    @prop                       # type: ignore
     @property
     def all_post_epoch_hooks(self):
         """All the post epoch hooks present. All of them may not be called. See
@@ -3400,13 +3400,13 @@ class Trainer:
                       x != "remove_post_epoch_hook")
         return {**dict_a, **dict_b}
 
-    @prop
+    @prop                       # type: ignore
     @property
     def post_epoch_hooks_to_run(self):
         """All the post epoch hooks which will be called at the end of an epoch."""
         return self._post_epoch_hooks_to_run
 
-    @prop
+    @prop                       # type: ignore
     @property
     def items_to_log_dict(self):
         """Which of the items will be logged."""

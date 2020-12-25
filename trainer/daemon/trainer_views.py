@@ -1,6 +1,7 @@
+from typing import Optional
 import json
 import requests
-from flask import request, Response
+from flask import Request, request, Response
 from flask.views import MethodView
 from flask_login import login_required
 
@@ -16,34 +17,31 @@ class Trainer(MethodView):
 
     def __init__(self, daemon):
         self.daemon = daemon
-        self.responses = {"invalid_port": {405: {"description": "Invalid port given",
-                                                 "content": {"application/text":
-                                                             "Unloaded or invalid trainer {port}"}}},
-                          "not_loaded": {405: {"description": "Trainer not loaded",
-                                               "content": {"application/json":
-                                                           "Trainer not loaded"}}},
-                          "success": {200: {"description": "Successful request",
-                                            "content": {"application/json":
-                                                        {"schema": "Trainer not loaded"}}}}}
-        self.get.__doc__ = self.check_and_dispatch.__doc__
-        self.post.__doc__ = self.check_and_dispatch.__doc__
 
-    def schema(self):
-        """In case it's props then the schema description and summary can be pulled from
-        props. The return value can be pulled from function return types."""
-        return {"description": "something",
-                "summary": "some summary",
-                "requestBody": {"description": "Whatever's required",
-                                "content": {"application/json":
-                                            {"schema": pull_from_function()}}}}
+    def get(self, port: int, endpoint: str, category: str = None) -> Response:
+        """GET response from trainer method `endpoint`
 
-    def get(self, port: int, endpoint: str, category: str = None):
+        Responses:
+            bad params: [405, "bad params", "text", "Unloaded or invalid trainer {port}"]
+            not loaded: [405, "Trainer not loaded", "text", "Trainer not loaded"]
+            success: [200, "Successful request", "json", "$returns:check_and_dispatch"]
+
+        """
         return self.check_and_dispatch(request, port, category, endpoint)
 
-    def post(self, port: int, endpoint: str, category: str = None):
+    def post(self, port: int, endpoint: str, category: str = None) -> Response:
+        """POST response from trainer method `endpoint`
+
+        Responses:
+            bad params: [405, "Bad Params Given", "text", "Unloaded or invalid trainer {port}"]
+            not loaded: [405, "Trainer not loaded", "text", "Trainer not loaded"]
+            success: [200, "Successful request", "json", "$returns:check_and_dispatch"]
+
+        """
         return self.check_and_dispatch(request, port, category, endpoint)
 
-    def check_and_dispatch(self, request, port: int, category: str, endpoint: str):
+    def check_and_dispatch(self, request, port: int, category: Optional[str],
+                           endpoint: str) -> Response:
         """Fetch the result from trainer.
 
         Args:
@@ -52,7 +50,8 @@ class Trainer(MethodView):
             endpoint: request endpoint
 
         Returns:
-            Response from trainer
+            "$returns:call_trainer"
+
         """
         sess_list = self.daemon._sessions_list
         if port not in [x["port"] for x in sess_list.values()]:
@@ -66,7 +65,20 @@ class Trainer(MethodView):
             else:
                 return self.call_trainer(request, port, category, endpoint)
 
-    def call_trainer(self, request, port, category, endpoint):
+    def call_trainer(self, request: Request, port: int, category: str = None,
+                     endpoint: str = "") -> Response:
+        """Call the trainer with the request `Request` and return the response
+
+        Args:
+            port: port of the trainer
+            category: category of request
+            endpoint: request endpoint
+
+        Returns:
+            "$redirect: {"app": "trainer.interfaces.FlaskInterface.app",
+                         "endpoint": "<category>/<endpoint>"}
+
+        """
         try:
             _json = _data = _files = None
             if request.json:
@@ -86,7 +98,6 @@ class Trainer(MethodView):
                                 "transfer-encoding", "connection"]
             headers = [(name, value) for (name, value) in response.raw.headers.items()
                        if name.lower() not in excluded_headers]
-            response = Response(response.content, response.status_code, headers)
-            return response
+            return Response(response.content, response.status_code, headers)
         except Exception as e:
             return Response(_dump([False, f"Error occured {e}"]))

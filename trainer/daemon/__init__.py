@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Union, Callable
+from typing import List, Dict, Any, Union, Callable, Optional
 import os
 import sys
 import ssl
@@ -39,6 +39,7 @@ from .._log import Log
 
 from .auth import __unti__, __inti__, User
 from .util import get_hostname, have_internet, create_module, check_ssh_port, register_with_tracker
+from .sessions import Sessions
 from .trainer_views import Trainer
 from .check_task import CheckTask
 
@@ -748,7 +749,7 @@ sys.path.append("{self.data_dir}")
                 if p.poll() is None:
                     self._task_q.put((task_id, True))
                 else:
-                    self._task_q.put((task_id, False, f"Trainer crashed"))
+                    self._task_q.put((task_id, False, "Trainer crashed"))
             except Exception as e:
                 self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
         else:
@@ -819,6 +820,7 @@ sys.path.append("{self.data_dir}")
             timestemp: Session Timestamp
 
         """
+        # FIXME: Fix this to enum
         status = self._check_session_valid(session_name, timestamp)
         if not status[0]:
             return status
@@ -844,9 +846,9 @@ sys.path.append("{self.data_dir}")
         pass
 
     @property
-    def _sessions_list(self) -> List[Dict[str, dict]]:
+    def _sessions_list(self) -> Dict[str, Dict[str, Union[None, bool, int, Dict]]]:
         # return _dump(self._sessions)
-        retval = {}
+        retval: Dict[str, Dict[str, Union[None, bool, int, Dict]]] = {}
         for k, v in self._sessions.items():
             session_stamps = v["sessions"].keys()
             for ts in session_stamps:
@@ -1336,42 +1338,42 @@ sys.path.append("{self.data_dir}")
         #     except Exception as e:
         #         return Response(_dump([False, f"Error occured {e}"]))
 
-        @self.app.route("/sessions", methods=["GET"])
-        @flask_login.login_required
-        def __list_sessions():
-            """Returns a dictionary of sessions, their ports if they're alive and the
-            state. Rest of the communication can be done with session
+        # @self.app.route("/sessions", methods=["GET"])
+        # @flask_login.login_required
+        # def __list_sessions():
+        #     """Returns a dictionary of sessions, their ports if they're alive and the
+        #     state. Rest of the communication can be done with session
 
-            With optional argument {name}, if the session name starts with
-            {name} then all those sessions are returned.
+        #     With optional argument {name}, if the session name starts with
+        #     {name} then all those sessions are returned.
 
-            """
-            try:
-                name = request.args.get("name")
-            except Exception:
-                name = None
-            sess_list = self._sessions_list
-            if name:
-                name = name.strip()
-            if name:
-                sessions = {k: v for k, v in sess_list.items()
-                            if k.startswith(name)}
-                if sessions:
-                    return _dump([True, sessions])
-                else:
-                    return _dump([False, "No session found"])
-            else:
-                return _dump([True, self._sessions_list])
+        #     """
+        #     try:
+        #         name = request.args.get("name")
+        #     except Exception:
+        #         name = None
+        #     sess_list = self._sessions_list
+        #     if name:
+        #         name = name.strip()
+        #     if name:
+        #         sessions = {k: v for k, v in sess_list.items()
+        #                     if k.startswith(name)}
+        #         if sessions:
+        #             return _dump([True, sessions])
+        #         else:
+        #             return _dump([False, "No session found"])
+        #     else:
+        #         return _dump([True, self._sessions_list])
 
-        @self.app.route("/current_user", methods=["GET"])
-        @flask_login.login_required
-        def __current_user():
-            """Returns the name of the current user, in case we're logged in and username is
-            not known to the client as they have refreshed and the store state
-            is gone (LOL, FIXME)
+        # @self.app.route("/current_user", methods=["GET"])
+        # @flask_login.login_required
+        # def __current_user():
+        #     """Returns the name of the current user, in case we're logged in and username is
+        #     not known to the client as they have refreshed and the store state
+        #     is gone (LOL, FIXME)
 
-            """
-            return _dump([True, {"user": flask_login.current_user.name}])
+        #     """
+        #     return _dump([True, {"user": flask_login.current_user.name}])
 
         # CHECK: Why's this function so complicated?
         @self.app.route("/update_given_name", methods=["POST"])
@@ -1414,7 +1416,7 @@ sys.path.append("{self.data_dir}")
                     else:
                         return _dump([True, f"{resp_str[1]}"])
                 else:
-                    return _dump([False, f"Could not assign name"])
+                    return _dump([False, "Could not assign name"])
 
         # FIXME: no provision to load config as JSON? Everything can't be bytes
         #        can it?
@@ -1868,6 +1870,10 @@ sys.path.append("{self.data_dir}")
         check_task = CheckTask.as_view("check_task", self)
         self.app.add_url_rule("/check_task",
                               view_func=check_task)
+
+        sessions = Sessions.as_view("sessions", self)
+        self.app.add_url_rule("/sessions",
+                              view_func=sessions)
 
         @atexit.register
         def cleanup():

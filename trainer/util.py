@@ -1,11 +1,13 @@
 from typing import List, Iterable
 import os
 import sys
+import time
 import json
 import logging
+import shutil
+import warnings
 import numpy
 import torch
-import warnings
 
 
 def diff_as_sets(a: Iterable, b: Iterable) -> set:
@@ -14,10 +16,10 @@ def diff_as_sets(a: Iterable, b: Iterable) -> set:
     return a - b
 
 
-def concat(l: Iterable[List]) -> List:
+def concat(list_var: Iterable[List]) -> List:
     """Concat all items in a given list of lists"""
     temp = []
-    for x in l:
+    for x in list_var:
         temp.extend(x)
     return temp
 
@@ -107,3 +109,80 @@ def gen_file_and_stream_logger(logdir, log_file_name, file_loglevel=None,
     else:
         logger.setLevel(logging.DEBUG)
     return log_file, logger
+
+
+
+def create_module(module_dir, module_files=[]):
+    if not os.path.exists(module_dir):
+        os.mkdir(module_dir)
+    if not os.path.exists(os.path.join(module_dir, "__init__.py")):
+        with open(os.path.join(module_dir, "__init__.py"), "w") as f:
+            f.write("")
+    for f in module_files:
+        shutil.copy(f, module_dir)
+
+
+def make_test_daemon(get_cookies=False):
+    import requests
+    from .daemon import _start_daemon
+
+    port = 23232
+    hostname = "127.0.0.1"
+    host = "http://" + ":".join([hostname, str(port) + "/"])
+    try:
+        response = requests.get(host + "_ping", timeout=.5)
+        if response.status_code == 200:
+            cookies = requests.request("POST", host + "login",
+                                       data={"username": "admin",
+                                             "password": "AdminAdmin_33"}).cookies
+            requests.get(host + "_shutdown", cookies=cookies)
+            time.sleep(1)
+    except requests.ConnectionError:
+        pass
+    data_dir = ".test_dir"
+    if os.path.exists(data_dir):
+        shutil.rmtree(data_dir)
+    if not os.path.exists(data_dir):
+        os.mkdir(data_dir)
+    daemon = _start_daemon(hostname, port, ".test_dir")
+    time.sleep(.5)
+    if get_cookies:
+        cookies = requests.request("POST", host + "login",
+                                   data={"username": "admin",
+                                         "password": "AdminAdmin_33"}).cookies
+        return daemon, cookies
+    else:
+        return daemon
+
+
+def make_test_interface(setup_path, autoloads_path):
+    from threading import Thread
+    from .interfaces import FlaskInterface
+
+    hostname = "127.0.0.1"
+    port = 12321
+    data_dir = ".test_dir"
+    if os.path.exists(data_dir):
+        shutil.rmtree(data_dir)
+    if not os.path.exists(data_dir):
+        os.mkdir(data_dir)
+    iface = FlaskInterface(hostname, port, data_dir, no_start=True)
+    create_module(os.path.abspath(os.path.join(data_dir, "global_modules")),
+                  [os.path.abspath(autoloads_path)])
+    sys.path.append(os.path.abspath(data_dir))
+    with open(setup_path, "rb") as f:
+        f_bytes = f.read()
+        status, message = iface.create_trainer(f_bytes)
+    iface_thread = Thread(target=iface.start)
+    iface_thread.start()
+    time.sleep(1)
+    return iface
+
+
+# def make_apps():
+#     global apps
+#     apps = {"$iface": make_interface(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+#                                                   "../tests/_setup_local.py"),
+#                                      os.path.join(os.path.dirname(os.path.abspath(__file__)),
+#                                                   "autoloads.py")),
+#             "$daemon": make_daemon()}

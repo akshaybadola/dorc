@@ -22,6 +22,10 @@ _enumerated_list_regex = re.compile(
     r'(?(paren)\)|\.)(\s+\S|\s*$)')
 
 
+def _ref_repl(x):
+    return re.sub(r'(.+)(:[a-zA-Z0-9]+[\-_+:.])`(.+?)`', r'\3', x)
+
+
 class GoogleDocstring(UnicodeMixin):
     """Convert Google style docstrings to reStructuredText.
     Parameters
@@ -184,12 +188,30 @@ class GoogleDocstring(UnicodeMixin):
         return _type, _descs
 
     def _parse_responses_section(self, section):
+        def _ref_repl(x):
+            return re.sub(r'(.+)(:[a-zA-Z0-9]+[\-_+:.])`(.+?)`', r'\3', x)
         lines = self._consume_responses_section()
         lines = [*filter(None, lines)]
         self.responses = {}
-        for line in lines:
-            name, response = [x.strip() for x in line.split(":", 1)]
-            self.responses[name] = response
+        if len(lines) == 1 and lines[0].lower().startswith("see"):
+            for split in lines[0].split(" "):
+                if re.match(_xref_regex, split):
+                    self.responses = {"responses": _ref_repl(lines[0])}
+        else:
+            _lines = []
+            prev = ""
+            for line in lines:
+                if line.startswith(" "):
+                    prev += line
+                    continue
+                else:
+                    if prev:
+                        _lines.append(prev)
+                    prev = line
+            _lines.append(prev)
+            for line in _lines:
+                name, response = [x.strip() for x in line.split(":", 1)]
+                self.responses[name] = response
         return lines
 
     def _consume_responses_section(self):
@@ -199,19 +221,24 @@ class GoogleDocstring(UnicodeMixin):
     def _consume_returns_section(self):
         # type: () -> List[Tuple[str, str, List[str]]]
         lines = self._dedent(self._consume_to_next_section())
-        self.returns = [*filter(None, lines)]
-        if lines:
-            before, colon, after = self._partition_field_on_colon(lines[0])
-            _name, _type, _desc = '', '', lines  # type: str, str, List[str]
-            if colon:
-                if after:
-                    _desc = [after] + lines[1:]
-                else:
-                    _desc = lines[1:]
-                _type = before
-            return [(_name, _type, _desc,)]
+        if len(lines) == 1 and lines[0].lower().startswith("see"):
+            for split in lines[0].split(" "):
+                if re.match(_xref_regex, split):
+                    self.returns = {"returns": _ref_repl(lines[0])}
         else:
-            return []
+            self.returns = [*filter(None, lines)]
+            if lines:
+                before, colon, after = self._partition_field_on_colon(lines[0])
+                _name, _type, _desc = '', '', lines  # type: str, str, List[str]
+                if colon:
+                    if after:
+                        _desc = [after] + lines[1:]
+                    else:
+                        _desc = lines[1:]
+                    _type = before
+                return [(_name, _type, _desc,)]
+            else:
+                return []
 
     def _consume_usage_section(self):
         # type: () -> List[str]

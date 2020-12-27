@@ -1,6 +1,4 @@
 from typing import Any, Optional, Dict, Union
-import json
-import requests
 import traceback
 from flask import request, Response
 from flask.views import MethodView
@@ -20,9 +18,9 @@ class CheckTask(MethodView):
             class Success(BaseModel): task_id: int; result: bool; message: str
 
         Responses:
-            bad_params: [405, "Bad Params", "text", "Unloaded or invalid trainer {port}"]
-            No such task: [404, "No such Task", "text", "No such task {task_id}"]
-            Success: [200, "Check Successful", "json", "$schema:Success"]
+            bad_params: ResponseSchema(405, "Bad Params", "text", "task_id not given")
+            No such task: ResponseSchema(404, "No such Task", "text", "No such task 4")
+            Success: ResponseSchema(200, "Check Successful", "json", "Success")
 
         """
         try:
@@ -43,7 +41,7 @@ class CheckTask(MethodView):
             The status of the task with `task_id` or error message if it doesn't exist.
 
         """
-        result = self._check_result(task_id)
+        result = self.daemon._check_result(task_id)
         if result is None:
             return {"task_id": task_id, "result": 0, "message": "Not yet processed"}
         else:

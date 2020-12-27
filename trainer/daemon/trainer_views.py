@@ -8,34 +8,26 @@ from flask_login import login_required
 from ..util import _dump
 
 
-def pull_from_function():
-    return None
-
-
 class Trainer(MethodView):
     decorators = [login_required]
 
     def __init__(self, daemon):
         self.daemon = daemon
 
-    def get(self, port: int, endpoint: str, category: str = None) -> Response:
+    def get(self, port: int, endpoint: str, category: Optional[str] = None) -> Response:
         """GET response from trainer method `endpoint`
 
         Responses:
-            bad params: [405, "bad params", "text", "Unloaded or invalid trainer {port}"]
-            not loaded: [405, "Trainer not loaded", "text", "Trainer not loaded"]
-            success: [200, "Successful request", "json", "$returns:check_and_dispatch"]
+            See :meth:`check_and_dispatch`
 
         """
         return self.check_and_dispatch(request, port, category, endpoint)
 
-    def post(self, port: int, endpoint: str, category: str = None) -> Response:
+    def post(self, port: int, endpoint: str, category: Optional[str] = None) -> Response:
         """POST response from trainer method `endpoint`
 
         Responses:
-            bad params: [405, "Bad Params Given", "text", "Unloaded or invalid trainer {port}"]
-            not loaded: [405, "Trainer not loaded", "text", "Trainer not loaded"]
-            success: [200, "Successful request", "json", "$returns:check_and_dispatch"]
+            See :meth:`check_and_dispatch`
 
         """
         return self.check_and_dispatch(request, port, category, endpoint)
@@ -49,8 +41,14 @@ class Trainer(MethodView):
             category: category of request
             endpoint: request endpoint
 
+        Responses:
+            bad params: ResponseSchema(405, "Bad Params Given", "text", "Invalid trainer {port}")
+            not loaded: ResponseSchema(405, "Trainer not loaded", "text", "Trainer not loaded")
+            success: ResponseSchema(200, "Successful request", "json",
+                                    "See :meth:`call_trainer`: Success")
+
         Returns:
-            "$returns:call_trainer"
+            See :meth:`call_trainer`
 
         """
         sess_list = self.daemon._sessions_list
@@ -65,7 +63,7 @@ class Trainer(MethodView):
             else:
                 return self.call_trainer(request, port, category, endpoint)
 
-    def call_trainer(self, request: Request, port: int, category: str = None,
+    def call_trainer(self, request: Request, port: int, category: Optional[str] = None,
                      endpoint: str = "") -> Response:
         """Call the trainer with the request `Request` and return the response
 
@@ -74,9 +72,13 @@ class Trainer(MethodView):
             category: category of request
             endpoint: request endpoint
 
+        Schemas:
+            class Success(BaseModel): default: Optional[Dict]
+
         Returns:
-            "$redirect: {"app": "trainer.interfaces.FlaskInterface.app",
-                         "endpoint": "<category>/<endpoint>"}
+            Response from the :class:`Trainer` or error message if something is wrong
+            with the parameters. In fact :class:`FlaskInterface` handles the HTTP layer
+            wrapping around the :class:`Trainer`'s functions.
 
         """
         try:

@@ -248,14 +248,14 @@ class Modules:
         """
         test_py_file = self._check_file_magic(module_file, "python")
         return_key = "config"
-        checks = []
+        checks: List[Callable] = []
         if config_dir not in sys.path:
-            sys.path.append(config_dir)
+            sys.path.append(str(config_dir))
         tmp_dir = tmp_name = "session_config"
         if env:
             exec_cmd = env + "\n" + f"from session_config import config"
         else:
-            exec_cmd = f"from session_confing import config"
+            exec_cmd = f"from session_config import config"
         if test_py_file:
             tmp_file = os.path.join(os.path.abspath(config_dir), tmp_name + ".py")
             return self._load_python_file(module_file, checks, tmp_file, exec_cmd, return_key)
@@ -266,12 +266,12 @@ class Modules:
         # sys.path.remove(config_dir)
 
     def add_named_module(self, mods_dir: Union[str, pathlib.Path], module_file: bytes,
-                         module_name: str) -> Tuple[bool, str]:
+                         module_name: str) -> Tuple[bool, Dict[str, List[str]]]:
         test_py_file = self._check_file_magic(module_file, "python")
         return_key = module_name
-        checks = []
+        checks: List[Callable] = []
         if mods_dir not in sys.path:
-            sys.path.append(mods_dir)
+            sys.path.append(str(mods_dir))
         if test_py_file:
             tmp_name = module_name
             tmp_file = os.path.join(os.path.abspath(mods_dir), tmp_name + ".py")
@@ -284,7 +284,7 @@ class Modules:
             print("WRITE PATH", mods_dir, tmp_path, module_name)
             exec_cmd = f"import {module_name}"
             mod = self._load_zip_file(module_file, checks, tmp_path, exec_cmd, return_key)
-        sys.path.remove(mods_dir)
+        sys.path.remove(str(mods_dir))
         if mod[0]:
             symbol_names = [x for x in mod[1].__dict__ if not x.startswith("__")]
             return True, {module_name: symbol_names}
@@ -301,7 +301,7 @@ class Modules:
 
         """
         exec_cmd = f"import {mod_name}"
-        ldict = {}
+        ldict: Dict[str, Any] = {}
         exec(exec_cmd, globals(), ldict)
         symbol_names = [x for x in ldict[mod_name].__dict__
                         if not x.startswith("__")]
@@ -321,7 +321,7 @@ class Modules:
         """
         modules_dict = {}
         if mods_dir not in sys.path:
-            sys.path.append(mods_dir)
+            sys.path.append(str(mods_dir))
         py_mods = [x[:-3] for x in os.listdir(mods_dir) if x.endswith(".py")]
         dir_mods = [x for x in os.listdir(mods_dir) if not x.endswith(".py")
                     and os.path.isdir(os.path.join(mods_dir, x))]
@@ -330,5 +330,5 @@ class Modules:
         for m in mods:
             if not any(e(m) for e in excludes):
                 modules_dict[m] = self._get_symbols_from_module(m)
-        sys.path.remove(mods_dir)
+        sys.path.remove(str(mods_dir))
         return modules_dict

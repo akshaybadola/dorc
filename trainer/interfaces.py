@@ -455,5 +455,7 @@ class FlaskInterface:
         for x, y in self.trainer._internals.items():
             self.app.add_url_rule("/_internals/" + x, x, partial(self.trainer_internals, x),
                                   methods=["POST"])
+        # reference to url_map for generating schemas
+        self.endpoints = self.app.url_map
         serving.run_simple(self.api_host, self.api_port, self.app, threaded=True,
                            ssl_context=self.context)

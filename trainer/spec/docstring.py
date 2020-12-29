@@ -1,3 +1,6 @@
+# Shamelessly copied from sphinxcontrib.napoleon
+# See https://github.com/sphinx-contrib/napoleon
+
 import inspect
 import re
 from typing import Any, Dict, List, Tuple, Type, Union, Callable
@@ -104,6 +107,9 @@ class GoogleDocstring(UnicodeMixin):
                 'parameters': self._parse_parameters_section,
                 'schema': self._parse_schemas_section,
                 'schemas': self._parse_schemas_section,
+                'tag': self._parse_tags_section,
+                'tags': self._parse_tags_section,
+                'request': self._parse_requests_section,
                 'requests': self._parse_requests_section,
                 'response': self._parse_responses_section,
                 'responses': self._parse_responses_section,
@@ -620,6 +626,12 @@ class GoogleDocstring(UnicodeMixin):
         fields = self._consume_fields()
         self.parameters = fields
         return self._format_docutils_params(fields)
+
+    def _parse_tags_section(self, section: str) -> Tuple[str, List[str]]:
+        lines = self._strip_empty(self._consume_to_next_section())
+        lines = self._dedent(lines)
+        self.tags = ",".join(lines).replace(",,", ",")
+        return section, lines
 
     def _parse_schemas_section(self, section: str) -> Tuple[str, List[str]]:
         lines = self._strip_empty(self._consume_to_next_section())

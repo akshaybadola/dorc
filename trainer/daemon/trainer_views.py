@@ -42,9 +42,9 @@ class Trainer(MethodView):
             endpoint: request endpoint
 
         Responses:
-            bad params: ResponseSchema(405, "Bad Params Given", "text", "Invalid trainer {port}")
-            not loaded: ResponseSchema(405, "Trainer not loaded", "text", "Trainer not loaded")
-            success: ResponseSchema(200, "Successful request", "json",
+            bad params: ResponseSchema(405, "Bad Params Given", MimeTypes.text, "Invalid trainer {port}")
+            not loaded: ResponseSchema(405, "Trainer not loaded", MimeTypes.text, "Trainer not loaded")
+            success: ResponseSchema(200, "Successful request", MimeTypes.json,
                                     "See :meth:`call_trainer`: Success")
 
         Returns:

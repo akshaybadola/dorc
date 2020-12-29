@@ -1,4 +1,4 @@
-from typing import List, Iterable
+from typing import List, Iterable, Any, Callable, Tuple, Optional, Union
 import os
 import sys
 import time
@@ -8,6 +8,8 @@ import shutil
 import warnings
 import numpy
 import torch
+import requests
+from flask import Response
 
 
 def diff_as_sets(a: Iterable, b: Iterable) -> set:
@@ -24,13 +26,13 @@ def concat(list_var: Iterable[List]) -> List:
     return temp
 
 
-def deprecated(f):
+def deprecated(f: Callable) -> Callable:
     warn_str = f"Function {f.__name__} is deprecated."
     warnings.warn(warn_str)
     return f
 
 
-def _serialize_defaults(x):
+def _serialize_defaults(x: Any) -> str:
     if isinstance(x, numpy.ndarray):
         return json.dumps(x.tolist())
     elif isinstance(x, torch.Tensor):
@@ -41,12 +43,16 @@ def _serialize_defaults(x):
         return str(x)
 
 
-def _dump(x):
+def _dump(x: Any) -> str:
     return json.dumps(x, default=_serialize_defaults)
     # return json.dumps(x, default=lambda o: f"<<non-serializable: {type(o).__qualname__}>>")
 
 
-def gen_file_logger(logdir, log_file_name):
+def make_json(x: Any, dump: bool = True) -> Response:
+    return Response(_dump(x) if dump else x, 200, mimetype="application/json")
+
+
+def gen_file_logger(logdir: str, log_file_name: str) -> Tuple[str, logging.Logger]:
     logger = logging.getLogger('default_logger')
     formatter = logging.Formatter(datefmt='%Y/%m/%d %I:%M:%S %p', fmt='%(asctime)s %(message)s')
     if not os.path.exists(logdir):
@@ -66,7 +72,7 @@ def gen_file_logger(logdir, log_file_name):
     return log_file, logger
 
 
-def get_backup_num(filedir, filename):
+def get_backup_num(filedir: str, filename: str) -> int:
     backup_files = [x for x in os.listdir(filedir) if x.startswith(filename)]
     backup_maybe_nums = [b.split('.')[-1] for b in backup_files]
     backup_nums = [int(x) for x in backup_maybe_nums
@@ -78,8 +84,10 @@ def get_backup_num(filedir, filename):
     return cur_backup_num
 
 
-def gen_file_and_stream_logger(logdir, log_file_name, file_loglevel=None,
-                               stream_loglevel=None, logger_level=None):
+def gen_file_and_stream_logger(logdir: str, log_file_name: str,
+                               file_loglevel: Optional[str] = None,
+                               stream_loglevel: Optional[str] = None,
+                               logger_level: Optional[str] = None):
     logger = logging.getLogger('default_logger')
     formatter = logging.Formatter(datefmt='%Y/%m/%d %I:%M:%S %p', fmt='%(asctime)s %(message)s')
     if not os.path.exists(logdir):
@@ -112,14 +120,30 @@ def gen_file_and_stream_logger(logdir, log_file_name, file_loglevel=None,
 
 
 
-def create_module(module_dir, module_files=[]):
+def create_module(module_dir: str, module_files: List = []):
     if not os.path.exists(module_dir):
         os.mkdir(module_dir)
     if not os.path.exists(os.path.join(module_dir, "__init__.py")):
         with open(os.path.join(module_dir, "__init__.py"), "w") as f:
             f.write("")
-    for f in module_files:
-        shutil.copy(f, module_dir)
+    for fl in module_files:
+        shutil.copy(fl, module_dir)
+
+
+def stop_test_daemon():
+    port = 23232
+    hostname = "127.0.0.1"
+    host = "http://" + ":".join([hostname, str(port) + "/"])
+    try:
+        response = requests.get(host + "_ping", timeout=.5)
+        if response.status_code == 200:
+            cookies = requests.request("POST", host + "login",
+                                       data={"username": "admin",
+                                             "password": "AdminAdmin_33"}).cookies
+            requests.get(host + "_shutdown", cookies=cookies)
+            time.sleep(1)
+    except requests.ConnectionError:
+        pass
 
 
 def make_test_daemon(get_cookies=False):

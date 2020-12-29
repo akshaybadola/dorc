@@ -284,7 +284,7 @@ class Trainer:
         enough room on the device VRAM.
 
         :meth:`reserve_gpus` and :attr:`reserved_gpus` are added to the
-        :class:`Trainer` by :class:`FlaskInterface` as that manages the device
+        :class:`Trainer` by :class:`~trainer.interfaces.FlaskInterface` as that manages the device
         reservation.
 
         """

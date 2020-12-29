@@ -5,19 +5,13 @@ Subpackages
 -----------
 
 .. toctree::
+   :maxdepth: 4
 
    trainer.daemon
+   trainer.spec
 
 Submodules
 ----------
-
-trainer.api module
-------------------
-
-.. automodule:: trainer.api
-   :members:
-   :undoc-members:
-   :show-inheritance:
 
 trainer.autoloads module
 ------------------------
@@ -146,7 +140,6 @@ trainer.version module
    :members:
    :undoc-members:
    :show-inheritance:
-
 
 Module contents
 ---------------

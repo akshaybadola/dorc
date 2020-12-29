@@ -1,27 +1,51 @@
 from typing import Union, List, Callable, Dict, Tuple, Optional, Any
+from enum import Enum
 
 
-class RequestSchema:
-    pass
+class MimeTypes(str, Enum):
+    text = "text/plain"
+    html = "text/html"
+    form = "application/x-www-form-urlencoded"
+    multipart = "multipart/form-data"
+    json = "application/json"
+    binary = "binary"
+
+
+# class BaseSchema:
+#     def __init__(self, description: str, mimetype: Union[str, MimeTypes],
+#                  example: Optional[str] = None):
+#         self.description = description
+#         self.mimetype = mimetype
+#         self.example = example
+#         if self.mimetype in {MimeTypes.json, MimeTypes.multipart, MimeTypes.form}:
+#             self.schema_field = self.example
+#         else:
+#             self.schema_field = None
+
+# class RequestSchema:
+#     def __init__(self, req_type, *args, **kwargs):
+#         super().__init__(*args, **kwargs)
+#         self.req_type = req_type
 
 
 class ResponseSchema:
-    def __init__(self, status_code: int, description: str, mimetype: str,
+    def __init__(self, status_code: int, description: str,
+                 mimetype: Union[str, MimeTypes],
                  example: Optional[str] = None):
         self.status_code = status_code
         self.description = description
         self.mimetype = mimetype
         self.example = example
-        if self.mimetype in {"json", "application/json"}:
+        if self.mimetype == MimeTypes.json:
             self.schema_field = self.example
         else:
             self.schema_field = None
 
     def schema(self, spec: Optional[Dict[str, Any]] = None) ->\
             Dict[int, Dict[str, Union[str, Dict]]]:
-        if self.mimetype in {"text", "text/plain"}:
+        if self.mimetype == MimeTypes.text:
             content = self.content_text()
-        elif self.mimetype in {"json", "application/json"}:
+        elif self.mimetype == MimeTypes.json:
             content = self.content_json(spec)  # type: ignore
         return {self.status_code: {"description": self.description,
                                    'content': content}}

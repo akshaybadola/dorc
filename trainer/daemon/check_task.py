@@ -14,13 +14,20 @@ class CheckTask(MethodView):
     def get(self):
         """GET the status of a `task_id`
 
+        Requests:
+            params:
+                task_id: int
+
         Schemas:
-            class Success(BaseModel): task_id: int; result: bool; message: str
+            class Success(BaseModel):
+                task_id: int
+                result: bool
+                message: str
 
         Responses:
-            bad_params: ResponseSchema(405, "Bad Params", "text", "task_id not given")
-            No such task: ResponseSchema(404, "No such Task", "text", "No such task 4")
-            Success: ResponseSchema(200, "Check Successful", "json", "Success")
+            bad_params: ResponseSchema(405, "Bad Params", MimeTypes.text, "task_id not given")
+            No such task: ResponseSchema(404, "No such Task", MimeTypes.text, "No such task 4")
+            Success: ResponseSchema(200, "Check Successful", MimeTypes.json, "Success")
 
         """
         try:

@@ -107,6 +107,8 @@ class GoogleDocstring(UnicodeMixin):
                 'parameters': self._parse_parameters_section,
                 'schema': self._parse_schemas_section,
                 'schemas': self._parse_schemas_section,
+                'map': self._parse_map_section,
+                'maps': self._parse_map_section,
                 'tag': self._parse_tags_section,
                 'tags': self._parse_tags_section,
                 'request': self._parse_requests_section,
@@ -631,6 +633,12 @@ class GoogleDocstring(UnicodeMixin):
         lines = self._strip_empty(self._consume_to_next_section())
         lines = self._dedent(lines)
         self.tags = ",".join(lines).replace(",,", ",")
+        return section, lines
+
+    def _parse_map_section(self, section: str) -> Tuple[str, List[str]]:
+        lines = self._strip_empty(self._consume_to_next_section())
+        lines = self._dedent(lines)
+        self.map = lines[0]
         return section, lines
 
     def _parse_schemas_section(self, section: str) -> Tuple[str, List[str]]:

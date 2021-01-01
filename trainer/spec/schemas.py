@@ -1,4 +1,6 @@
 from typing import Union, List, Callable, Dict, Tuple, Optional, Any
+import sys
+import pathlib
 from enum import Enum
 
 
@@ -9,6 +11,21 @@ class MimeTypes(str, Enum):
     multipart = "multipart/form-data"
     json = "application/json"
     binary = "binary"
+
+
+FlaskTypes = {"string": "str",
+              "int": "integer",
+              "integer": "integer",
+              "float": "float",
+              "uuid": "uuid",
+              "path": "path"}
+
+
+SwaggerTypes = {bool: {"type": "boolean"},
+                int: {"type": "integer"},
+                float: {"type": "float"},
+                pathlib.Path: {"type": "string"},
+                bytes: {"type": "string", "format": "binary"}}
 
 
 # class BaseSchema:
@@ -31,7 +48,8 @@ class MimeTypes(str, Enum):
 class ResponseSchema:
     def __init__(self, status_code: int, description: str,
                  mimetype: Union[str, MimeTypes],
-                 example: Optional[str] = None):
+                 example: Optional[str] = None,
+                 spec: Optional[Dict] = None):
         self.status_code = status_code
         self.description = description
         self.mimetype = mimetype
@@ -40,13 +58,19 @@ class ResponseSchema:
             self.schema_field = self.example
         else:
             self.schema_field = None
+        self.spec = spec
 
     def schema(self, spec: Optional[Dict[str, Any]] = None) ->\
             Dict[int, Dict[str, Union[str, Dict]]]:
         if self.mimetype == MimeTypes.text:
             content = self.content_text()
         elif self.mimetype == MimeTypes.json:
-            content = self.content_json(spec)  # type: ignore
+            if spec:
+                content = self.content_json(spec)  # type: ignore
+            elif self.spec:
+                content = self.content_json(self.spec)  # type: ignore
+            else:
+                content = self.content_json({"type": "object"})
         return {self.status_code: {"description": self.description,
                                    'content': content}}
 

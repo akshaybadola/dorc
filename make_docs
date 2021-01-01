@@ -1,5 +1,5 @@
 #! /bin/bash
 
 cd docs
-sphinx-apidoc -f -o source ../trainer
+sphinx-apidoc -f -M -e -o source ../trainer *meh_stuff *_daemon* *_trainer*
 make html

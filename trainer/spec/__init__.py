@@ -1,5 +1,6 @@
 import typing
 from typing import Union, List, Callable, Dict, Tuple, Optional, Any
+import pathlib
 import werkzeug
 import functools
 import flask
@@ -12,7 +13,8 @@ from .. import trainer
 from .. import interfaces
 
 from . import docstring
-from .schemas import ResponseSchema, MimeTypes, MimeTypes as mt
+from .schemas import ResponseSchema, MimeTypes, MimeTypes as mt,\
+    FlaskTypes as ft, SwaggerTypes as st
 from .models import BaseModel, ParamsModel, DefaultModel
 
 
@@ -33,7 +35,7 @@ file_content = {'content': {'multipart/form-data':
                                         'format': 'binary'}}}}}}
 
 
-ref_regex = re.compile(r'(.+)(:[a-zA-Z0-9]+[\-_+:.])`(.+?)`')
+ref_regex = re.compile(r'(.*)(:[a-zA-Z0-9]+[\-_+:.])`(.+?)`')
 
 
 def ref_repl(x: str) -> str:
@@ -47,7 +49,7 @@ def ref_repl(x: str) -> str:
         The replaced string
 
     """
-    return re.sub(ref_regex, r'\3', x)
+    return re.sub(r'~(.+)', r'\1', re.sub(ref_regex, r'\3', x))
 
 
 def exec_and_return(exec_str: str) -> Any:
@@ -115,10 +117,21 @@ def get_func_for_redirect(func_name: str, redirect_from: Callable) -> Optional[C
 
 
 def check_for_redirects(var: str, redirect_from: Callable) ->\
-        Optional[Tuple[str, List[str]]]:
+        Tuple[Optional[Callable], str]:
     """Check for indirections in the given `var`.
 
-    Indirections can lead to jumps across documentations to avoid repitition.
+    This function checks for indirections in cases:
+        a. the docstring doesn't have a schemas section
+        b. The indirection is to another function, either a view function
+           or a regular function
+
+    The `var` would be part of the `Responses` section of the docstring, usually
+    the part which specfies a schema variable.
+
+    In case the indirection is to another view function, the schema variable
+    must be specified as there can be multiple schemas present in any given
+    docstring. Otherwise, the schema is inferred from the return annotations of
+    the function.
 
     Args:
         var: Part of the docstring to process
@@ -130,21 +143,11 @@ def check_for_redirects(var: str, redirect_from: Callable) ->\
     """
     if re.match(ref_regex, var):
         var = ref_repl(var)
-    if var.startswith("~"):
-        var = var[1:]
-    func_name, attr = [x.strip() for x in var.split(":")]
-    func = get_func_for_redirect(func_name, redirect_from)
-    if func is None:
-        return None
+    if len(var.split(":")) > 1:
+        func_name, attr = [x.strip() for x in var.split(":")]
     else:
-        if func.__doc__ is None:
-            return None
-        else:
-            doc = docstring.GoogleDocstring(func.__doc__)
-            if hasattr(doc, "schemas"):
-                return doc.schemas
-            else:
-                return None
+        func_name, attr = var, "return"
+    return get_func_for_redirect(func_name, redirect_from), attr
 
 
 def get_redirects(func_name: str, attr: str,
@@ -175,11 +178,115 @@ def get_redirects(func_name: str, attr: str,
             return getattr(doc, attr)
 
 
-def generate_responses(func: Callable) -> Dict[int, Dict]:
+def check_indirection(response_str: str) -> Optional[Tuple[int, str]]:
+    """Check for indirections in `response_str`.
+
+    This function checks for indirections in case the response_str is of type:
+        ResponseSchema(200, "Some description", <indirection>, <indirection>)
+
+    <indirection> in this case is a directive of type `:func:mod.some_func`
+
+    In this case, both the return type and the schema are given by the latter
+    function (or property) and are unkonwn to the view function. The response
+    schema is determined by the annotations of that function.
+
+    Args:
+        response_str: A string which possibly evaluates to :class:`ResponseSchema`
+
+    Returns:
+        A schema variable or None if none found after redirects.
+
+    """
+    match = re.match(r'.*\((.+)\).*', response_str)
+    retval = None
+    if match:
+        inner = [x.strip() for x in match.groups()[0].split(",")]
+        type_field = inner[-2]
+        schema_field = inner[-1]
+        if re.match(ref_regex, type_field) and re.match(ref_regex, schema_field):
+            retval = int(inner[0]), inner[1].replace("'", "").replace('"', "")
+    return retval
+
+
+def infer_from_annotations(func: Callable) ->\
+        Tuple[MimeTypes, Union[str, BaseModel, Dict[str, str]]]:
+    """Infer an OpenAPI response schema from function annotations.
+
+    The annotations are converted to a `BaseModel` and schema is extracted from it.
+
+    Args:
+        func: The function whose annotations are to be inferred.
+
+    Returns:
+        A `BaseModel` generated from the annotation's return value
+
+    """
+    annot = func.__annotations__
+    if 'return' not in annot:
+        raise AttributeError(f"return not in annotations for {func}")
+    ldict: Dict[str, Any] = {}
+    # TODO: Parse and add example
+    if annot["return"] == str:
+        return mt.text, ""
+    if annot["return"] in st:
+        return mt.text, st[annot["return"]]
+    else:
+        annot_ret = str(annot["return"])
+        # NOTE: Substitute property with Callable. property is not json
+        #       serializable Doesn't make a difference though. pydantic exports
+        #       it as: {"object": {"properties": {}}}
+        annot_ret = re.sub(r'([ \[\],]+?.*?)(property)(.*?[ \[\],]+?)', r"\1Callable\3", annot_ret)
+        lines = ["    " + "default: " + annot_ret]
+        exec("\n".join(["class Annot(BaseModel):", *lines]), globals(), ldict)
+        return mt.json, ldict["Annot"]
+
+
+def get_schema_var(schemas: List[str], var: str,
+                   func: Optional[Callable] = None) -> BaseModel:
+    """Extract and return a `pydantic.BaseModel` from docstring.
+
+    Args:
+        schemas: The lines of the schemas section of the docstring
+        func: The function from which to extract the type.
+
+    Returns:
+        A `BaseModel` type, or `DefaultModel` if the variable is not found.
+
+    """
+    ldict: Dict[str, Any] = {}
+    for i, s in enumerate(schemas):
+        if re.match(ref_regex, s):
+            indent = [*filter(None, re.split(r'(\W+)', s))][0]
+            typename = s.strip().split(":", 1)[0]
+            target, trailing = ref_repl(s).rsplit(".", 1)
+            try:
+                if func is not None:
+                    tfunc = get_func_for_redirect(target, func)
+                    if isinstance(tfunc, property):
+                        tfunc = tfunc.fget
+                    if trailing.strip(" ").startswith("return") and\
+                       "return" in tfunc.__annotations__:
+                        schemas[i] = indent + typename + ": " +\
+                            str(tfunc.__annotations__["return"])
+            except Exception as e:
+                print(f"Error {e} for {func} in get_schema_var")
+                schemas[i] = indent + typename + ": " + "Optional[Any]"
+    exec("\n".join(schemas), globals(), ldict)
+    if var not in ldict:
+        return DefaultModel
+    else:
+        return ldict[var]
+
+
+def generate_responses(func: Callable, rulename: str, redirect: str) -> Dict[int, Dict]:
     """Generate OpenAPI compliant responses from a given `func`.
 
     `func` would necessarily be a `flask` view function and should contain
     appropriate sections in its docstring.
+
+    What we would normally be looking for is `Requests`, `Responses` and `Maps`.
+    In case, the Request or Response is processed or sent by another function,
+    it can be pointed to as a sphinx directive, like \"See `:directive:`\".
 
     Args:
         func: The function for which to generate responses
@@ -193,41 +300,68 @@ def generate_responses(func: Callable) -> Dict[int, Dict]:
     doc = docstring.GoogleDocstring(func.__doc__)
     responses = {}
 
+    # if rulename == "/batch_props":
+    #     import ipdb; ipdb.set_trace()
+    def remove_description(schema):
+        if "title" in schema:
+            schema["title"] = "default"
+        if "description" in schema:
+            schema.pop("description")
+        return schema
+
     def response_subroutine(name, response_str):
-        response_args = exec_and_return(response_str)
-        # if isinstance(response_args, ResponseSchema):
-        if response_args.mimetype == mt.text:
-            content = response_args.schema()
-        elif response_args.mimetype == mt.json:
-            sf = response_args.schema_field
-            if not hasattr(doc, "schemas") or doc.schemas is None:
-                spec = check_for_redirects(sf, func)
-                var = sf.split(":")[-1].strip()
-                spec = get_schema_var(spec[1], var, func)
+        inner_two = check_indirection(response_str)
+        if redirect and inner_two:
+            redir_func = get_func_for_redirect(redirect, func)
+            if isinstance(redir_func, property):
+                redir_func = redir_func.fget
+            mtt, ret = infer_from_annotations(redir_func)
+            if mtt == mt.text:
+                if ret:
+                    response = ResponseSchema(*inner_two, mtt, spec=ret)
+                else:
+                    response = ResponseSchema(*inner_two, mtt, ret)
             else:
-                var = sf.split(":")[-1].strip()
-                spec = get_schema_var(doc.schemas[1], var, func)
-            schema = spec.schema()
-            if "description" in schema:
-                schema.pop("description")
-            content = response_args.schema(schema)
+                schema = remove_description(ret.schema())
+                response = ResponseSchema(*inner_two, mtt, spec=schema)
+            content = response.schema()
+        else:
+            response = exec_and_return(response_str)
+            if response.mimetype == mt.text:
+                content = response.schema()
+            elif response.mimetype == mt.json:
+                sf = response.schema_field
+                # Basically there are two cases
+                # 1. we redirect to another view function
+                # 2. we redirect to a regular function or method
+                if not hasattr(doc, "schemas") or doc.schemas is None:
+                    # FIXME: Error is here
+                    #        check_for_redirects is called if above condition is true
+                    redir_func, attr = check_for_redirects(sf, func)
+                    if not redir_func:
+                        raise AttributeError("Dead end for redirect")
+                    elif attr == "return":
+                        if isinstance(redir_func, property):
+                            redir_func = redir_func.fget
+                        mtt, ret = infer_from_annotations(redir_func)
+                        if mtt == mt.text:
+                            response = ResponseSchema(*inner_two, mtt, ret)
+                        elif inner_two:
+                            schema = remove_description(ret.schema())
+                            response = ResponseSchema(*inner_two, mtt, spec=schema)
+                        else:
+                            schema = remove_description(ret.schema())
+                            response.spec = schema
+                        content = response.schema()
+                    else:
+                        import ipdb; ipdb.set_trace()
+                        spec = get_schema_var(spec[1], var, func)
+                else:
+                    var = sf.split(":")[-1].strip()
+                    spec = get_schema_var(doc.schemas[1], var, func)
+                    schema = remove_description(spec.schema())
+                    content = response.schema(schema)
         responses[name] = content
-        # else:
-        #     responses[name] = gen_response(name, *response_args)
-        #     if response_args[-2] == mt.json:
-        #         if not hasattr(doc, "schemas") or doc.schemas is None:
-        #             schema = check_for_redirects(response_args[-1], func)
-        #             var = response_args[-1].split(":")[-1]
-        #             schema = get_schema_var(schema[1], var)
-        #         else:
-        #             var = response_args[-1].split(":")[-1]
-        #             schema = get_schema_var(doc.schemas[1], var)
-        #         if schema is None:
-        #             raise AttributeError(f"{responses[name]} should be in schemas")
-        #         schema_dict = schema.schema()
-        #         schema_dict.pop("title")
-        #         code = [*responses[name].keys()][0]
-        #         responses[name][code]['content']['application/json'] = schema_dict
 
     for name, response_str in doc.responses.items():
         if name == "responses":
@@ -259,45 +393,6 @@ def generate_responses(func: Callable) -> Dict[int, Dict]:
 #                    "content": {mimetype: {"schema": content}}}}
 
 
-def get_schema_var(schemas: List[str], var: str,
-                   func: Optional[Callable] = None) -> BaseModel:
-    """Extract and return a `pydantic.BaseModel` from docstring.
-
-    Args:
-        schemas: The lines of the schemas section of the docstring
-        func: The function from which to extract the type.
-
-    Returns:
-        A `BaseModel` type, or `DefaultModel` if the variable is not found.
-
-    """
-    ldict: Dict[str, Any] = {}
-    for i, s in enumerate(schemas):
-        if re.match(ref_regex, s):
-            indent = [*filter(None, re.split(r'(\W+)', s))][0]
-            typename = s.strip().split(":", 1)[0]
-            target, trailing = ref_repl(s).rsplit(".", 1)
-            if target.startswith("~"):
-                target = target[1:]
-            try:
-                if func is not None:
-                    tfunc = get_func_for_redirect(target, func)
-                    if isinstance(tfunc, property):
-                        tfunc = tfunc.fget
-                    if trailing.strip(" ").startswith("return") and\
-                       "return" in tfunc.__annotations__:
-                        schemas[i] = indent + typename + ": " +\
-                            str(tfunc.__annotations__["return"])
-            except Exception as e:
-                print(f"Error {e} for {func} in get_schema_var")
-                schemas[i] = indent + typename + ": " + "Optional[Any]"
-    exec("\n".join(schemas), globals(), ldict)
-    if var not in ldict:
-        return DefaultModel
-    else:
-        return ldict[var]
-
-
 def get_description(func: Callable) -> str:
     if func.__doc__ is None:
         return ""
@@ -327,7 +422,7 @@ def get_request_params(lines: List[str]) -> List[Dict[str, Any]]:
     return retval
 
 
-def get_request_body(lines: List[str]) -> List[Dict[str, Any]]:
+def get_request_body(lines: List[str]) -> Dict[str, Any]:
     ldict: Dict[str, Any] = {}
     lines = ["    " + x for x in lines]
     exec("\n".join(["class Body(BaseModel):", *lines]), globals(), ldict)
@@ -382,28 +477,87 @@ def get_tags(func: Callable) -> List[str]:
         return []
 
 
+def get_opId(name: str, func: Callable, params: List[str], method: str) -> str:
+    mod = func.__qualname__.split(".")[0]
+    name = name.split("/")[1]
+    return mod + "__" + name + "__" + "_".join(params) + method.upper()
+
+
+def get_params_in_path(name: str) -> List[Dict[str, Any]]:
+    params_in_path = re.findall(r"\<(.+?)\>", name)
+    params = []
+    if params_in_path:
+        for p in params_in_path:
+            p_type = "string"
+            splits = p.split(":")
+            if len(splits) > 1:
+                p = splits[1]
+                p_type = ft[splits[0]] if splits[0] in ft else "string"
+            param = {"in": "path",
+                     "name": p,
+                     "required": True,
+                     "schema": {"type": p_type}}
+            if p_type == "uuid":
+                param["schema"] = {"type": "string", "format": "uuid"}
+            params.append(param)
+    return params
+
+
+def check_function_redirect(docstr: Optional[str], rulename: str) -> Tuple[str, str]:
+    var = ""
+    rest = ""
+    if docstr:
+        doc = docstring.GoogleDocstring(docstr)
+        if hasattr(doc, "map"):
+            rule, rest = [x.strip() for x in doc.map.split(":", 1)]
+            rule_ = rule.split("/")
+            rest = ref_repl(rest)
+            rulename_ = rulename.split("/")
+            for x, y in zip(rule_, rulename_):
+                if re.match(r'\<.+\>', x):
+                    rest = rest.replace(x, y)
+                    var = x[1:-1]
+    return var, rest
+
+
 def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
                        method_func: Callable, method: str) ->\
-                       Tuple[Dict[str, Any], Tuple[str, str]]:
-    retval = {}
+                       Tuple[Dict[str, Any], Tuple[str, str]]: # NOQA
+    retval: Dict[str, Any] = {}
     # FIXME: Find a better way to generate operationId
-    retval["operationId"] = name.split("/")[1] + "_" +\
-        rule.endpoint.strip("_")
     request = get_requests(method_func, method)
     tags = get_tags(method_func)
     description = get_description(method_func)
+    var, redirect = check_function_redirect(method_func.__doc__, name)
     if description:
+        if redirect:
+            last = redirect.split(".")[-1]
+            description = re.sub(f"`{var}`", f"`{last}`", description)
         retval["description"] = description
     if tags:
         retval["tags"] = tags
+    # if "/trainer" in name:
+    #     import ipdb; ipdb.set_trace()
+    parameters: List[Dict[str, Any]] = get_params_in_path(name)
+    # TODO: Fix opId in case there's indirection
+    #       /props/devices has currently FlaskInterface__props__GET
+    #       instead of FlaskInterface__props_device__GET or something
+    #       It can also be getTrainerPropsDevice based on some rules
+    retval["operationId"] = get_opId(name,
+                                     method_func,
+                                     [x["name"] for x in parameters],
+                                     method)
     if "params" in request:
-        parameters = get_request_params(request["params"])
+        parameters.extend(get_request_params(request["params"]))
+    if parameters:
         retval["parameters"] = parameters
     if "body" in request:
         if method.lower() == "get":
             return {}, (rule.rule, "Request body cannot be in GET")
         elif method.lower() == "post":
             body = get_request_body(request["body"])
+            # NOTE: Hack because for some reason, the title and description are of
+            # :class:`BaseModel` instead of the docstring
             body.pop("title")
             body.pop("description")
             if "content-type" in request:
@@ -422,7 +576,7 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
         else:
             return {}, (rule.rule, "Only methods GET and POST are supported")
     try:
-        responses = generate_responses(method_func)
+        responses = generate_responses(method_func, name, redirect)
         retval["responses"] = responses
         error = ()
     except Exception as e:
@@ -450,7 +604,12 @@ def make_paths(app: flask.Flask, excludes: List[str]) ->\
             continue
         endpoint = app.view_functions[rule.endpoint]
         # name.split("/")[1] in {"trainer", "check_task"}:  # in {"/trainer/<port>/<endpoint>"}:
-        paths[name] = {}
+        newname = name
+        params_in_path = re.findall(r"\<(.+?)\>", name)
+        for param in params_in_path:
+            repl = param.split(":")[1] if len(param.split(":")) > 1 else param
+            newname = newname.replace(f"<{param}>", "{" + repl + "}")
+        paths[newname] = {}
         for method in rule.methods:
             if method in ["GET", "POST"]:
                 if hasattr(endpoint, "view_class"):
@@ -467,10 +626,10 @@ def make_paths(app: flask.Flask, excludes: List[str]) ->\
                                                  method_func,
                                                  method.lower())
                 if error:
-                    paths[name][method.lower()] = default_response
+                    paths[newname][method.lower()] = default_response
                     errors.append(error)
                 else:
-                    paths[name][method.lower()] = spec
+                    paths[newname][method.lower()] = spec
     return paths, errors, excluded
 
 

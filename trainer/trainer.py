@@ -1,4 +1,4 @@
-from typing import List, Dict, Iterable, Any, Union, Tuple, Callable
+from typing import List, Dict, Iterable, Any, Union, Tuple, Callable, Optional
 import re
 import io
 import os
@@ -7,6 +7,7 @@ import copy
 import time
 import json
 import torch
+import pathlib
 import inspect
 import traceback
 import flask
@@ -15,13 +16,13 @@ from threading import Thread, Event
 from PIL import Image
 import numpy as np
 from multiprocessing.pool import ThreadPool
-from types import SimpleNamespace
 from torch.utils.data import Dataset, DataLoader
 
+from .autoloads import ModelStep
 from .device import (init_nvml, gpu_ranking, gpu_util, gpu_name,
                      cpu_info, memory_info, DeviceMonitor)
 from .exceptions import ParamsError
-from .util import gen_file_and_stream_logger, deprecated, _dump, concat, diff_as_sets
+from .util import gen_file_and_stream_logger, deprecated, _dump, concat, diff_as_sets, BasicType
 from .task import Signals
 from .epoch import Epoch
 from .mods import Modules as Modules
@@ -31,7 +32,7 @@ from ._log import Log
 from ._checks import (_check_model_params, _check_trainer_params, _check_data_params,
                       _check_resume_or_init_weights)
 from .helpers import (Tag, ProxyDataset,
-                      get_proxy_dataloader, PropertyProxy, HookDict, HookList,
+-                      get_proxy_dataloader, PropertyProxy, HookDict, Hook,
                       GET, POST, Exposes, _log_metrics_for_step)
 from .version import __trainer__version__
 
@@ -147,7 +148,6 @@ class Trainer:
         :param train_loader: a train data loader usually :class:`torch.utils.data.Dataloader`
         :param val_loader: a validation data loader usually :class:`torch.utils.data.Dataloader`
         :param test_loader: a test data loader usually :class:`torch.utils.data.Dataloader`
-        :param args: `types.SimpleNamespace` which contains the rest of the arguments
 
         """
         # DONE: model, train_loader, val_loader should be resettable from the interface
@@ -301,7 +301,7 @@ class Trainer:
         try:
             if isinstance(gpus, bool):
                 self._logw(f"GPUS can't be boolean. Given {gpus}. Will run on CPU")
-                self._gpus = [-1]
+                self._gpus: List[int] = [-1]
             elif isinstance(gpus, list) and all([isinstance(x, int) for x in gpus]):
                 if all(lambda x: x >= 0 for x in gpus):
                     self._gpus = gpus
@@ -398,6 +398,7 @@ class Trainer:
         self._devices = {}
         self._devices_initialized = True
 
+    # FIXME: Replcae these errors and types with pydantic
     def _init_static_vars(self):
         self.adhoc_error_dict = {"required_oneof_[function]": ["train", "val", "test", "user_func_name"],
                                  "required_for_[function]": {"epoch": "[int|string]_which_epoch",
@@ -473,7 +474,7 @@ class Trainer:
         # TODO: There should be a better way as I should be able to disable
         #       validate and test That can only be if I specify order in certain
         #       hooks.
-        self._post_epoch_hooks_to_run = HookList(["validate", "test", "update_metrics"])
+        self._post_epoch_hooks_to_run = Hook(["validate", "test", "update_metrics"])
 
         # FIXME: validate, test, update_metrics is mandatory for now,
         #        unless val_loader and test_loader are none of course
@@ -600,13 +601,13 @@ class Trainer:
             else:
                 self._models[model_name] = None
 
-    def load_models_state(self, model_state):
+    def load_models_state(self, model_state) -> Tuple[bool, str]:
         for model in self.loaded_models:
             status, message = self._models[model].load(model_state[model])
             if not status:
                 self._loge(f"Loading model {model} failed. Error {message}")
                 return False, message
-        return True, None
+        return True, ""
 
     def allocate_devices(self, load_models: Union[str, List[str]] = [],
                          unload_models: Union[str, List[str]] = []):
@@ -706,7 +707,7 @@ class Trainer:
                     else:
                         self._logw(f"{model_name} not in known models")
 
-    def _model_init_helper(self, model_name):
+    def _model_init_helper(self, model_name) -> Union[Model, bool]:
         model = self._model_params[model_name]["model"]
         model_params = self._model_params[model_name]["params"]
         try:
@@ -727,7 +728,7 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def loaded_models(self):
+    def loaded_models(self) -> List[str]:
         return [name for name, model in self._models.items() if model.loaded]
 
     @POST
@@ -867,8 +868,8 @@ class Trainer:
         self._metrics = {}
         for x in self._update_functions:
             if self._dataloader_params[x] is not None:
-                self._metrics[x] = dict((l[1], {}) for l in self._update_functions[x].returns
-                                        if l[0] == "metric")
+                self._metrics[x] = dict((val[1], {}) for val in self._update_functions[x].returns
+                                        if val[0] == "metric")
                 self._metrics[x]["num_datapoints"] = {}
                 if self._extra_metrics is None:
                     self._extra_metrics = {}
@@ -941,14 +942,15 @@ class Trainer:
                                 "adhoc": None,
                                 "user": None}
 
-    def _init_default_task_runner(self, device_monitor, signals):
+    def _init_default_task_runner(self, device_monitor: DeviceMonitor,
+                                  signals: Signals) -> Epoch:
         task_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
                             signals, device_monitor, self.extra_report,
                             **{"logd": self._logd, "loge": self._loge,
                                "logi": self._logi, "logw": self._logw})
         return task_runner
 
-    def _task_runner_helper(self, which):
+    def _task_runner_helper(self, which: str) -> Tuple[DeviceMonitor, Signals]:
         device_monitor = DeviceMonitor(self._device_handles)
         # signals = SimpleNamespace()
         if which == "main":
@@ -965,7 +967,9 @@ class Trainer:
             # signals.aborted = lambda: self._userfunc_aborted_event.is_set()
         return device_monitor, signals
 
-    def _task_runner_initialize(self, name, metrics, extra_metrics, callback):
+    def _task_runner_initialize(self, name: str, metrics: Dict[str, Dict],
+                                extra_metrics: Dict[str, Dict],
+                                callback: Callable) -> Tuple[bool, Optional[str]]:
         """Initializes a task_runner. The quintessential task runner is the epoch
         runner. Task runner coordinates with the trainer to ensure that nothing
         gets jammed up.
@@ -995,7 +999,7 @@ class Trainer:
             self._task_runners[name].reset()
             self._task_runners[name].logger = self.logger
             self._task_callbacks[name] = callback
-            return True
+            return True, None
     # END: Init Funcs
 
     # START: Internal Controls
@@ -1562,7 +1566,7 @@ class Trainer:
     # START: Extras
     @POST
     @extras
-    def load_saves(self, data):
+    def load_saves(self, data: Dict[str, Any]) -> Tuple[bool, str]:
         """Loads model weights or trainer state from a given filename. The file must be
         present in the `savedir`.
 
@@ -1638,7 +1642,7 @@ class Trainer:
     # CHECK: I think it's more generic now.
     @POST
     @extras
-    def call_user_func(self, data):
+    def call_user_func(self, data: Dict[str, Any]) -> Tuple[bool, str]:
         """Call an arbitrary function. For now calls any of train/val/test or given
         update_funcs with a subset of the dataset.
 
@@ -1703,7 +1707,7 @@ class Trainer:
 
     @POST
     @extras
-    def force_run_hooks(self, data):
+    def force_run_hooks(self, data: Dict[str, Any]) -> Tuple[bool, str]:
         "Run the specified post_epoch_hooks_before the epoch is completed"
         return False, self._logi("Does nothing for now")
 
@@ -1726,7 +1730,7 @@ class Trainer:
     #          False, "Called with null data"
     @POST
     @extras
-    def adhoc_eval(self, data):
+    def adhoc_eval(self, data: Dict[str, Any]) -> Tuple[bool, str]:
         """Do an arbitrary evaluation on any or combination of train/val/test data for
         any state in the model's stored history
 
@@ -1751,7 +1755,9 @@ class Trainer:
             for x in data:
                 return self.check_adhoc_eval_params(x, data[x])
 
-    def check_adhoc_eval_params(self, func, params):
+    # FIXME: Should be pydantic type or some other type with defined fields
+    def check_adhoc_eval_params(self, func: Callable,
+                                params: Dict[str, BasicType]):
         """Call :meth:`call_adhoc_func_on_data` with params. Perhaps it can be lifted
         above though
 
@@ -1980,11 +1986,11 @@ class Trainer:
     # START: Methods
     @POST
     @methods
-    def set_model(self, model_name):
+    def set_model(self, model_name) -> Tuple[bool, str]:
         """Set one of the available models as current active model"""
         return self._set_model_active(model_name)
 
-    def _set_model_active(self, model_name):
+    def _set_model_active(self, model_name) -> Tuple[bool, str]:
         """Model name is an abstraction and a `model` can have multiple
         :class:`torch.nn.Module` modules within it with separate criteria and
         optimizers. It is the prerogative of the update_function to interact
@@ -2008,7 +2014,7 @@ class Trainer:
     # TODO: This should be a given input and not an image
     @POST
     @methods
-    def fetch_preds(self, img_path):
+    def fetch_preds(self, img_path: Union[pathlib.Path, str]):
         """Fetch the prediction for a given image. Returns predictions (captions)
 
         :param img_path: Image Path
@@ -2076,7 +2082,7 @@ class Trainer:
     # TODO: These functions for images can be generalized for arbitrary binary data
     @POST
     @methods
-    def fetch_image(self, img_path):
+    def fetch_image(self, img_path: Union[pathlib.Path, str]):
         """Fetch the image from a given path.
         """
         img_path = os.path.join(self._trainer_params["image_root"], img_path)
@@ -2152,11 +2158,16 @@ class Trainer:
             return False, self._loge(f"Error occured while loading models {e}" +
                                      f"\n{traceback.format_exc()}")
 
+    # FIXME: Switch to pydantic for such type checking
     @POST
     @methods
-    def hack_param(self, data):
-        """Update a param as a hack. Data is assumed to be a pair of `{key, [type, value]}`
-        dictionary. Only [str, int, float, bool] (simple) types are accepted."""
+    def hack_param(self, data: Dict[str, Dict[str, str]]):
+        """Update a param as a hack.
+
+        Data is assumed to be a pair of `{key, [type, value]}` dictionary. Only
+        [str, int, float, bool] (simple) types are accepted.
+
+        """
         statuses = []
         type_dict = {"str": str, "int": int, "float": float, "bool": bool}
         for k, v in data.items():
@@ -2214,7 +2225,6 @@ class Trainer:
         in instance scope. If both aren't present it's initialized with default
         params from :mod:`torch.optim`
 
-
         Args:
             request: http request forwarded from the daemon
 
@@ -2237,6 +2247,12 @@ class Trainer:
                               "optimizers": {"YourOptimizer": {"function": YourOptimizer,
                                                                "params": {"lr": 0.01, "theta": 0.9}}}}
 
+        Request:
+        
+
+        Response:
+            
+
         In the above example`Adam`'s parameteres are omitted here for `model_1`
         so first they'll be searched in existing optimizers with trainer, else
         no params will be given to the function that retuns the `Adam` instance.
@@ -2249,7 +2265,7 @@ class Trainer:
             A tuple of status and message
 
         """
-        checks : Iterable[Callable] = []
+        checks: Iterable[Callable] = []
         status, response = self.add_module(request, checks)
         if status:
             module_exports = response
@@ -2347,7 +2363,7 @@ class Trainer:
 
     @POST
     @methods
-    def add_module(self, request, checks):
+    def add_module(self, request: flask.Request, checks):
         return self._mods.add_module(request, checks)
     # END: Methods
 
@@ -2365,7 +2381,7 @@ class Trainer:
 
     # START: Save, Load, Resume
     @internals
-    def _dump_state(self):
+    def _dump_state(self) -> Dict:
         "Dump everything except weights"
         try:
             dump_path = os.path.join(self._data_dir, "session_state")
@@ -2643,28 +2659,32 @@ class Trainer:
     # TODO: For any worker loop which returns an error, the next
     #       one should pause or halt or something.
     @control
-    def reset_session(self):
+    def reset_session(self) -> Tuple[bool, str]:
         """Reset should dump all the variables and data to a backup state with the
         option to save, restore or delete later and reset all the state of the
         session to init_state.
         """
-        self.stop()
-        self.save()
-        self._logi("Resetting the current session")
-        self._init_all()
+        try:
+            self.stop()
+            self.save()
+            message = self._logi("Resetting the current session")
+            self._init_all()
+        except Exception as e:
+            return False, f"{e}"
+        return True, message
 
     @control
-    def pause(self):
+    def pause(self) -> str:
         self._pause_if_running()
         return self._logi("Pausing")
 
     @control
-    def resume(self):
+    def resume(self) -> str:
         self._run_if_paused()
         return self._logi("Resuming")
 
     @control
-    def start(self):
+    def start(self) -> str:
         self._start_if_not_running()
         return self._logi("Starting")
 
@@ -2682,7 +2702,7 @@ class Trainer:
     #     # listen for commands
 
     @control
-    def save(self):
+    def save(self) -> Tuple[bool, str]:
         self._logi("Saving")
         self._pause_if_running()
         self._logd("Trying force save")
@@ -2698,7 +2718,7 @@ class Trainer:
         return status, message
 
     @control
-    def force_eval(self):
+    def force_eval(self) -> Tuple[bool, str]:
         """Do a full evaluation run on the adhoc loop"""
         if not self.val_loader:
             return False, "No val loader"
@@ -2713,7 +2733,7 @@ class Trainer:
         # self._prev_paused_state = None
 
     @control
-    def force_test(self):
+    def force_test(self) -> Tuple[bool, str]:
         if not self.test_loader:
             return False, "No test loader"
         self._pause_if_running()
@@ -2727,7 +2747,7 @@ class Trainer:
         # self._prev_paused_state = None
 
     @control
-    def abort_session(self):
+    def abort_session(self) -> Tuple[bool, str]:
         """``abort_session`` finishes the session and switches to "finished" state with
         aborted flag set to true. Saves the current session with aborted suffix.
 
@@ -2745,7 +2765,7 @@ class Trainer:
         return True, self._logi(f"Aborted state {self.current_state} and current session")
 
     @control
-    def abort_loop(self):
+    def abort_loop(self) -> Tuple[bool, str]:
         """`abort_loop` aborts only the current loop stops with the aborted flag. Useful
         for changing the parameters and starting again. Saves the current
         metrics gathered.
@@ -2762,7 +2782,7 @@ class Trainer:
         return True, self._logi(f"Aborted {self.current_state}")
 
     @control
-    def abort_loop_with_callback(self):
+    def abort_loop_with_callback(self) -> Tuple[bool, str]:
         """`abort_loop` aborts only the current loop stops with the aborted flag. Useful
         for changing the parameters and starting again. Saves the current
         metrics gathered.
@@ -2873,7 +2893,7 @@ class Trainer:
     # START: Properties
     @prop                       # type: ignore
     @property
-    def version(self):
+    def version(self) -> str:
         "Version of the server"
         return self.__version__
 
@@ -2886,13 +2906,13 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def current_state(self):
+    def current_state(self) -> Dict[str, Any]:
         "Current global state of the state machine"
         return self._current_state
 
     @prop                       # type: ignore
     @property
-    def loop_type(self):
+    def loop_type(self) -> str:
         """Loop type determines if the training monitor number of epochs or number of batches.
         """
         if "iterations" in self._trainer_params["training_steps"]:
@@ -2900,7 +2920,6 @@ class Trainer:
         else:
             return "epoch"
 
-    @prop                       # type: ignore
     @property
     def logger(self):
         "Current :class:`logging.Logger` instance"
@@ -2908,26 +2927,26 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def logfile(self):
+    def logfile(self) -> str:
         "Logfile contents"
-        return open(self._logfile).read()
+        with open(self._logfile) as f:
+            return f.read()
 
     @prop                       # type: ignore
-    @prop                       # type: ignore
     @property
-    def saves(self):
+    def saves(self) -> List[str]:
         "A list of all the files in the Saves directory"
         return os.listdir(self._savedir)
 
     @prop                       # type: ignore
     @property
-    def gpus(self):
+    def gpus(self) -> List[int]:
         "List of GPUs if avaiable on the system.  Returns [-1] if no available"
         return self._gpus
 
     @prop                       # type: ignore
     @property
-    def system_info(self):
+    def system_info(self) -> Dict[str, Optional[Dict]]:
         "System Info: cpu_util, mem_util, gpu_util"
         return {"gpu_util": gpu_util(self._device_handles) if self._gpus[0] != -1 else None,
                 "cpu_info": cpu_info(),
@@ -2955,25 +2974,25 @@ class Trainer:
     @prop                       # type: ignore
     @property
     def allocated_devices(self) -> List[int]:
-        devices : List[int] = []
+        devices: List[int] = []
         for x in self._devices.values():
             devices.extend(x)
         return devices
 
     @prop                       # type: ignore
     @property
-    def models(self):
+    def models(self) -> List[str]:
         "Return the names of the models available with the server"
         return [*self._models.keys()]
 
     @prop                       # type: ignore
     @property
-    def optimizers(self):
+    def optimizers(self) -> Dict[str, Dict[str, Union[Callable, Dict]]]:
         return self._optimizers
 
     @prop                       # type: ignore
     @property
-    def train_step_func(self):
+    def train_step_func(self) -> ModelStep:
         """The Training Step is a partial function of the `training_step` function, the
         models and the criteria given to the server
 
@@ -2982,7 +3001,7 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def val_step_func(self):
+    def val_step_func(self) -> ModelStep:
         """The Validation Step is a partial function of the `validation_step` function,
         the models and the criteria given to the server
 
@@ -2991,7 +3010,7 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def test_step_func(self):
+    def test_step_func(self) -> ModelStep:
         """The Test Step is a partial function of the `test_step` function,
         the models and the criteria given to the server
 
@@ -3008,7 +3027,7 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def props(self):
+    def props(self) -> List[str]:
         """Return all properties of the instance including `extras` and `methods`
         except hidden properties
         """
@@ -3019,7 +3038,7 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def epoch(self):
+    def epoch(self) -> int:
         "Current Epoch to train, if training type is epoch. See `loop_type`"
         return self._epoch
 
@@ -3029,13 +3048,13 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def max_epochs(self):
+    def max_epochs(self) -> int:
         "Max Epochs to train, if training type is epoch. See `loop_type`"
         return self._max_epochs
 
     @prop                       # type: ignore
     @property
-    def iterations(self):
+    def iterations(self) -> int:
         "Current iteration if training type is iterations. See `loop_type`"
         return self._iterations
 
@@ -3045,13 +3064,13 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def max_iterations(self):
+    def max_iterations(self) -> int:
         "Max iterations to run if training type is iterations. See `loop_type`"
         return self._max_iterations
 
     @prop                       # type: ignore
     @property
-    def controls(self):
+    def controls(self) -> Dict[str, Union[Callable[[], None], property]]:
         """Controls are primary functions through which training is controlled. They
         affect the main training loop and other functions can be run either in
         parallel or while the main loop is paused.
@@ -3062,7 +3081,7 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def methods(self):
+    def methods(self) -> Dict[str, Union[Callable[[], None], property]]:
         """Trainer methods are additional methods besides the controls to manage and
         modify the training session.  Containing such functions which upload
         weights to the server, load previous saves, add/set a model or view
@@ -3073,19 +3092,19 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def all_props(self):
+    def all_props(self) -> Dict[str, Union[Callable, property]]:
         return prop.members
 
     @prop                       # type: ignore
     @property
-    def _internals(self):
+    def _internals(self) -> Dict[str, Union[Callable, property]]:
         """Internals are diagnostic tools to examine the state of the
         training. Currently only has one function: `_dump_state`."""
         return internals.members
 
     @prop                       # type: ignore
     @property
-    def extras(self):
+    def extras(self) -> Dict[str, Union[Callable, property]]:
         """Extras are experimental methods whose execution is more complicated and
         should be used with caution. They include calling an pausing and
         evaluating any combination of train/val/test data on current or any
@@ -3097,14 +3116,14 @@ class Trainer:
     # START: State props
     @prop                       # type: ignore
     @property
-    def running(self):
+    def running(self) -> bool:
         "Is the current loop running?"
         return self._running_event.is_set()
 
     @prop                       # type: ignore
     @property
     @deprecated
-    def current_run(self):
+    def current_run(self) -> str:
         "Which loop is the current loop? Can be one of [adhoc, user, main]"
         if "_epoch_runner" not in self.__dict__:
             return "None"
@@ -3113,7 +3132,7 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def paused(self):
+    def paused(self) -> bool:
         "Is the current loop paused?"
         loop = self.current_state.split("_")[0]
         if loop == "main":
@@ -3125,7 +3144,7 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def _current_aborted(self):
+    def _current_aborted(self) -> bool:
         loop = self.current_state.split("_")[0]
         if loop == "main":
             return self._current_aborted_event.is_set()
@@ -3136,12 +3155,12 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def _session_aborted(self):
+    def _session_aborted(self) -> bool:
         return self._session_aborted_event.is_set()
 
     @prop                       # type: ignore
     @property
-    def adhoc_paused(self):
+    def adhoc_paused(self) -> bool:
         "Is the adhoc loop paused?"
         return not self._adhoc_running_event.is_set()
 
@@ -3150,26 +3169,26 @@ class Trainer:
     # "current_loop". current_loop therefore only applies to [train, val, test]
     @prop                       # type: ignore
     @property
-    def adhoc_aborted(self):
+    def adhoc_aborted(self) -> bool:
         "Was the adhoc loop aborted?"
         return self._adhoc_aborted_event.is_set()
 
     @prop                       # type: ignore
     @property
-    def userfunc_paused(self):
+    def userfunc_paused(self) -> bool:
         "Is a given userfunc paused?"
         return not self._userfunc_running_event.is_set()
 
     @prop                       # type: ignore
     @property
-    def userfunc_aborted(self):
+    def userfunc_aborted(self) -> bool:
         "Was a given userfunc aborted?"
         return self._userfunc_aborted_event.is_set()
     # END: State props
 
     @prop                       # type: ignore
     @property
-    def best_save(self):
+    def best_save(self) -> Optional[pathlib.Path]:
         """The path of the best save recorded. Probably should not be available to the client"""
         if not os.path.exists(self._savedir) or not os.listdir(self._savedir):
             return None
@@ -3192,7 +3211,7 @@ class Trainer:
                 return None
 
     # Internal property. Will not be exposed outside
-    @prop                       # type: ignore
+    # @prop                       # type: ignore
     @property
     def _save_path_with_epoch(self):
         if "iterations" in self._trainer_params["training_steps"]:
@@ -3204,14 +3223,14 @@ class Trainer:
                                                           "{:03}".format(update_key)]))
         return save_name
 
-    @prop                       # type: ignore
+    # @prop                       # type: ignore
     @property
     def _save_path_without_epoch(self):
         model_names = "_".join(self.models)
         save_name = os.path.join(self._savedir, "_".join(model_names))
         return save_name
 
-    @prop                       # type: ignore
+    # @prop                       # type: ignore
     @property
     def _checkpoint_path(self):
         # model_names = "_".join(self._models.names)
@@ -3219,13 +3238,13 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def trainer_params(self):
+    def trainer_params(self) -> Dict[str, Union[None, str, pathlib.Path, bool]]:
         """Trainer params govern the behaviour of the trainer.
 
         Params must be a dict with fields and types:
 
-            ``{'gpus': str, 'cuda': Boolean, 'seed': Union[int, None],
-            'resume': Boolean, 'resume_best': Boolean, 'resume_weights': Union[pathlib.Path, None],
+            ``{'gpus': str, 'cuda': bool, 'seed': Union[int, None],
+            'resume': bool, 'resume_best': bool, 'resume_weights': Union[pathlib.Path, None],
             'init_weights': Union[str, pathlib.Path], 'training_steps': List[str],
             'check_func': Union[str, None], 'max_epochs': Union[int, None]}``
 
@@ -3246,7 +3265,7 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def model_params(self):
+    def model_params(self) -> Dict[str, Union[None, str, pathlib.Path, bool]]:
         """`model_params` is a :class:`dict` mapping model names and all the paramters
         required by those models to be initialized.
 
@@ -3272,20 +3291,20 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def dataloader_params(self):
+    def dataloader_params(self) -> Dict[str, Union[None, str, pathlib.Path, bool]]:
         """`dataloader_params` are the parameters given to the various dataloaders.
         Currently only torch dataloaders are supported. See """
         pass
 
     @prop                       # type: ignore
     @property
-    def data(self):
+    def data(self) -> str:
         return self._data["name"]
 
     # TODO: Allow extra_metrics, update_funcs and any other params to be updated
     @prop                       # type: ignore
     @property
-    def updatable_params(self):
+    def updatable_params(self) -> Dict[str, Dict]:
         """All the parameters which can be updated by the user midway.
 
         We segregate them into ``[model_params, trainer_params,
@@ -3300,7 +3319,7 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def all_params(self):
+    def all_params(self) -> Dict[str, Any]:
         """All params is the entire config which can be serialized as JSON. It contains
         [epoch, iterations, model_params, criteria_params, dataloader_params,
         trainer_params, metrics]"""
@@ -3328,14 +3347,14 @@ class Trainer:
     #       `prop` can help
     @prop                       # type: ignore
     @property
-    def train_losses(self):
+    def train_losses(self) -> Dict[str, Any]:
         """History of training losses"""
         return dict((k, v) for k, v in self._metrics["train"].items()
                     if k[0] == "loss")
 
     @prop                       # type: ignore
     @property
-    def progress(self):
+    def progress(self) -> Dict[str, int]:
         """Progress returns the number of steps and max steps of training (whether
         epochs or iterations) and also the round of current batch being processed"""
         predicate = "iterations" in self._trainer_params["training_steps"]
@@ -3351,11 +3370,11 @@ class Trainer:
     # FIXME: self.user_funcs MAY create problems
     @prop                       # type: ignore
     @property
-    def user_funcs(self):
+    def user_funcs(self) -> List[str]:
         """Names of all the functions uploaded by the user"""
         return [x for x in self._user_funcs]
 
-    @prop                       # type: ignore
+    # @prop                       # type: ignore
     @property
     def _current_user_func(self):
         """User function currently active. This function will be run if `run_user_func`
@@ -3369,14 +3388,14 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def metrics(self):
+    def metrics(self) -> Dict[str, Dict]:
         "All the metrics used for evaluation"
         return self._metrics
 
     # TODO: Define what is a sample correctly
     @prop                       # type: ignore
     @property
-    def val_samples(self):
+    def val_samples(self) -> Dict[str, Dict]:
         """Metrics for model output if run on a small (possibly random) subset of
         validation data."""
         return dict((k, v) for k, v in self._metrics["val"].items()
@@ -3385,7 +3404,7 @@ class Trainer:
     # NOTE: Not sure if I want to use dir(self)
     @prop                       # type: ignore
     @property
-    def all_post_epoch_hooks(self):
+    def all_post_epoch_hooks(self) -> Dict[str, Any]:
         """All the post epoch hooks present. All of them may not be called. See
         `post_epoch_hooks_before`."""
         dict_a = dict((x, y) for (x, y) in self.__class__.__dict__.items()
@@ -3402,17 +3421,18 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def post_epoch_hooks_to_run(self):
+    def post_epoch_hooks_to_run(self) -> Dict[str, Callable]:
         """All the post epoch hooks which will be called at the end of an epoch."""
         return self._post_epoch_hooks_to_run
 
     @prop                       # type: ignore
     @property
-    def items_to_log_dict(self):
+    def items_to_log_dict(self) -> Dict[str, Any]:
         """Which of the items will be logged."""
         return self._items_to_log_dict
 
-    def docs(self):
+    # CHECK: Should this be a property?
+    def docs(self) -> Dict[str, Dict[str, str]]:
         """Return all doc strings which are available for any functionality in the
         server. Currently only returns for `props`.
 
@@ -3447,7 +3467,7 @@ class Trainer:
     # TODO: Annealing can be an external function like CheckFunc
     def anneal_lr(self, multiplier=.9):
         self._logi("Annealing Learning Rate")
-        check_losses = [l[2] for l in self.losses if l[0] == self.save_on]
+        check_losses = [l[2] for loss in self.losses if l[0] == self.save_on]
         if len(check_losses) >= 2:
             delta = check_losses[-2] - check_losses[-1]
             if delta < .01 * check_losses[-2]:
@@ -3738,7 +3758,9 @@ class Trainer:
         self._save(self._checkpoint_path)
         self.check_and_save()
 
-    def add_post_epoch_hook(self, hook, name, position, overwrite=False):
+    def add_post_epoch_hook(self, hook: Callable[[], None],
+                            name: str, position: Union[int, str],
+                            overwrite: bool = False):
         if not hasattr(self, "_post_epoch_hooks_to_run"):
             return False, "Cannot add hook without initializing"
         if position not in {"first", "last"} and not isinstance(position, int):

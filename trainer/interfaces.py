@@ -1,4 +1,4 @@
-from typing import Dict, Iterable, Union, List
+from typing import Dict, Iterable, Union, List, Any
 import os
 import sys
 import ssl
@@ -110,12 +110,20 @@ class FlaskInterface:
         return requests.get(self._daemon_url + "_devices").json()
 
     def reserve_gpus(self, gpus: List[int]) -> List[Union[bool, None, str]]:
-        return requests.post(self._daemon_url + "_devices",
-                             json={"action": "reserve", "gpus": gpus, "port": self.api_port})
+        response = requests.post(self._daemon_url + "_devices",
+                                 json={"action": "reserve",
+                                       "gpus": gpus,
+                                       "port": self.api_port})
+        result = json.loads(response.content)
+        return result
 
     def free_gpus(self, gpus: List[int]):
-        return requests.post(self._daemon_url + "_devices",
-                             json={"action": "free", "gpus": gpus, "port": self.api_port})
+        response = requests.post(self._daemon_url + "_devices",
+                                 json={"action": "free",
+                                       "gpus": gpus,
+                                       "port": self.api_port})
+        result = json.loads(response.content)
+        return result
 
     def _update_config(self, config: Dict, overrides: Iterable[Union[int, float, str]]):
         def _check(conf, seq):
@@ -213,14 +221,42 @@ class FlaskInterface:
         else:
             self.context = None
 
-    def trainer_control(self, func_name):
+    def trainer_control(self, func_name: str) -> Any:
+        """Call a trainer `control`
+
+        Tags:
+            trainer, controls
+
+        Map:
+            /<control>: :class:`~trainer.Trainer`.<control>
+
+        Responses:
+            not found: ResponseSchema(404, "Not found", MimeTypes.text, "No such control")
+            success: ResponseSchema(200, "Success", :class:`trainer.Trainer`.<control>,
+                                    :class:`trainer.Trainer`.<control>)
+
+        """
         retval = getattr(self.trainer, func_name)()
         if retval:
             return _dump(retval)
         else:
             return _dump("Performing %s\n" % func_name)
 
-    def trainer_props(self, prop_name):
+    def trainer_props(self, prop_name: str) -> Any:
+        """Return a property `prop_name` from the trainer
+
+        Tags:
+            trainer, properties
+
+        Map:
+            /props/<prop_name>: :class:`~trainer.Trainer`.<prop_name>
+
+        Responses:
+            not found: ResponseSchema(404, "Not found", MimeTypes.text, "Property not found")
+            success: ResponseSchema(200, "Success", :class:`trainer.Trainer`.<prop_name>,
+                                    :class:`trainer.Trainer`.<prop_name>)
+
+        """
         return _dump(self.trainer.__class__.__dict__[prop_name].fget(self.trainer))
 
     def trainer_get(self, func_name):
@@ -304,19 +340,67 @@ class FlaskInterface:
 
         @self.app.route('/_ping')
         def __ping():
+            """Return Pong.
+
+            Tags:
+                iface, status
+
+            Schemas:
+                class Pong(BaseModel):
+                    pong: str = "pong"
+
+            Responses:
+                success: ResponseSchema(200, "Pong", MimeTypes.text, "Pong")
+
+            """
             return "pong"
 
         @self.app.route('/props')
         def __props():
+            """Return list of available trainer properties
+
+            Tags:
+                trainer, properties
+
+            Responses:
+                success: ResponseSchema(200, "List of trainer properties", MimeTypes.json,
+                                        "See :attr:`~trainer.Trainer.props`")
+
+            """
             return _dump(self.trainer.props)
 
         @self.app.route('/docs')
         def __docs():
-            return _dump(["Currently only {props} docs are sent. Rest will be added soon",
-                          self.trainer.docs()])
+            """Return documentation for trainer and interface
+
+            Currently only docs for `~trainer.Trainer.props` are sent. Rest will
+            be added soon.
+
+            Tags:
+                trainer, docs
+
+            Responses:
+                success: ResponseSchema(200, "Success", MimeTypes.json,
+                                        "See :attr:`~trainer.Trainer.props`")
+
+            """
+            return self.trainer.docs()
 
         @self.app.route("/batch_props", methods=["POST"])
         def __batch_props():
+            """Return trainer properties which are requested.
+
+            Instead of retrieving a single prop at a time, this helps reducing
+            the network overhead as one can request multiple props directly.
+
+            Tags:
+                trainer, properties
+
+            Responses:
+                success: ResponseSchema(200, "Success", MimeTypes.json,
+                                        "See :attr:`~trainer.Trainer.props`")
+
+            """
             print(f"{request.json}, {request.data}, {request.form}")
             if hasattr(request, "json"):
                 props = request.json

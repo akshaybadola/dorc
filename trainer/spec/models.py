@@ -10,6 +10,8 @@ class BaseModel(PydanticBaseModel):
 
     """
     class Config:
+        title = None
+        arbitrary_types_allowed = True
         @staticmethod
         def schema_extra(schema, model):
             def subroutine(field, value):
@@ -59,6 +61,10 @@ class ParamsModel(PydanticBaseModel):
             for prop, value in schema.get('properties', {}).items():
                 field = [x for x in model.__fields__.values() if x.alias == prop][0]
                 subroutine(field, value)
+
+
+class TextModel(BaseModel):
+    default: str
 
 
 class DefaultModel(BaseModel):

@@ -12,6 +12,9 @@ import requests
 from flask import Response
 
 
+BasicType = Union[str, int, bool]
+
+
 def diff_as_sets(a: Iterable, b: Iterable) -> set:
     a = set([*a])
     b = set([*b])
@@ -201,6 +204,10 @@ def make_test_interface(setup_path, autoloads_path):
     iface_thread.start()
     time.sleep(1)
     return iface
+
+
+def stop_test_interface():
+    print(requests.get("http://127.0.0.1:12321/" + "_shutdown").content)
 
 
 # def make_apps():

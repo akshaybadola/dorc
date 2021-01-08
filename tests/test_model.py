@@ -1,3 +1,4 @@
+import pytest
 import os
 import shutil
 import unittest
@@ -18,9 +19,14 @@ def get_model(name, config, gpus):
     return Model(name, model_def, params, optimizer, gpus)
 
 
+@pytest.mark.ci
 class ModelTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        import importlib
+        import _setup_local as setup
+        importlib.reload(setup)
+        config = setup.config
         cls.config = config
         if os.path.exists(".test_dir"):
             shutil.rmtree(".test_dir")

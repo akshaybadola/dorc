@@ -1,5 +1,6 @@
 import os
 import shutil
+import pytest
 import torch
 from datetime import datetime
 import unittest
@@ -20,10 +21,15 @@ class SubTrainer(Trainer):
         return self._cuda
 
 
+@pytest.mark.ci
 class TrainerTestDevice(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Setup a simple trainer with MNIST dataset."""
+        import importlib
+        import _setup_local as setup
+        importlib.reload(setup)
+        config = setup.config
         cls.config = config
         if os.path.exists(".test_dir"):
             shutil.rmtree(".test_dir")

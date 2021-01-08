@@ -1,3 +1,4 @@
+import pytest
 import torch
 import unittest
 import sys
@@ -27,6 +28,7 @@ class Net2(torch.nn.Module):
         return x_a + x_b
 
 
+@pytest.mark.ci
 class AutoloadsTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

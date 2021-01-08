@@ -1,12 +1,14 @@
 import unittest
 import sys
-from types import SimpleNamespace
+# from types import SimpleNamespace
 from threading import Thread, Event
+import pytest
 import time
 sys.path.append("../")
 from trainer.task import DiscreteTask, LoopTask, Signals
 
 
+@pytest.mark.threaded
 class TaskTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -19,10 +21,12 @@ class TaskTest(unittest.TestCase):
         # cls.signals = Signals(cls.running_event, cls.aborted_event)
 
     def func(self, result):
-        time.sleep(3)
+        "Wait for 2 seconds and put some data in result"
+        time.sleep(2)
         result.put({"val": True})
 
     def loop_func(self, x):
+        "Return some data after .5 seconds"
         time.sleep(.5)
         return True, x
 

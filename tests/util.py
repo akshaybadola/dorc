@@ -1,8 +1,21 @@
+import pytest
 import sys
 import torch
 sys.path.append("../")
 from trainer.model import Model
 from trainer.autoloads import ClassificationStep
+
+
+@pytest.fixture
+def get_local_config():
+    from _setup_local import config
+    return config
+
+
+@pytest.fixture
+def get_remote_config():
+    from _setup import config
+    return config
 
 
 def get_batch():

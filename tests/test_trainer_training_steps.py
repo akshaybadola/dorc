@@ -1,18 +1,24 @@
 import os
 import shutil
 import unittest
+import pytest
 import torch
 import sys
-from _setup_local import config
+# from _setup_local import config
 from util import get_step, get_model, get_model_batch, get_batch
 sys.path.append("../")
 from trainer.device import all_devices
 
 
+@pytest.mark.ci
 class TrainingStepsTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Setup a simple trainer with MNIST dataset."""
+        import importlib
+        import _setup_local as setup
+        importlib.reload(setup)
+        config = setup.config
         cls.config = config
         if os.path.exists(".test_dir"):
             shutil.rmtree(".test_dir")
@@ -20,8 +26,8 @@ class TrainingStepsTest(unittest.TestCase):
         os.mkdir(".test_dir/test_session")
 
     def test_train_step_no_gpu(self):
-        model = get_model("net", config, [])
-        train_step = get_step({"net": model}, config, "train")
+        model = get_model("net", self.config, [])
+        train_step = get_step({"net": model}, self.config, "train")
         retval = train_step(get_batch())
         self.assertTrue(all(x in retval for x in train_step.returns))
 

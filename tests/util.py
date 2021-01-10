@@ -2,7 +2,7 @@ import pytest
 import sys
 import torch
 sys.path.append("../")
-from trainer.model import Model
+from trainer.trainer.model import Model
 from trainer.autoloads import ClassificationStep
 
 

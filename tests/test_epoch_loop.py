@@ -7,7 +7,7 @@ import sys
 import time
 from _setup_local import config
 sys.path.append("../")
-from trainer.epoch import EpochLoop
+from trainer.trainer.epoch import EpochLoop
 from trainer.trainer import Trainer
 
 

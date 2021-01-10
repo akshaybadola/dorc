@@ -9,7 +9,7 @@ from trainer.autoloads import (ClassificationStep, accuracy, CheckFunc,
                                CheckGreater, CheckGreaterName, CheckLesserName,
                                CheckAccuracy)
 from trainer.autoloads import ModelStep
-from trainer.model import Model
+from trainer.trainer.model import Model
 from trainer.device import all_devices
 
 

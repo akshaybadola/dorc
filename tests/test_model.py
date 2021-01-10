@@ -7,7 +7,7 @@ import sys
 from _setup_local import config
 sys.path.append("../")
 from trainer.device import all_devices
-from trainer.model import Model
+from trainer.trainer.model import Model
 
 
 def get_model(name, config, gpus):

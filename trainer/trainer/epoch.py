@@ -7,8 +7,8 @@ from threading import Thread, Event
 import traceback
 # import multiprocessing as mp
 
-from .task import LoopTaskWithHooks, Signals
-from .device import DeviceMonitor
+from ..task import LoopTaskWithHooks, Signals
+from ..device import DeviceMonitor
 
 
 class BatchVars:

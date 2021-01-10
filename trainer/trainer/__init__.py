@@ -18,23 +18,23 @@ import numpy as np
 from multiprocessing.pool import ThreadPool
 from torch.utils.data import Dataset, DataLoader
 
-from .autoloads import ModelStep
-from .device import (init_nvml, gpu_ranking, gpu_util, gpu_name,
-                     cpu_info, memory_info, DeviceMonitor)
-from .exceptions import ParamsError
-from .util import gen_file_and_stream_logger, deprecated, _dump, concat, diff_as_sets, BasicType
-from .task import Signals
+from ..autoloads import ModelStep
+from ..device import (init_nvml, gpu_ranking, gpu_util, gpu_name,
+                      cpu_info, memory_info, DeviceMonitor)
+from ..exceptions import ParamsError
+from ..util import gen_file_and_stream_logger, deprecated, _dump, concat, diff_as_sets, BasicType
+from ..task import Signals
 from .epoch import Epoch
-from .mods import Modules as Modules
-from .overrides import MyDataLoader, default_tensorify
+from ..mods import Modules as Modules
+from ..overrides import MyDataLoader, default_tensorify
 from .model import Model
-from ._log import Log
+from .._log import Log
 from ._checks import (_check_model_params, _check_trainer_params, _check_data_params,
                       _check_resume_or_init_weights)
-from .helpers import (Tag, ProxyDataset,
--                      get_proxy_dataloader, PropertyProxy, HookDict, Hook,
-                      GET, POST, Exposes, _log_metrics_for_step)
-from .version import __trainer__version__
+from ..helpers import (Tag, ProxyDataset,
+                       get_proxy_dataloader, PropertyProxy, HookDict, Hook,
+                       GET, POST, Exposes, _log_metrics_for_step)
+from ..version import __trainer__version__
 
 
 control = Tag("control")
@@ -53,6 +53,7 @@ from the HTTP API. If batch_vars is another "object" of type BatchVars and
 that is also exposed, then we should be able to access,
 trainer/epoch_runner/batch_vars/{prop}, for some "prop" of batch_vars.
 """
+
 internals = Tag("internals")
 prop_names = {"saves", "gpus", "system_info", "devices", "models", "active_model",
               "epoch", "max_epochs", "iterations", "max_iterations",
@@ -60,7 +61,6 @@ prop_names = {"saves", "gpus", "system_info", "devices", "models", "active_model
               "post_epoch_hooks_to_run", "all_post_epoch_hooks", "items_to_log_dict",
               "current_run", "paused", "best_save", "props", "controls", "methods",
               "extras"}
-
 
 # Protocol:
 # 1. "control" is defined as any method which changes the state of the
@@ -202,7 +202,7 @@ class Trainer:
     def init(self, force=False):
         """Initialize everything.
 
-        If ``force==True`` then initialize even if we were initialized before.
+        If `force==True` then initialize even if we were initialized before.
 
         """
         if self._have_resumed and not force:

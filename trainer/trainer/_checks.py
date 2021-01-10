@@ -1,5 +1,5 @@
 import os
-from .util import diff_as_sets
+from ..util import diff_as_sets
 import torch
 
 

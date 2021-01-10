@@ -7,7 +7,6 @@ import flask
 import re
 import sys
 
-
 from .. import daemon
 from .. import trainer
 from .. import interfaces
@@ -707,6 +706,7 @@ def openapi_spec(app: flask.Flask, excludes: List[str] = []) ->\
 #                 return check_for_redirects(val, func, rule)
 #             else:
 #                 return None
+
 
 # def start_app(app_str: str) -> flask.Flask:
 #     ldict = {}

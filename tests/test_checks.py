@@ -1,9 +1,11 @@
+import pytest
 import unittest
 import sys
 sys.path.append("../")
 from trainer.checks import Checks
 
 
+@pytest.mark.ci
 class ChecksTest(unittest.TestCase):
     def setUp(self):
         self.checks = Checks(print, print)

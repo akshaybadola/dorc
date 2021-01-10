@@ -1,3 +1,4 @@
+import pytest
 import os
 import shutil
 import unittest
@@ -7,6 +8,7 @@ sys.path.append("../")
 from trainer.mods import Modules
 
 
+@pytest.mark.ci
 class ModulesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

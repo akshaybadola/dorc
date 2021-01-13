@@ -1,5 +1,4 @@
-name: Python package
-
+name: Quick Test
 on: [push]
 
 jobs:

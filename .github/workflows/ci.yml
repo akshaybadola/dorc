@@ -11,22 +11,11 @@ jobs:
     - uses: actions/checkout@v2
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v2
-      env:
-        cache-file-name: requirements-${{ matrix.python-version }}.txt
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Cache pip
-      uses: actions/cache@v2
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles(env.cache-file-name) }}
-        restore-keys: |
-          ${{ runner.os }}-pip-${{ hashFiles(env.cache-file-name) }}
-    - name: Install dependencies
+    - name : string check
+      env: 
+          cache-file-name: requirements-${{ matrix.python-version }}.txt     
       run: |
-        python -m pip install --upgrade pip
-        if [ -f requirements-${{ matrix.python-version }}.txt ]; then python -m pip install -r requirements-${{ matrix.python-version }}.txt; fi
-        python -m pip install pytest==6.2.1
-    - name: Test with pytest
-      run: |
-        cd tests && python -m pytest -m ci
+        echo ${{ env.cache-file-name }}
+        echo ${{ hashFiles(env.cache-file-name) }}

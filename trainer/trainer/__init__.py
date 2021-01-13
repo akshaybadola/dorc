@@ -107,21 +107,14 @@ prop_names = {"saves", "gpus", "system_info", "devices", "models", "active_model
 #             raise self.exc
 #         return self.ret
 
+
 # TODO: autoprop decorator, expand name to different properties
 #       based on their name, remove leading "_"
 #       e.g., autoprop(self._training_step) becomes
 #       @property
 #       def training_step(self):
 #           return self._training_step
-
-
 class Trainer:
-    """The :class:`Trainer` class is envisioned as an interface to any training
-    procedure. As of now it's not model agnostic and assumes :mod:`torch` is the
-    underlying backend. But the principles on which it's designed are universal
-    and any backend should be feasible.
-
-    """
     __version__ = __trainer__version__
 
     def __init__(self, model_params, criteria, optimizers, update_functions,

@@ -12,10 +12,22 @@ jobs:
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v2
       with:
-        python-version: ${{ matrix.python-version }}
-    - name : string check
+        python-version: ${{ matrix.python-version }}    
+    - name: Cache pip
+      uses: actions/cache@v2
       env: 
-          cache-file-name: requirements-${{ matrix.python-version }}.txt     
+          cache-file-name: requirements-${{ matrix.python-version }}.txt   
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles(env.cache-file-name) }}
+        restore-keys: |
+          ${{ runner.os }}-pip-${{ hashFiles(env.cache-file-name) }}
+    - name: Install dependencies
       run: |
-        echo ${{ env.cache-file-name }}
-        echo ${{ hashFiles(env.cache-file-name) }}
+        python -m pip install --upgrade pip
+        if [ -f requirements-${{ matrix.python-version }}.txt ]; then python -m pip install -r requirements-${{ matrix.python-version }}.txt; fi
+        python -m pip install pytest==6.2.1
+    - name: Test with pytest
+      run: |
+        cd tests && python -m pytest -m ci
+        

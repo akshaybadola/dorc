@@ -14,6 +14,7 @@ Subpackages
 
    trainer.daemon
    trainer.spec
+   trainer.trainer
 
 Submodules
 ----------
@@ -25,15 +26,12 @@ Submodules
    trainer.checks
    trainer.config
    trainer.device
-   trainer.epoch
    trainer.exceptions
    trainer.helpers
    trainer.interfaces
-   trainer.model
    trainer.mods
    trainer.overrides
    trainer.simple_trainer
    trainer.task
-   trainer.trainer
    trainer.util
    trainer.version

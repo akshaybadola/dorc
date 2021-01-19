@@ -19,7 +19,7 @@ def get_model(name, config, gpus):
     return Model(name, model_def, params, optimizer, gpus)
 
 
-@pytest.mark.ci
+@pytest.mark.quick
 class ModelTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -1,9 +1,14 @@
 import pytest
 import sys
+import shutil
+import datetime
+import os
 import torch
 sys.path.append("../")
+from trainer.trainer import Trainer
 from trainer.trainer.model import Model
 from trainer.autoloads import ClassificationStep
+
 
 
 def make_daemon():

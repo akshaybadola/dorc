@@ -1,4 +1,4 @@
-from typing import Callable, Iterable, List, Dict, Any, Tuple, Union, Set
+from typing import Callable, Iterable, List, Dict, Any, Tuple, Union, Set, Type
 import time
 import numpy as np
 import queue
@@ -112,7 +112,7 @@ def _log_post_batch_hook(epoch: "Epoch", **kwargs):
         return False, f"{e}" + "\n" + traceback.format_exc()
 
 
-def _wait_for_gpu_cooldown_post_batch_hook(epoch: "Epoch", **kwargs):
+def _wait_for_gpu_cooldown_post_batch_hook(epoch: Type["Epoch"], **kwargs):
     if hasattr(epoch, "device_mon"):
         dm = epoch.device_mon
         if hasattr(epoch, "_logd"):
@@ -139,6 +139,20 @@ def _wait_for_gpu_cooldown_post_batch_hook(epoch: "Epoch", **kwargs):
 
 
 class EpochLoop(LoopTaskWithHooks):
+    """An instance of :class:`~trainer.task.LoopTaskWithHooks`.
+
+    Contains additional functionality over a
+    :class:`~trainer.task.LoopTaskWithHooks` to fetch data, gather results and
+    use a :class:`~trainer.device.DeviceMonitor`.
+
+    Args:
+        device_mon: An instance of :class:`DeviceMonitor`
+        max_iters: The max number of iterations to run
+
+    See :class:`~trainer.task.LoopTaskWithHooks` for description of arguments
+    which are passed directly to it.
+
+    """
     def __init__(self, func: Callable, signals: Signals,
                  data_iterator: Iterable, hooks: Iterable[Callable[[], None]],
                  device_mon: DeviceMonitor, max_iters: Union[int, None] = None):
@@ -157,10 +171,6 @@ class EpochLoop(LoopTaskWithHooks):
     def finish(self):
         super().finish()
         self._iter_finished = True
-
-    def _run_hooks(self, **kwargs):
-        for hook in self._hooks:
-            hook(**kwargs)
 
     # NOTE: What if we're waiting to either:
     #       a. put data on to a full queue
@@ -269,7 +279,9 @@ class EpochLoop(LoopTaskWithHooks):
 
 class Epoch:
     """Epoch is a class which manages the loop (train, val etc.) spawning, runs
-    hooks and gathers the results
+    hooks and gathers the results.
+
+    Each loop is an instance of :class:`EpochLoop` and thus supports
 
     """
     def __init__(self, metrics: Dict[str, Dict], signals: Signals,

@@ -8,7 +8,7 @@ sys.path.append("../")
 from trainer.mods import Modules
 
 
-@pytest.mark.ci
+@pytest.mark.quick
 class ModulesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

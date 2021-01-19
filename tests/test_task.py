@@ -15,12 +15,8 @@ class TaskTest(unittest.TestCase):
         cls.running_event = Event()
         cls.aborted_event = Event()
         cls.running_event.clear()
-        # cls.signals = SimpleNamespace()
-        # cls.signals.paused = cls.running_event
-        # cls.signals.aborted = lambda: cls.aborted_event.is_set()
-        # cls.signals = Signals(cls.running_event, cls.aborted_event)
 
-    def func(self, result):
+    def put_func(self, result):
         "Wait for 2 seconds and put some data in result"
         time.sleep(2)
         result.put({"val": True})
@@ -30,11 +26,11 @@ class TaskTest(unittest.TestCase):
         time.sleep(.5)
         return True, x
 
-    def test_discrete(self):
+    def test_discrete_init_pause_resume_finish(self):
         self.running_event.clear()
         self.aborted_event.clear()
         self.signals = Signals(self.running_event, self.aborted_event)
-        task = DiscreteTask(self.func, self.signals)
+        task = DiscreteTask(self.put_func, self.signals)
         for x in task._states:
             with self.subTest(i=x):
                 self.assertTrue(hasattr(task, x))
@@ -54,7 +50,7 @@ class TaskTest(unittest.TestCase):
         self.running_event.clear()
         self.aborted_event.clear()
         self.signals = Signals(self.running_event, self.aborted_event)
-        task = DiscreteTask(self.func, self.signals)
+        task = DiscreteTask(self.put_func, self.signals)
         for x in task._states:
             with self.subTest(i=x):
                 self.assertTrue(hasattr(task, x))
@@ -66,7 +62,10 @@ class TaskTest(unittest.TestCase):
         self.assertTrue(task.finished)
         self.assertEqual(task.status, (False, "Terminated"))
 
-    def test_loop(self):
+    def test_discrete_catch_result_or_error(self):
+        pass
+
+    def test_loop_init_pause_resume_finish(self):
         self.running_event.clear()
         self.aborted_event.clear()
         self.signals = Signals(self.running_event, self.aborted_event)
@@ -118,6 +117,9 @@ class TaskTest(unittest.TestCase):
         self.assertFalse(task.waiting)
         self.assertFalse(task.running)
         self.assertTrue(task.init)
+
+    def test_loop_task_with_hooks(self):
+        pass
 
 
 if __name__ == '__main__':

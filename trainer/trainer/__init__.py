@@ -18,19 +18,17 @@ import numpy as np
 from multiprocessing.pool import ThreadPool
 from torch.utils.data import Dataset, DataLoader
 
-from ..autoloads import ModelStep
 from ..device import (init_nvml, gpu_ranking, gpu_util, gpu_name,
                       cpu_info, memory_info, DeviceMonitor)
-from ..exceptions import ParamsError
 from ..util import gen_file_and_stream_logger, deprecated, _dump, concat, diff_as_sets, BasicType
 from ..task import Signals
 from .epoch import Epoch
 from ..mods import Modules as Modules
 from ..overrides import MyDataLoader, default_tensorify
-from .model import Model
+from .model import Model, ModelStep
+from .config import Metric
 from .._log import Log
-from ._checks import (_check_model_params, _check_trainer_params, _check_data_params,
-                      _check_resume_or_init_weights)
+from . import config
 from ..helpers import (Tag, ProxyDataset,
                        get_proxy_dataloader, PropertyProxy, HookDict, Hook,
                        GET, POST, Exposes, _log_metrics_for_step)
@@ -118,7 +116,7 @@ class Trainer:
     __version__ = __trainer__version__
 
     def __init__(self, model_params, criteria, optimizers, update_functions,
-                 extra_metrics, trainer_params, data, dataloader_params, data_dir,
+                 extra_metrics, trainer_params, data_params, dataloader_params, data_dir,
                  production=False, log_levels={"file": "debug", "stream": "info"}):
         """Initializes the :class:`Trainer` object. This is supposed to be a catch all
         trainer which is robust and easy to train and can generate graphs
@@ -149,48 +147,69 @@ class Trainer:
         #       Mostly Done.
         # Basic assign parameters
 
-        # __props is initialized early and anything that's to be exposed has to be
-        # appended to the list. _init_property_vars should check if everything in __props
-        # is a property or not
-        self.__props = set()
-        self._model_params = model_params
-        self._criteria_params = criteria
-        self._optimizers = optimizers
-        self._data = data
-        self._dataloader_params = dataloader_params
-        self._trainer_params = trainer_params
-        self._extra_metrics = extra_metrics
-        self._update_functions = update_functions
+        if "params" in update_functions and update_functions["params"]:
+            update_functions = config.UpdateFunctions(
+                function=update_functions["function"],
+                params=config.UpdateFunctionsParams(**update_functions["params"]))
+        else:
+            update_functions = config.UpdateFunctions(**update_functions)
+
+        self.config = config.Config(model_params={k: config.ModelParams(**v)
+                                                  for k, v in model_params.items()},
+                                    trainer_params=config.TrainerParams(**trainer_params),
+                                    criteria={k: config.Criterion(**v)
+                                              for k, v in criteria.items()},
+                                    optimizers={k: config.Optimizer(**v)
+                                                for k, v in optimizers.items()},
+                                    data_params=config.DataParams(name=data_params["name"],
+                                                                  train=data_params["train"],
+                                                                  val=data_params["val"],
+                                                                  test=data_params["test"]),
+                                    dataloader_params=config.DataLoaderParams(
+                                        **dataloader_params),
+                                    update_functions=update_functions,
+                                    extra_metrics={k: Metric(**v)
+                                                   for k, v in extra_metrics.items()},
+                                    log_levels=config.LogLevelParams(**log_levels),
+                                    data_dir=data_dir,
+                                    production=production)
         # static attributes
         self._data_dir = data_dir
         self.production = production
+        # logging is started first of all
+        self._init_logging()
+        # then modules and save dir
+        self._init_saves_and_modules()
+        # resume initially is false
+        self._have_resumed = False
+        # FIXME: NEW Remove this
+        self._init_static_vars()
+        self._init_property_vars()
+        if self.config.trainer_params.resume or self.config.trainer_params.init_weights:
+            self._init_device()
+            self._init_models()
+            self._check_resume_or_init_weights()
+
+    def _init_saves_and_modules(self):
         self._savedir = os.path.join(self._data_dir, "savedir")
-        self._logdir = os.path.join(self._data_dir, "logs")
         self._modules_dir = os.path.join(self._data_dir, "modules")
         if not os.path.exists(self._savedir):
             os.mkdir(self._savedir)
+        self._logi(f"Savedir is {os.path.abspath(self._savedir)}")
+
+    def _init_logging(self):
+        self._logdir = os.path.join(self._data_dir, "logs")
         if not os.path.exists(self._logdir):
             os.mkdir(self._logdir)
         self._logfile, self._logger = gen_file_and_stream_logger(
-            self._logdir, "trainer", log_levels["stream"], log_levels["file"])
+            self._logdir, "trainer", self.config.log_levels.file,
+            self.config.log_levels.stream)
         log = Log(self._logger, self.production)
         self._logd = log._logd
         self._loge = log._loge
         self._logi = log._logi
         self._logw = log._logw
         self._logi(f"Initialized logger in {os.path.abspath(self._logdir)}")
-        self._logi(f"Savedir is {os.path.abspath(self._savedir)}")
-        # check all params here
-        self._have_resumed = False
-        self._sanity_check()
-        self._init_static_vars()
-        self._init_property_vars()
-        # self._check_exports()
-        if trainer_params["resume"] or ("init_weights" in trainer_params and
-                                        trainer_params["init_weights"]):
-            self._init_device()
-            self._init_models()
-            _check_resume_or_init_weights(self)
 
     def init(self, force=False):
         """Initialize everything.
@@ -207,12 +226,46 @@ class Trainer:
         else:
             self._init_all()
 
+    def _check_resume_or_init_weights(self):
+        if self.trainer_params.init_weights:
+            self._logw("Warning! Loading weights directly to model")
+            load_state = torch.load(self.trainer_params["init_weights"])
+            for name in self._models.names:
+                self._models.load_weights(name, load_state["models"][name])
+            self._resume_path = None
+        elif self.trainer_params.resume:  # implies resume from somewhere
+            if self.trainer_params.resume_best:
+                # try to find and resume best weights
+                self._loge("Resume from best is not yet implemented")
+                self._resume_path = None
+            elif self.trainer_params.resume_weights:
+                if os.path.exists(self.trainer_params.resume_weights):
+                    self._resume_path = self.trainer_params.resume_weights
+                else:
+                    self._logw("Given resume weights do not exist")
+                    self._resume_path = None  # set appropriate path
+            else:
+                # if both resume_best and resume_weights are false
+                # AND resume is true AND checkpoint_path is valid
+                if os.path.exists(self._checkpoint_path):
+                    self._logi("Checkpoint exists. Will resume from there")
+                    self._resume_path = self._checkpoint_path
+                else:
+                    self._logi("No checkpoint found. Will train from beginninng")
+                    self._resume_path = None
+        else:
+            # Don't resume
+            self._resume_path = None
+        if self.trainer_params["resume"] and self._resume_path:
+            self._logi(f"Resuming from {self._resume_path}")
+            self._resume_from_path(self._resume_path)
+
+
     def _init_all(self):
         self._logi("Initializing trainer")
         self._init_device()
         self._init_models()
-        self._init_dataloaders()
-        # self._init_criteria_optimizers()
+        self._init_data_and_dataloaders()
         self._init_metrics()
         self._init_update_funcs()
         self._init_state_vars()
@@ -243,24 +296,7 @@ class Trainer:
     #     self._logw(f"Additional properties {additional}")
     #     import ipdb; ipdb.set_trace()
 
-    # START: Checks
-    def _sanity_check(self):
-        """Checks are imported from the file _checks.py
-
-        :returns: None
-        :rtype: None
-
-        """
-        self._logi("Performing Sanity Check")
-        status, message = _check_model_params(self)   # checks model params and defs both
-        status, message = _check_trainer_params(self)  # checks optimizer and stuff also
-        status, message = _check_data_params(self)     # checks data and dataloaders
-        if not status:
-            raise ParamsError("data", message)
-    # END: Checks
-
     # START: Init Funcs
-
     # CHECK: It does beg the questions that what happens when the system
     #        reboots? Or when a reinitialization occurs.
     def _init_device(self):
@@ -285,93 +321,66 @@ class Trainer:
         # What if we're resuming and devices are already initialized?
         # if self._devices_initialized:
         #     return
-        self._check_gpus_param()
         self._maybe_init_gpus()
         self._set_device()
 
-    def _check_gpus_param(self):
-        gpus = self._trainer_params["gpus"]
-        try:
-            if isinstance(gpus, bool):
-                self._logw(f"GPUS can't be boolean. Given {gpus}. Will run on CPU")
-                self._gpus: List[int] = [-1]
-            elif isinstance(gpus, list) and all([isinstance(x, int) for x in gpus]):
-                if all(lambda x: x >= 0 for x in gpus):
-                    self._gpus = gpus
-                else:
-                    self._logw(f"Incorrect GPUs {gpus} specified." +
-                               " Will run on CPU")
-                    self._gpus = [-1]
-            elif isinstance(gpus, str):
-                gpus_str = [x for x in gpus.split(",") if x]
-                if gpus_str:
-                    self._gpus = list(map(int, gpus_str))
-                else:
-                    self._gpus = [-1]
-            elif isinstance(gpus, int) and gpus >= 0:
-                self._gpus = [gpus]
-            else:
-                self._logw(f"Incorrect GPUS {gpus} specified. Will run on CPU")
-                self._gpus = [-1]
-        except Exception as e:
-            self._loge(f"Error occured {e} while setting GPUS {gpus}. Will run on CPU.")
-            self._gpus = [-1]
-
     def _maybe_init_gpus(self):
-        if self._gpus != [-1]:
-            available_gpus = [x for x in self._gpus if x not in self.reserved_gpus]
-            unvailable_gpus = set(available_gpus) - set(self._gpus)
-            self._gpus = available_gpus
-            if not self.reserve_gpus(self._gpus)[0]:
-                self._loge(f"Could not reserve gpus {self._gpus}")
-                self._gpus = [-1]
+        if self.gpus == []:
+            self.gpus = [-1]
+        if self.gpus != [-1]:
+            available_gpus = [x for x in self.gpus if x not in self.reserved_gpus]
+            unvailable_gpus = set(available_gpus) - set(self.gpus)
+            self.gpus = available_gpus
+            if not self.reserve_gpus(self.gpus)[0]:
+                self._loge(f"Could not reserve gpus {self.gpus}")
+                self.gpus = [-1]
             else:
-                self._logd(f"Reserved gpus {self._gpus}")
+                self._logd(f"Reserved gpus {self.gpus}")
             try:
-                self._device_handles, removed = init_nvml(self._gpus)
+                self._device_handles, removed = init_nvml(self.gpus)
                 self._loge(f"Devices {unvailable_gpus} are already in use. " +
                            f"Will only set {available_gpus}")
                 self._logd(f"Initialized devices {[*self._device_handles.keys()]} with names:\n" +
                            f"{[gpu_name(x) for x in self._device_handles.values()]}")
                 if removed:
                     self._logw(f"Devices {removed} are not supported")
-                self._gpus = [*self._device_handles.keys()]
+                self.gpus = [*self._device_handles.keys()]
             except Exception as e:
-                self._loge(f"Could not initialize devices {self._gpus}. Error {e}")
+                self._loge(f"Could not initialize devices {self.gpus}. Error {e}")
                 self._device_handles = None
         else:
             self._device_handles = None
 
     def _set_device(self):
         have_cuda = torch.cuda.is_available()
-        gpus_given = self._gpus and (not self._gpus == [-1])
-        cuda_given = self._trainer_params["cuda"]
+        gpus_given = self.gpus and (not self.gpus == [-1])
+        cuda_given = self.trainer_params.cuda
         if not gpus_given:
             self._logd("No gpus given. Will run on cpu")
             # self._device = torch.device("cpu")
-            self._gpus = [-1]
+            self.gpus = [-1]
         elif cuda_given and not have_cuda:
             self._logw("cuda specified but not available. Will run on cpu")
             # self._device = torch.device("cpu")
-            self._gpus = [-1]
+            self.gpus = [-1]
         elif gpus_given and not cuda_given:
             self._logw("cuda not specified but gpus given. Will run on cpu")
             # self._device = torch.device("cpu")
-            self._gpus = [-1]
-        elif cuda_given and have_cuda and self._gpus != [-1] and len(self._gpus) == 1:
-            self._logi(f"GPU {self._gpus[0]} detected and specified")
+            self.gpus = [-1]
+        elif cuda_given and have_cuda and self.gpus != [-1] and len(self.gpus) == 1:
+            self._logi(f"GPU {self.gpus[0]} detected and specified")
             # self._device = torch.device(f"cuda:{self._gpus[0]}")
-        elif cuda_given and have_cuda and len(self._gpus) > 1:
-            self._logi(f"Multipule gpus {self._gpus} specified." +
+        elif cuda_given and have_cuda and len(self.gpus) > 1:
+            self._logi(f"Multipule gpus {self.gpus} specified." +
                        " Will allocate according to model_params")
         #     if torch.cuda.device_count() >= len(self._gpus):
         #         self._logi(f"{torch.cuda.device_count()} gpus are available")
-        #         if "parallel" in self._trainer_params:
+        #         if "parallel" in self.trainer_params:
         #             # NOTE: I always get confused by this statement It's
         #             #       somewhhat mirthful and one has to see the next line
         #             #       to make sense of it.
-        #             self._logi(f"Parallel call be functional {self._trainer_params['parallel']}")
-        #             # self._device = self._trainer_params["parallel"]
+        #             self._logi(f"Parallel call be functional {self.trainer_params['parallel']}")
+        #             # self._device = self.trainer_params["parallel"]
         #         else:
         #             self._logi("Parallel call be Module dataparallel")
         #             # self._device = "dataparallel"
@@ -382,8 +391,8 @@ class Trainer:
         #     self._logi("cuda not specified. Using cpu")
         #     # self._device = torch.device("cpu")
         #     self._gpus = [-1]
-        torch.cuda.manual_seed(self._trainer_params["seed"])
-        # for t, v in self._trainer_params.items():
+        torch.cuda.manual_seed(self.trainer_params.seed)
+        # for t, v in self.trainer_params.items():
         #     if t in self.__class__.__dict__:
         #         self._logw(f"Tried overwriting attribute {t}! Denied.")
         #     elif t != "gpus":
@@ -391,14 +400,15 @@ class Trainer:
         self._devices = {}
         self._devices_initialized = True
 
-    # FIXME: Replcae these errors and types with pydantic
+    # FIXME: NEW Replace with pydantic
     def _init_static_vars(self):
-        self.adhoc_error_dict = {"required_oneof_[function]": ["train", "val", "test", "user_func_name"],
-                                 "required_for_[function]": {"epoch": "[int|string]_which_epoch",
-                                                             "data": "[string]_train_val_or_test",
-                                                             "num_or_fraction":
-                                                             "[int|float]_number_of_points_or_fraction_of_dataset",
-                                                             "callback": "[string]_name_of_callback_function"}}
+        self.adhoc_error_dict = {
+            "required_oneof_[function]": ["train", "val", "test", "user_func_name"],
+            "required_for_[function]": {"epoch": "[int|string]_which_epoch",
+                                        "data": "[string]_train_val_or_test",
+                                        "num_or_fraction":
+                                        "[int|float]_number_of_points_or_fraction_of_dataset",
+                                        "callback": "[string]_name_of_callback_function"}}
 
     def _init_state_vars(self):
         """Initialize default state variables.
@@ -413,35 +423,6 @@ class Trainer:
 
         """
         # params and state properties
-        self.__props.add("saves")
-        self.__props.add("gpus")
-        self.__props.add("system_info")
-        self.__props.add("device")
-        self.__props.add("models")
-        self.__props.add("active_model")
-        self.__props.add("epoch")
-        self.__props.add("max_epochs")
-        self.__props.add("iterations")
-        self.__props.add("max_iterations")
-        self.__props.add("updatable_params")
-        self.__props.add("all_attrs")
-        self.__props.add("all_params")
-        self.__props.add("metrics")
-        self.__props.add("post_epoch_hooks_to_run")
-        self.__props.add("all_post_epoch_hooks")
-        self.__props.add("items_to_log_dict")  # CHECK: WTF is this?
-
-        # running status
-        # self.__props.add("aborted")
-        self.__props.add("current_run")
-        self.__props.add("paused")
-        self.__props.add("best_save")  # FIXME: Really?
-
-        # Other exposed API
-        self.__props.add("props")
-        self.__props.add("controls")
-        self.__props.add("methods")
-        self.__props.add("extras")
 
         self._logi("Initializing State Variables")
 
@@ -484,7 +465,7 @@ class Trainer:
         self._epoch = 0
         self._iterations = 0
         # self._init_nvml()
-        steps = self._trainer_params["training_steps"]
+        steps = self.trainer_params.training_steps
         # NOTE: In theory user func can be a task, but not right now
         if "iterations" in steps:
             self._transition_steps = {"main": {"train", "val", "test", "none"},
@@ -524,13 +505,10 @@ class Trainer:
     #       Or something like that.
     def _init_property_vars(self):
         self._logi("Initializing Property Variables")
-        if "extra_report" not in self._trainer_params:
-            self._logd("No Extra Reportables")
-            self.extra_report = {}
+        self.extra_report = {}
         self._user_funcs = {}
         self._current_user_func_name = None
         self._current_user_func_params = None
-        self.__props.add("user_funcs")
         self.load_weights.__dict__["content_type"] = "form"
         self.add_model.__dict__["content_type"] = "form"
         self.add_user_funcs.__dict__["content_type"] = "form"
@@ -549,9 +527,9 @@ class Trainer:
         """Initialize models with a :class:`~trainer.model.Model` class
 
         Criteria are are initialized also.  :attr:`Trainer.model_params` should
-        be a :class:`dict` of {model_name: model_params}.  Device allocation can
-        be specified with giving `gpus` in model_params. There can be overlap
-        between models and GPUs and it is left up to the user.
+        be a :class:`dict` of {model_name: :class:`config.ModelParams`}.  Device
+        allocation can be specified with giving `gpus` in model_params. There
+        can be overlap between models and GPUs and it is left up to the user.
 
         `gpus` can also be specified as "auto" or "parallel".  If "auto" is
         given then certain heuristics are applied according which of the models
@@ -570,16 +548,15 @@ class Trainer:
         """
         self._logi("Initializing Criteria and Models.")
         self.criteria = {}
-        for k, v in self._criteria_params.items():
-            self.criteria[k] = v["function"](**v["params"])
+        for k, v in self.criteria_params.items():
+            self.criteria[k] = v.function(**v.params)
         # TODO: Model parallel and sharding
         # NOTE: if only one model load it
         self._models = {}
-        if "load_all" in self.trainer_params and self.trainer_params["load_all"]:
+        if self.trainer_params.load_all:
             load_models = self.model_params.keys()
         else:
-            load_models = [k for k, v in self._model_params.items()
-                           if "load" in v and v["load"]]
+            load_models = [k for k, v in self.model_params.items() if v.load]
         if self.gpus and self.gpus != [-1]:
             self.allocate_devices(load_models)
         else:
@@ -604,13 +581,14 @@ class Trainer:
 
     def allocate_devices(self, load_models: Union[str, List[str]] = [],
                          unload_models: Union[str, List[str]] = []):
-        """Spread the devices over the load_models models.
+        """Spread the devices over the `load_models` models.
 
-        First remove the devices from self.devices and then allocate according
-        to parameters.
+        First remove the devices from :attr:`devices` and then allocate
+        according to parameters.
 
         Args:
-            load_models: names and params of models which should be load_models
+            load_models: names and params of models which should be loaded
+            into system memory
 
         For allocation, explicitly mentioned gpus are given preference
         first. After that `auto` is given preference over `parallel`.
@@ -623,15 +601,15 @@ class Trainer:
         load_models = [*load_models]
         unload_models = [*unload_models]
         for model_name in unload_models:
-            if model_name in self._model_params:
+            if model_name in self.model_params:
                 self.devices[model_name] = []
             else:
                 self._logw(f"{model_name} not in known models")
         if len(load_models) == 1:
             model_name = load_models[0]
-            if model_name in self._model_params:
-                gpus = self._model_params[model_name]["gpus"]
-                remaining = set(self._gpus) - set(self.allocated_devices)
+            if model_name in self.model_params:
+                gpus = self.model_params[model_name].gpus
+                remaining = set(self.gpus) - set(self.allocated_devices)
                 if gpus == "auto" or gpus == "parallel":
                     self.devices[model_name] = [x for x in remaining]
                 else:
@@ -642,18 +620,18 @@ class Trainer:
             auto = []
             parallel = []
             for model_name in load_models:
-                if model_name in self._model_params:
-                    if self._model_params[model_name]["gpus"] == "auto":
+                if model_name in self.model_params:
+                    if self.model_params[model_name].gpus == "auto":
                         auto.append(model_name)
-                    elif self._model_params[model_name]["gpus"] == "parallel":
+                    elif self.model_params[model_name].gpus == "parallel":
                         parallel.append(model_name)
                     else:
-                        self.devices[model_name] = [x for x in self._model_params[model_name]["gpus"]
-                                                    if x in self._gpus and
+                        self.devices[model_name] = [x for x in self.model_params[model_name].gpus
+                                                    if x in self.gpus and
                                                     x not in self.allocated_devices]
                 else:
                     self._logw(f"{model_name} not in known models")
-            remaining = set(self._gpus) - set(self.allocated_devices)
+            remaining = set(self.gpus) - set(self.allocated_devices)
             if len(remaining) > 0:
                 ranking = [*gpu_ranking(self._device_handles).items()]
                 num_params = {x: 0 for x in auto}
@@ -679,37 +657,37 @@ class Trainer:
                             self.devices[model_name] = [ranking[i][0]]
                         else:
                             self.devices[model_name] = []
-                remaining = set(self._gpus) - set(self.allocated_devices)
+                remaining = set(self.gpus) - set(self.allocated_devices)
                 if len(parallel) >= len(remaining):
                     # parallel_devices = self.best_parallel_devices(parallel)
                     for model_name in parallel:
-                        if model_name in self._model_params:
+                        if model_name in self.model_params:
                             # self.devices[name] = parallel_devices[name]
                             pass
                         else:
                             self._logw(f"{model_name} not in known models")
             else:
                 for model_name in auto:
-                    if model_name in self._model_params:
+                    if model_name in self.model_params:
                         self.devices[model_name] = []
                     else:
                         self._logw(f"{model_name} not in known models")
                 for model_name in parallel:
-                    if model_name in self._model_params:
+                    if model_name in self.model_params:
                         self.devices[model_name] = []
                     else:
                         self._logw(f"{model_name} not in known models")
 
     def _model_init_helper(self, model_name) -> Union[Model, bool]:
-        model = self._model_params[model_name]["model"]
-        model_params = self._model_params[model_name]["params"]
+        model = self.model_params[model_name].model
+        model_params = self.model_params[model_name].params
         try:
-            optim_name = self._model_params[model_name]["optimizer"]
-            if optim_name in self._optimizers:
-                optim_func = self._optimizers[optim_name]["function"]
+            optim_name: str = self.model_params[model_name].optimizer
+            if optim_name in self.optimizers:
+                optim_func: Callable = self.optimizers[optim_name].function
             elif hasattr(torch.optim, optim_name):
                 optim_func = getattr(torch.optim, optim_name)
-            optim_params = self._optimizers[optim_name]["params"]
+            optim_params: Dict = self.optimizers[optim_name].params
             optimizer = {"name": optim_name,
                          "function": optim_func,
                          "params": optim_params}
@@ -728,7 +706,7 @@ class Trainer:
     @methods
     def load_model(self, name: str) -> Tuple[bool, str]:
         """Load a model into system and device memory with given `name`."""
-        if name in self._model_params:
+        if name in self.model_params:
             return self._models[name].load_into_memory()
         else:
             return False, f"Model {name} not present"
@@ -739,22 +717,22 @@ class Trainer:
         """Unload a model from system with given `name`.
 
         Frees up resources allocated to the model."""
-        if name in self._model_params:
+        if name in self.model_params:
             return self._models[name].unload()
         else:
             return False, f"Model {name} not present"
 
-    def _init_dataloaders(self):
+    def _init_data_and_dataloaders(self):
         """Initialize the dataloaders.
 
-        Dataloaders are initialized from a ``{step, data, params}`` in which the
+        Dataloaders are initialized from a `{step, data, params}` in which the
         corresponding dataloaders are initialized with the given data.
 
-        ``step`` here corresponds to the ``train\\val\\test`` step and so are
-        ``data`` and ``params`` respectively. As such separate datasets can
+        `step` here corresponds to the `train\\val\\test` step and so are
+        `data` and `params` respectively. As such separate datasets can
         always be initialized with different paramters at any given instance.
 
-        They can also be initialized from a function like ``get_dataloader``
+        They can also be initialized from a function like `get_dataloader`
         with certain parameters, so that a complex dataloader with various
         transformations and arrangements on the data can be loaded `ab initio`.
 
@@ -767,23 +745,21 @@ class Trainer:
 
         Data can be given as either:
 
-            a. ``data["train"]`` etc. in the parameters
+            a. `data["train"]` etc. in the parameters
             b. Or for a custom dataloader can be given as a function which
                provides the dataloader along with params.
 
-        Data and dataloader can be skipped entirely (aside from "train") if both
-        data[step] and dataloader_params[step] are None.
+        Data and dataloader can be skipped entirely (aside from `train`) if both
+        `data[step]` and `dataloader_params[step]` are `None`.
 
-        If however e.g., ``data["val"]`` is ``None`` and
-        ``dataloader_params["val"]`` is not ``None``, it implies that "val" data
+        If however e.g., `data["val"]` is `None` and
+        `dataloader_params["val"]` is not `None`, it implies that "val" data
         was not to be skipped. Then the second case is checked and a "function"
         has to be present which will provide the dataloader.
 
         """
         self._logi("Initializing Dataloaders")
 
-        # FIXME: Remove this and streamline data and loaders
-        #        Maybe initialize dataloaders based on update_funcs? Not sure
         def _check_raw(loader, name):
             if loader and not hasattr(loader, "dataset"):
                 self._logw(name + " loader doesn't have a dataset")
@@ -793,34 +769,43 @@ class Trainer:
             elif loader and hasattr(loader.dataset, "_get_raw"):
                 self._logw(name + " dataset has \"_get_raw\"" +
                            " Drawing samples from validation data is available!")
-        for loader, params in self._dataloader_params.items():
-            if loader == "train":
-                if self._data is None:
-                    self.train_loader = params["function"](**params["function_args"])
-                else:
-                    self.train_loader = DataLoader(self._data["train"], **params)
-                _check_raw(self.train_loader, "Train")
-            elif loader == "val":
-                if params:
-                    if self._data is None:
-                        self.val_loader = params["function"](**params["function_args"])
-                    else:
-                        self.val_loader = DataLoader(self._data["val"], **params)
-                else:
-                    self._logi("No Val loader. Will not do validation")
-                    self.val_loader = None
-                _check_raw(self.val_loader, "Val")
-            elif loader == "test":
-                if params:
-                    if self._data is None:
-                        self.test_loader = params["function"](**params["function_args"])
-                    else:
-                        self.test_loader = DataLoader(self._data["test"], **params)
-                else:
-                    self._logi("No Test loader. Will not do testing")
-                    self.test_loader = None
+
+        if self.data_params.train:
+            self.train_loader = DataLoader(self.data_params.train,
+                                           **self.dataloader_params.train.__dict__)
+            _check_raw(self.train_loader, "Train")
+            if self.data_params.val:
+                self.val_loader = DataLoader(self.data_params.val,
+                                             **self.dataloader_params.val.__dict__)
+                _check_raw(self.train_loader, "Val")
+            else:
+                self._logi("No Val loader. Will not do validation")
+                self.val_loader = None
+            if self.data_params.test:
+                self.test_loader = DataLoader(self.data_params.test,
+                                              **self.dataloader_params.test.__dict__)
                 _check_raw(self.test_loader, "Test")
-        return True, None
+            else:
+                self._logi("No Test loader. Will not do testing")
+                self.test_loader = None
+        else:
+            self.train_loader = self.data_params.loader.train(
+                **self.data_params.loader.train_params)
+            _check_raw(self.train_loader, "Train")
+            if self.data_params.loader.val:
+                self.val_loader = self.data_params.loader.val(
+                    **self.data_params.loader.val_params)
+                _check_raw(self.train_loader, "Val")
+            else:
+                self._logi("No Val loader. Will not do validation")
+                self.val_loader = None
+            if self.data_params.loader.test:
+                self.test_loader = self.data_params.loader.test(
+                    **self.data_params.loader.test_params)
+                _check_raw(self.test_loader, "Test")
+            else:
+                self._logi("No Test loader. Will not do testing")
+                self.test_loader = None
 
     def _restore_dataloader_params(self, params):
         self._logd("Restoring dataloader_params")
@@ -828,7 +813,7 @@ class Trainer:
                 for x, y in params.items()]):
             self._logw("collate_fn will not be restored")
         for k, v in params.items():
-            if v is not None and set(v.keys()) != set(self._dataloader_params[k].keys()):
+            if v is not None and set(v.keys()) != set(self.dataloader_params[k].keys()):
                 self._logw(f"Dataloader params for {k} differ. Not restoring")
             elif v is not None:
                 for a, b in v.items():
@@ -837,75 +822,93 @@ class Trainer:
                         if isinstance(value, dict):
                             for x, y in value.items():
                                 if isinstance(y, str) and not y.startswith("callable_"):
-                                    self._dataloader_params[k][a][x] = y
+                                    self.dataloader_params[k][a][x] = y
                         else:
                             if isinstance(value, str) and not value.startswith("callable_"):
-                                self._dataloader_params[k][a] = value
+                                self.dataloader_params[k][a] = value
 
-    # CHECK: Should I use namedtuple instead?
+    def _init_update_funcs(self):
+        self._logi("Initializing Update Functions")
+        self._model_step_func = None
+        if self.update_functions.train is not None:
+            for x in self.trainer_params.training_steps:
+                func = self.update_functions.__dict__[x]
+                if func is not None and not func.criteria:
+                    criteria = {m: self.criteria[c] for m, c in func.criteria_map.items()}
+                    self.update_functions.__dict__[x].set_criteria(criteria)
+        else:
+            func = self.update_functions.function
+            params = self.update_functions.params.__dict__.copy()
+            # models and criteria already exist with the trainer.
+            # They are to be updated according to maps in the func.
+            models = {m: self._models[m] for m in params["models"]}
+            criteria = {m: self.criteria[c] for m, c in params["criteria_map"].items()}
+            params["models"] = models
+            params["criteria"] = criteria
+            self._model_step_func = func(**params)
+
+    def _init_training_steps(self):
+        """Which training steps will be run.
+
+        Depends on a combination of `training_steps`, `dataloaders` and
+        `update_functions`.
+
+        """
+        self._training_steps = {}
+        for x in self.trainer_params.training_steps:
+            if getattr(self, x + "_loader"):
+                if self._model_step_func:
+                    self._training_steps[x] = (self._model_step_func,
+                                               self._model_step_func.returns(x),
+                                               self._model_step_func.logs(x))
+                else:
+                    func = self.update_functions.train
+                    self._training_steps[x] = func, func.returns, func.logs
+
     def _init_metrics(self):
         """Intializes and checks the metrics.
 
         Anything returned by the `step` having the first element `metric` is a
         default metric and is logged.
 
-        Other metrics are specified in `extra_metrics` have to conform to the format
-        {"step": step_name, "function": `callable`,
-        "inputs": input_variables_to_function, "when": batch_or_epoch}
-
-        :returns: None
-        :rtype: None
+        Other metrics are specified in `extra_metrics` have to conform to the
+        format of type :class:`~config.Metric`.
 
         """
-        self._logi("Initializing Metrics")
+        self._logi("Initializing Metric")
         self._metrics = {}
-        for x in self._update_functions:
-            if self._dataloader_params[x] is not None:
-                self._metrics[x] = dict((val[1], {}) for val in self._update_functions[x].returns
-                                        if val[0] == "metric")
-                self._metrics[x]["num_datapoints"] = {}
-                if self._extra_metrics is None:
-                    self._extra_metrics = {}
-                if x in self._extra_metrics:
-                    for k in self._extra_metrics[x].keys():
-                        self._metrics[x][k] = {}
-                        if self._extra_metrics[x][k]["when"] == "batch":
-                            retvals = [_[1] for _ in self._update_functions[x].returns]
-                            assert all(_ in retvals for _ in self._extra_metrics[x][k]["inputs"]),\
-                                f"failed on batch {x}, {k}"
-                        elif self._extra_metrics[x][k]["when"] == "epoch":
-                            # NOTE: validation with inputs
-                            vals = [*self.__dict__.keys(),
-                                    *[_[1] for _ in self._update_functions[x].returns], "epoch"]
-                            assert all(s in vals for s in self._extra_metrics[x][k]["inputs"]
-                                       if isinstance(s, str)), f"failed on epoch {x}, {k}"
-                            # FIXME: Only "models" as tuple allowed
-                            for _x in self._extra_metrics[x][k]["inputs"]:
-                                if isinstance(_x, tuple):
-                                    assert _x[0] == "models" and\
-                                        all(_ in self.models for _ in _x[1]),\
-                                        "Required model not in self._models"
-                            # assert all(all(_d in self.__dict__[d[0]].keys() for _d in d[1])
-                            #            for d in self._extra_metrics[x][k]["inputs"]
-                            #            if isinstance(d, tuple)), "failed on tuple %s, %s" % (x, k)
-                else:
-                    self._extra_metrics[x] = {}
-
-    def _init_update_funcs(self):
-        self._logi("Initializing Update Functions")
-        for k, v in self._update_functions.items():
-            if k == "train":
-                self._train_step_func = self._update_functions["train"]
-            elif k == "val":
-                self._val_step_func = self._update_functions["val"]
-            elif k == "test":
-                self._test_step_func = self._update_functions["test"]
+        for step, (func, retvals, logs) in self._training_steps.items():  # step = training step
+            self._metrics[step] = dict((name, {}) for name in retvals       # name = name of metric
+                                       if name in logs)
+            self._metrics[step]["num_datapoints"] = {}
+        for name, metric in self.extra_metrics.items():
+            for step in metric.steps:
+                if step not in self._metrics:
+                    self._metrics[step] = {}
+                self._metrics[step][name] = {}
+                func_retvals = ((self._model_step_func and self._model_step_func.returns(step))
+                                or self.update_functions.__dict__[step].returns)
+                if metric.when == "BATCH":
+                    if not all(_ in func_retvals for _ in metric.inputs):
+                        raise ValueError(
+                            self._loge(f"Not all metric inputs {metric.inputs} for {name} " +
+                                       f"and functions return values {retvals}"))
+                elif metric.when == "EPOCH":
+                    # CHECK: Is this good practice?
+                    #        I meant
+                    # NOTE: all attrs in self.props + all attrs in func
+                    # FIXME: Change to all named variables (props)
+                    retvals = [*self.__dict__.keys(), *prop.members, *func_retvals]
+                    if not all(_ in retvals for _ in metric.inputs):
+                        raise ValueError(
+                            self._loge(f"Not all metric inputs {metric.inputs} for {name} " +
+                                       f"and functions return values {retvals}"))
 
     # FIXME: It should be _init_task_runners instead
     def _init_epoch_runner(self):
         """Initialize the :meth:`task_runners`
 
-        A ``task_runner`` is an :class:`Epoch` instance. This method initializes
+        A `task_runner` is an :class:`Epoch` instance. This method initializes
         three kinds of task runners:
 
           1. epoch_runner
@@ -913,13 +916,13 @@ class Trainer:
           3. user_func_runner
 
         Corresponding to each task runner there are threads with the same names
-        and the references are further stored in ``_task_thread_keys``,
-        ``_task_callbacks``.
+        and the references are further stored in `_task_thread_keys`,
+        `_task_callbacks`.
 
         """
         device_monitor, signals = self._task_runner_helper("main")
         self._logi("Initializing Epoch Runner")
-        self._epoch_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
+        self._epoch_runner = Epoch({"metrics": self._metrics, "extra_metrics": self.extra_metrics},
                                    signals, device_monitor, self.extra_report,
                                    **{"logd": self._logd, "loge": self._loge,
                                       "logi": self._logi, "logw": self._logw})
@@ -937,7 +940,7 @@ class Trainer:
 
     def _init_default_task_runner(self, device_monitor: DeviceMonitor,
                                   signals: Signals) -> Epoch:
-        task_runner = Epoch({"metrics": self._metrics, "extra_metrics": self._extra_metrics},
+        task_runner = Epoch({"metrics": self._metrics, "extra_metrics": self.extra_metrics},
                             signals, device_monitor, self.extra_report,
                             **{"logd": self._logd, "loge": self._loge,
                                "logi": self._logi, "logw": self._logw})
@@ -1292,7 +1295,7 @@ class Trainer:
         - `loop` can be in {"main", "adhoc", "user"}
         - `run` can be in {"running", "paused", "finished"}
         - `step` for the main loop can be any of the
-          `self._trainer_params["training_steps"]` + "none"
+          `self.trainer_params.training_steps` + "none"
           or `{"train", "val", "test", "none"}`
 
         For a :class:`Trainer` instance the regular flow is `train_step ->
@@ -1741,7 +1744,7 @@ class Trainer:
         if not data:
             return False, self._loge(f"Called with null data")
         self._logi(f"Calling adhoc_eval with data: {data}")
-        if not any(x in data for x in self._trainer_params["training_steps"]):
+        if not any(x in data for x in self.trainer_params.training_steps):
             return False, {"error": self._logi("Required Input. Given unknown dataset"),
                            **self.adhoc_error_dict}
         else:
@@ -1790,10 +1793,10 @@ class Trainer:
         #     self._logd(f'metrics given {params["metrics"]}')
         #     return False, {"error": self._loge("Required Input. Given unknown metrics or incorrect format"),
         #                    **self.adhoc_error_dict}
-        # elif func not in (self.user_funcs + self._trainer_params["training_steps"]):
+        # elif func not in (self.user_funcs + self.trainer_params.training_steps):
         #     return False, {"error": self._loge(f"Unknown function \"{params['function']}\" given"),
         #                    "available_functions": (self.user_funcs +
-        #                                            self._trainer_params["training_steps"])}
+        #                                            self.trainer_params.training_steps)}
         # Making minimal assumptions on the function
         # elif func in self.user_funcs and\
         #      not len(inspect.signature(self._user_funcs[func]).parameters) == 1:
@@ -1840,7 +1843,7 @@ class Trainer:
 
         """
         step = params["data"]
-        function = self._update_functions[step]
+        function = self.update_functions[step]
         step_loader = getattr(self, step + "_loader")
         if "seed" in params:
             np.random.seed(params["seed"])
@@ -1850,7 +1853,7 @@ class Trainer:
             indices = np.random.choice(len(step_loader.dataset),
                                        int(len(step_loader.dataset) * params["num_or_fraction"]))
         _proxy_dataset = ProxyDataset(step_loader.dataset, indices)
-        temp_params = self._dataloader_params[step].copy()
+        temp_params = self.dataloader_params[step].copy()
         temp_params.update({"batch_size": 1})  # stick to 1 right now
 
         # NOTE: MyDataLoader is to solve the problem of collation in data. So
@@ -1898,9 +1901,9 @@ class Trainer:
             models = {}
             optimizers = {}
             devices = {}
-            for model_name, model_params in self._model_params.items():
-                models[model_name] = self._model_params[model_name]["model"](**model_params)
-                optim_name = self._model_params[model_name]["optimizer"]
+            for model_name, model_params in self.model_params.items():
+                models[model_name] = self.model_params[model_name].model(model_params.dict())
+                optim_name = self.model_params[model_name].optimizer
                 optimizers[model_name] = {"name": optim_name,
                                           "optimizer": self._optimizers
                                           [optim_name]["function"](
@@ -2000,8 +2003,8 @@ class Trainer:
             for name in self._models:
                 if name != model_name:  # free only GPU resources
                     self._models.set_device(model_name, torch.device("cpu"))
-            for x in self._update_functions:
-                self._update_functions[x]._model_name = model_name
+            for x in self.update_functions:
+                self.update_functions[x]._model_name = model_name
             return True, self._logd(f"Model {model_name} is now the current active model.")
 
     # TODO: This should be a given input and not an image
@@ -2078,7 +2081,7 @@ class Trainer:
     def fetch_image(self, img_path: Union[pathlib.Path, str]):
         """Fetch the image from a given path.
         """
-        img_path = os.path.join(self._trainer_params["image_root"], img_path)
+        img_path = os.path.join(self.trainer_params["image_root"], img_path)
         if not os.path.exists(img_path):
             return False, self._logd(f"Image {img_path} doesn't exist")
         else:
@@ -2221,7 +2224,7 @@ class Trainer:
         Args:
             request: http request forwarded from the daemon
 
-        Example: ``file_which_is_sent.py``::
+        Example: `file_which_is_sent.py`::
 
             class SomeModel:
                 # code
@@ -2275,16 +2278,16 @@ class Trainer:
     # TODO: Any change in state of trainer vars should have a rollback mechanism
     #       E.g., if some of the params change here and then an error is raised.
     def _add_new_models_helper(self, model_params: Dict[str, Dict[str, Union[str, Dict, Callable]]],
-                               optimizers: Dict[str, Dict[str, Any]]):
-        """Extract ``models`` from the ``model_names``, ``model_defs`` and ``model_params``
+                               optimizers: Dict[str, config.Optimizer]):
+        """Extract `models` from the `model_names`, `model_defs` and `model_params`
 
         Args:
             model_params: Model parameters
             optimizers: Optimizers
 
         Returns:
-            A :class:`tuple` of ``status``, ``response`` where if
-            ``status`` is successful the response is model else an error string
+            A :class:`tuple` of `status`, `response` where if
+            `status` is successful the response is model else an error string
 
         """
         try:
@@ -2303,18 +2306,18 @@ class Trainer:
                     model_args = {}
                     for x in sig.parameters:
                         if x not in add_params:
-                            model_args[x] = self._model_params[inherit_name][x]
+                            model_args[x] = self.model_params[inherit_name][x]
                         else:
                             model_args[x] = getattr(self, x)  # FIXME: Bad HACK
                 else:
                     model_args = _params
-                if model in self._model_params:
+                if model in self.model_params:
                     self._logw(f"Will overwrite model, optimizer params and defs for {model}")
-                    self._backup_model_params[model] = copy.deepcopy(self._model_params[model])
-                self._model_params[model]["params"] = model_args.copy()
-                self._model_params[model]["model"] = model_func
-                self._model_params[model]["optimizer"] = model_params["optimizer"]
-                self._model_params[model]["gpus"] = model_params["gpus"]
+                    self._backup_model_params[model] = copy.deepcopy(self.model_params[model])
+                self.model_params[model]["params"] = model_args.copy()
+                self.model_params[model]["model"] = model_func
+                self.model_params[model]["optimizer"] = model_params["optimizer"]
+                self.model_params[model]["gpus"] = model_params["gpus"]
                 self._logd(f"Updated model_params and model_def for {model}")
                 self.allocate_devices(model)
                 self._models[model] = self._model_init_helper(model)
@@ -2324,7 +2327,7 @@ class Trainer:
                         status[model] = True
                     else:
                         if model in self._backup_model_params[model]:
-                            self._model_params[model] = copy.deepcopy(self._backup_model_params[model])
+                            self.model_params[model] = copy.deepcopy(self._backup_model_params[model])
                             status[model] = False, "Reverted"
                         else:
                             status[model] = False, response
@@ -2401,12 +2404,12 @@ class Trainer:
         save_state["iterations"] = self.iterations
         save_state["models"] = self .models if model_names_only else\
             {x: self._models[x].dump() for x in self._models}
-        save_state["model_params"] = copy.deepcopy(self._model_params)
-        save_state["criteria_params"] = copy.deepcopy(self._criteria_params)
-        save_state["data"] = self._data
+        save_state["model_params"] = copy.deepcopy(self.model_params)
+        save_state["criteria_params"] = copy.deepcopy(self.criteria_params)
+        save_state["data"] = self.data_params
         save_state["dataloader_params"] = {}
         save_state["optimizers"] = copy.deepcopy(self._optimizers)
-        for k, v in self._dataloader_params.items():
+        for k, v in self.dataloader_params.items():
             if v is None:
                 save_state["dataloader_params"][k] = None
             else:
@@ -2416,7 +2419,7 @@ class Trainer:
                         self._logw(f"collate_fn in dataloader {k} params will not be saved")
                         save_state["dataloader_params"][k][a] = "callable_" + type(b).__qualname__
                     else:
-                        value = self._dataloader_params[k][a]
+                        value = self.dataloader_params[k][a]
                         if isinstance(value, dict):
                             save_state["dataloader_params"][k][a] = {}
                             for x, y in value.items():
@@ -2436,7 +2439,7 @@ class Trainer:
                             else:
                                 save_state["dataloader_params"][k][a] = value
         save_state["trainer_params"] = {}
-        for k, v in self._trainer_params.items():
+        for k, v in self.trainer_params.items():
             if callable(v):
                 self._logw(f"callable {type(v).__qualname__}" +
                            f" for trainer_params {k} will not be saved")
@@ -2535,9 +2538,9 @@ class Trainer:
         if diff:
             return self._loge(f"Could not load saved_state. Missing keys {diff}")
         data_name = saved_state["data"]["name"]
-        if data_name != self._data["name"]:
+        if data_name != self.data_params["name"]:
             return self._loge("Cannot load saved_state, Different datasets: " +
-                              f"{data_name}, {self._data}")
+                              f"{data_name}, {self.data_params}")
         diff = (diff_as_sets(self.models, saved_state["model_params"].keys()),
                 diff_as_sets(saved_state["model_params"].keys(), self.models))
         if diff[0] or diff[1]:
@@ -2545,8 +2548,8 @@ class Trainer:
                               f"Models differ {diff}")
         self.epoch = saved_state["epoch"]
         self.iterations = saved_state["iterations"]
-        self._model_params = saved_state["model_params"]
-        self._criteria_params = saved_state["criteria_params"]
+        self.model_params = saved_state["model_params"]
+        self.criteria_params = saved_state["criteria_params"]
         self._restore_dataloader_params(saved_state["dataloader_params"])
         # NOTE: restore trainer_params
         self._logd("Restoring trainer_params")
@@ -2554,7 +2557,7 @@ class Trainer:
             if isinstance(v, str) and v.startswith("callable_"):
                 self._logw(f"callable {k} not restored in trainer_params")
             else:
-                self._trainer_params[k] = saved_state["trainer_params"][k]
+                self.trainer_params[k] = saved_state["trainer_params"][k]
         # NOTE: sanity check after param updates
         self._sanity_check()
         # CHECK: Which models should be reinitialized?
@@ -2564,7 +2567,7 @@ class Trainer:
         if not status:
             self._rollback_resume()
             return status, message
-        status, message = self._init_dataloaders()
+        status, message = self._init_data_and_dataloaders()
         if not status:
             self._rollback_resume()
             return status, message
@@ -2741,7 +2744,7 @@ class Trainer:
 
     @control
     def abort_session(self) -> Tuple[bool, str]:
-        """``abort_session`` finishes the session and switches to "finished" state with
+        """`abort_session` finishes the session and switches to "finished" state with
         aborted flag set to true. Saves the current session with aborted suffix.
 
         :returns: None
@@ -2908,7 +2911,7 @@ class Trainer:
     def loop_type(self) -> str:
         """Loop type determines if the training monitor number of epochs or number of batches.
         """
-        if "iterations" in self._trainer_params["training_steps"]:
+        if "iterations" in self.trainer_params.training_steps:
             return "iterations"
         else:
             return "epoch"
@@ -2935,13 +2938,20 @@ class Trainer:
     @property
     def gpus(self) -> List[int]:
         "List of GPUs if avaiable on the system.  Returns [-1] if no available"
-        return self._gpus
+        return self.config.trainer_params.gpus
+
+    @gpus.setter
+    def gpus(self, x: Union[List[int], int, str]):
+        try:
+            self.config.trainer_params.gpus = x
+        except Exception as e:
+            self._loge(f"Could not set gpus {e}")
 
     @prop                       # type: ignore
     @property
     def system_info(self) -> Dict[str, Optional[Dict]]:
         "System Info: cpu_util, mem_util, gpu_util"
-        return {"gpu_util": gpu_util(self._device_handles) if self._gpus[0] != -1 else None,
+        return {"gpu_util": gpu_util(self._device_handles) if self.gpus[0] != -1 else None,
                 "cpu_info": cpu_info(),
                 "memory": memory_info()}
 
@@ -2980,43 +2990,43 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def optimizers(self) -> Dict[str, Dict[str, Union[Callable, Dict]]]:
-        return self._optimizers
+    def optimizers(self) -> Dict[str, config.Optimizer]:
+        return self.config.optimizers
 
     @prop                       # type: ignore
     @property
-    def train_step_func(self) -> ModelStep:
+    def train_step_func(self) -> Optional[ModelStep]:
         """The Training Step is a partial function of the `training_step` function, the
         models and the criteria given to the server
 
         """
-        return partial(self._train_step_func, self._models, self.criteria)
+        return self._train_step_func
 
     @prop                       # type: ignore
     @property
-    def val_step_func(self) -> ModelStep:
+    def val_step_func(self) -> Optional[ModelStep]:
         """The Validation Step is a partial function of the `validation_step` function,
         the models and the criteria given to the server
 
         """
-        return partial(self._val_step_func, self._models, self.criteria)
+        return self._val_step_func
 
     @prop                       # type: ignore
     @property
-    def test_step_func(self) -> ModelStep:
+    def test_step_func(self) -> Optional[ModelStep]:
         """The Test Step is a partial function of the `test_step` function,
         the models and the criteria given to the server
 
         """
-        return partial(self._val_step_func, self._models, self.criteria)
+        return self._val_step_func
 
     @prop                       # type: ignore
     @property
     def active_model(self):
         "Active model is both get and set by setting the _update_function"
-        # NOTE: Was self._update_functions[self._trainer_params["training_steps"][0]]._model_name
+        # NOTE: Was self.update_functions[self.trainer_params.training_steps[0]]._model_name
         #       "train" is assumed to be present as a step
-        return self._update_functions["train"]._model_name
+        return self.update_functions["train"]._model_name
 
     @prop                       # type: ignore
     @property
@@ -3032,7 +3042,7 @@ class Trainer:
     @prop                       # type: ignore
     @property
     def epoch(self) -> int:
-        "Current Epoch to train, if training type is epoch. See `loop_type`"
+        "Current Epoch while training, if training type is epoch. See `loop_type`"
         return self._epoch
 
     @epoch.setter
@@ -3043,7 +3053,11 @@ class Trainer:
     @property
     def max_epochs(self) -> int:
         "Max Epochs to train, if training type is epoch. See `loop_type`"
-        return self._max_epochs
+        return self.config.trainer_params.max_epochs
+
+    @max_epochs.setter
+    def max_epochs(self, x: int):
+        self.config.trainer_params.max_epochs = x
 
     @prop                       # type: ignore
     @property
@@ -3059,7 +3073,7 @@ class Trainer:
     @property
     def max_iterations(self) -> int:
         "Max iterations to run if training type is iterations. See `loop_type`"
-        return self._max_iterations
+        return self.config.max_iterations
 
     @prop                       # type: ignore
     @property
@@ -3179,6 +3193,7 @@ class Trainer:
         return self._userfunc_aborted_event.is_set()
     # END: State props
 
+    # START: Path props
     @prop                       # type: ignore
     @property
     def best_save(self) -> Optional[pathlib.Path]:
@@ -3207,7 +3222,7 @@ class Trainer:
     # @prop                       # type: ignore
     @property
     def _save_path_with_epoch(self):
-        if "iterations" in self._trainer_params["training_steps"]:
+        if "iterations" in self.trainer_params.training_steps:
             update_key = self.iterations / self._hooks_run_iter_frequency
         else:
             update_key = self.epoch
@@ -3228,39 +3243,59 @@ class Trainer:
     def _checkpoint_path(self):
         # model_names = "_".join(self._models.names)
         return os.path.join(self._save_path_without_epoch + "_checkpoint" + ".pth")
+    # END: Path props
 
+    # START: Params
     @prop                       # type: ignore
     @property
-    def trainer_params(self) -> Dict[str, Union[None, str, pathlib.Path, bool]]:
+    def trainer_params(self) -> config.TrainerParams:
         """Trainer params govern the behaviour of the trainer.
 
-        Params must be a dict with fields and types:
+        Trainer Params must be of type :class:`~config.TrainerParams`
 
-            ``{'gpus': str, 'cuda': bool, 'seed': Union[int, None],
-            'resume': bool, 'resume_best': bool, 'resume_weights': Union[pathlib.Path, None],
-            'init_weights': Union[str, pathlib.Path], 'training_steps': List[str],
-            'check_func': Union[str, None], 'max_epochs': Union[int, None]}``
-
-        - ``training_steps`` can only be ``['train', 'val', 'test', 'iterations']`` as
+        - `training_steps` can only be `['train', 'val', 'test', 'iterations']` as
           of now.
-        - if ``iterations`` is present in ``training_steps`` then the trainer will
-          not progress via epochs but via number of batches. ``epoch`` and
-          ``max_epochs`` in that case are 0. In this case ``max_iterations`` must be
-          provided.
-        - Otherwise ``epoch`` and ``max_epoch`` must be given.
-        - A ``condition`` can also be added instead of ``max_epochs`` or
-          ``max_iterations`` but isn't implemented right now.
-        - Both ``cuda`` and ``gpus`` have to be given. To understand how they
+        - if `iterations` is present in `training_steps` then the trainer will
+          not progress via epochs but via number of batches. `epoch` and
+          `max_epochs` in that case are 0. In this case `max_iterations` must
+          be provided and > 0
+        - Otherwise `epoch` and `max_epoch` must be given.
+        - A `condition` can also be added instead of `max_epochs` or
+          `max_iterations` but isn't implemented right now.
+        - Both `cuda` and `gpus` have to be given. To understand how they
           operate see :meth:`_init_device`.
 
         """
-        return self._trainer_params
+        return self.config.trainer_params
 
     @prop                       # type: ignore
     @property
-    def model_params(self) -> Dict[str, Union[None, str, pathlib.Path, bool]]:
-        """`model_params` is a :class:`dict` mapping model names and all the paramters
-        required by those models to be initialized.
+    def log_levels(self) -> config.LogLevelParams:
+        return self.config.log_levels
+
+    @prop                       # type: ignore
+    @property
+    def metrics(self) -> Dict[str, Dict]:
+        "All the metrics used for evaluation"
+        return self._metrics
+
+    @prop                       # type: ignore
+    @property
+    def extra_metrics(self) -> Dict[str, Metric]:
+        "Extra metrics used for evaluation"
+        return self.config.extra_metrics
+
+    @prop                       # type: ignore
+    @property
+    def optimizer_params(self) -> Dict[str, config.Optimizer]:
+        return self.config.optimizer_params
+
+    @prop                       # type: ignore
+    @property
+    def model_params(self) -> Dict[str, config.ModelParams]:
+        """Parameters with which to initialize the models.
+
+        They must be a :class:`dict` mapping model names and :class:`config.ModelParams`
 
         These parameters are specific to each model and can be changed during
         the training procedure. Depending on the parameter changes, the model
@@ -3272,7 +3307,7 @@ class Trainer:
 
         In addition they can contain a `devices` parameter also which is a
         directive to the trainer assigning the specified devices to the
-        models. An ``auto`` field for the devices will find the optimal
+        models. An `auto` field for the devices will find the optimal
         allocation w.r.t training speed.
 
         Multiple models can be specified and not all of which need to be loaded
@@ -3280,19 +3315,39 @@ class Trainer:
         {"loaded": True} in their parameters.
 
         """
-        return self._model_params
+        return self.config.model_params
 
     @prop                       # type: ignore
     @property
-    def dataloader_params(self) -> Dict[str, Union[None, str, pathlib.Path, bool]]:
-        """`dataloader_params` are the parameters given to the various dataloaders.
-        Currently only torch dataloaders are supported. See """
-        pass
+    def criteria_params(self) -> Dict[str, config.Criterion]:
+        """Names of the criteria and their paramters
+
+        Can be used to initialize the criteria if required.
+
+        """
+        return self.config.criteria
 
     @prop                       # type: ignore
     @property
-    def data(self) -> str:
-        return self._data["name"]
+    def dataloader_params(self) -> config.DataLoaderParams:
+        """Parameters passed to :class:`~torch.utils.data.Dataloader`.
+        They must be acceptable to :class:`~torch.utils.data.Dataloader`
+
+        For :class:`~config.CustomDataLoader` the parameters are defined in the
+        `~config.CustomDataLoader` and they are unrestricted.
+
+        """
+        return self.config.dataloader_params
+
+    @prop                       # type: ignore
+    @property
+    def data_params(self) -> config.DataParams:
+        return self.config.data_params
+
+    @prop                       # type: ignore
+    @property
+    def update_functions(self) -> Dict[str, ModelStep]:
+        return self.config.update_functions
 
     # TODO: Allow extra_metrics, update_funcs and any other params to be updated
     @prop                       # type: ignore
@@ -3305,9 +3360,9 @@ class Trainer:
 
         """
         params = {}
-        params["model_params"] = self._model_params
-        params["trainer_params"] = self._trainer_params
-        params["dataloader_params"] = self._dataloader_params
+        params["model_params"] = self.model_params
+        params["trainer_params"] = self.trainer_params
+        params["dataloader_params"] = self.dataloader_params
         return params
 
     @prop                       # type: ignore
@@ -3321,13 +3376,14 @@ class Trainer:
         save_state["iterations"] = self._iterations
         # save_state["models"] = dict((k, v.state_dict()) for k, v in self._models.items())
         # save_state["optimizers"] = dict((k, v.state_dict()) for k, v in self.optimizers.items())
-        save_state["model_params"] = self._model_params
-        save_state["criteria_params"] = self._criteria_params
-        save_state["dataloader_params"] = self._dataloader_params
-        save_state["trainer_params"] = self._trainer_params
+        save_state["model_params"] = self.model_params
+        save_state["criteria_params"] = self.criteria_params
+        save_state["dataloader_params"] = self.dataloader_params
+        save_state["trainer_params"] = self.trainer_params
         save_state["metrics"] = self._metrics
         # return _dump(save_state)
         return save_state
+    # END: Params
 
     # @prop
     # @property
@@ -3350,7 +3406,7 @@ class Trainer:
     def progress(self) -> Dict[str, int]:
         """Progress returns the number of steps and max steps of training (whether
         epochs or iterations) and also the round of current batch being processed"""
-        predicate = "iterations" in self._trainer_params["training_steps"]
+        predicate = "iterations" in self.trainer_params.training_steps
         cur_step = self.iterations / self._hooks_run_iter_frequency\
             if predicate else self.epoch
         max_step = self.max_iterations / self._hooks_run_iter_frequency\
@@ -3379,17 +3435,11 @@ class Trainer:
         else:
             return lambda: None
 
-    @prop                       # type: ignore
-    @property
-    def metrics(self) -> Dict[str, Dict]:
-        "All the metrics used for evaluation"
-        return self._metrics
-
     # TODO: Define what is a sample correctly
     @prop                       # type: ignore
     @property
     def val_samples(self) -> Dict[str, Dict]:
-        """Metrics for model output if run on a small (possibly random) subset of
+        """Metric for model output if run on a small (possibly random) subset of
         validation data."""
         return dict((k, v) for k, v in self._metrics["val"].items()
                     if k[0] == "sample")
@@ -3507,7 +3557,7 @@ class Trainer:
         self.batch_size = params.batch_size
         self._optimizer_name = params.optimizer
         self._criterion_name = params.criterion
-        self._max_epochs = params._max_epochs
+        self.max_epochs = params._max_epochs
         self.init_weights = params.init_weights
         if not os.path.exists(self._savedir):
             os.mkdir(self._savedir)
@@ -3541,7 +3591,7 @@ class Trainer:
     #       Ensure that run returns
     # NOTE: train ONLY runs in main loop
     def train(self):
-        """If `iterations` exists in self._trainer_params, then we do iterations only
+        """If `iterations` exists in self.trainer_params, then we do iterations only
         training and loop_type is set to iterations, else we do standard epoch
         wise training
 
@@ -3554,7 +3604,7 @@ class Trainer:
         :rtype: None
 
         """
-        if "iterations" in self._trainer_params["training_steps"]:
+        if "iterations" in self.trainer_params.training_steps:
             loop_type = "iterations"
         else:
             loop_type = "epoch"
@@ -3581,7 +3631,7 @@ class Trainer:
                 self._iterations += self._hooks_run_iter_frequency
         else:
             self._logd(f"Total number of batches is {len(self.train_loader)}")
-            while self.epoch < self._max_epochs:
+            while self.epoch < self.max_epochs:
                 self._epoch_runner.reset()
                 self._epoch_runner.run_train(self.train_step_func, self.train_loader,
                                              loop_type)
@@ -3625,7 +3675,7 @@ class Trainer:
     #       could be {train, val, test} or simply iterations
     #       NOTE: Now iterations are also handled.
     def _log_metrics(self):
-        if "iterations" in self._trainer_params["training_steps"]:
+        if "iterations" in self.trainer_params.training_steps:
             update_key = self.iterations / self._hooks_run_iter_frequency
             key_name = "iterations chunk"
         else:
@@ -3652,12 +3702,12 @@ class Trainer:
         """For a few randomly selected datapoints, log the datapoint_name and
         corresponding model output
         """
-        if "iterations" in self._trainer_params["training_steps"]:
+        if "iterations" in self.trainer_params.training_steps:
             raise NotImplementedError
-        for step in self._trainer_params["training_steps"]:
+        for step in self.trainer_params.training_steps:
             dataset = getattr(self, step + "_loader").dataset
             loader = get_proxy_dataloader(dataset,
-                                          self._dataloader_params[step],
+                                          self.dataloader_params[step],
                                           10,  # seems like a good number
                                           self.logger)
             step_func = getattr(self, step + "_step_func")
@@ -3672,7 +3722,7 @@ class Trainer:
     # TODO: All these functions should be separate
     def gather_metrics(self, runner):
         retval = {}
-        for step in self._trainer_params["training_steps"]:
+        for step in self.trainer_params.training_steps:
             if step != "iterations" and step in self._metrics:
                 metric_names = self._metrics[step]
                 retval[step] = {}
@@ -3691,7 +3741,7 @@ class Trainer:
 
         """
         self._logd("Updating the metrics")
-        if "iterations" in self._trainer_params["training_steps"]:
+        if "iterations" in self.trainer_params.training_steps:
             update_key = self.iterations / self._hooks_run_iter_frequency
         else:
             update_key = self.epoch

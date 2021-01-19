@@ -21,7 +21,7 @@ class SubTrainer(Trainer):
         return self._cuda
 
 
-@pytest.mark.ci
+@pytest.mark.quick
 class TrainerTestModels(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -180,6 +180,9 @@ class TrainerTestModels(unittest.TestCase):
         self.assertIn("net_2", self.trainer._models)
         self.assertEqual(self.trainer._models["net_1"].gpus, [1])
         self.assertEqual(self.trainer._models["net_2"].gpus, [0])
+
+    def test_trainer_load_models_state(self):
+        pass
 
     def test_trainer_get_new_models(self):
         pass

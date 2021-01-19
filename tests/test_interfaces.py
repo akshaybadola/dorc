@@ -1,3 +1,4 @@
+import pytest
 import os
 import sys
 import shutil
@@ -44,7 +45,7 @@ class InterfaceTest(unittest.TestCase):
         cls.iface_thread = Thread(target=cls.iface.start)
         cls.iface_thread.start()
         time.sleep(1)
-        import ipdb; ipdb.set_trace()
+        pytest.set_trace()
 
     # FIXME: In trying to instantiate an interface without a trainer, I get an
     #        error. It's too coupled to the trainer. Should fix?

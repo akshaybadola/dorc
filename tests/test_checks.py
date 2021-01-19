@@ -5,7 +5,7 @@ sys.path.append("../")
 from trainer.checks import Checks
 
 
-@pytest.mark.ci
+@pytest.mark.quick
 class ChecksTest(unittest.TestCase):
     def setUp(self):
         self.checks = Checks(print, print)

@@ -3,9 +3,8 @@ from enum import Enum
 from pathlib import Path
 import torch
 
-from pydantic import BaseModel, validator
-
-from .models import (BaseModelNoTitle, TorchModule, DataModel,
+from pydantic import BaseModel as PydanticBaseModel, validator
+from .models import (BaseModel, TorchModule, DataModel,
                      StepModel, TrainerModel, OptimizerModel)
 
 
@@ -20,14 +19,26 @@ class LogLevels(str, Enum):
     NOTSET = "NOTSET"
 
 
+# FIXME
 class When(str, Enum):
+    """When to do something (maybe run some hook)
+
+    Batch or Epoch
+
+    """
     BATCH = "BATCH"
     EPOCH = "EPOCH"
 
 
 class LogLevelParams(BaseModel):
-    file: Union[LogLevels, str] = LogLevels.DEBUG
-    stream: Union[LogLevels, str] = LogLevels.INFO
+    """Parameters for log levels
+
+    Args:
+        file: Output log level to file
+        stream: Output stream log level to stdout
+    """
+    file: Union[LogLevels, str]
+    stream: Union[LogLevels, str]
 
     @validator("file", "stream")
     def log_levels_must_be_uppercase(cls, v):
@@ -79,7 +90,7 @@ def model_must_be_torch_nn_module(v: type) -> type:
         raise ValueError("Not a torch.nn.Module")
 
 
-class ModelParams(BaseModelNoTitle):
+class ModelParams(BaseModel):
     """Model configuration.
 
     Args:
@@ -100,7 +111,7 @@ class ModelParams(BaseModelNoTitle):
     _validate_model = validator("model", allow_reuse=True)(model_must_be_torch_nn_module)
 
 
-class Optimizer(BaseModelNoTitle):
+class Optimizer(BaseModel):
     """Optimizer configuration.
 
     Args:
@@ -112,7 +123,7 @@ class Optimizer(BaseModelNoTitle):
     params: Dict[str, Any]
 
 
-class Criterion(BaseModelNoTitle):
+class Criterion(BaseModel):
     """Criterion configuration.
 
     Args:
@@ -124,7 +135,7 @@ class Criterion(BaseModelNoTitle):
     params: Dict[str, Any]
 
 
-class UpdateFunctionsParams(BaseModelNoTitle):
+class UpdateFunctionsParams(BaseModel):
     """Parameters config for :class:`UpdateFunctions.params`.
 
     In case individual function isn't provided and
@@ -145,7 +156,7 @@ class UpdateFunctionsParams(BaseModelNoTitle):
     logs: List[str]
 
 
-class UpdateFunctions(BaseModelNoTitle):
+class UpdateFunctions(BaseModel):
     """Update functions config class.
 
     Need specification for either three separate update steps, all subclasses of
@@ -183,7 +194,7 @@ class UpdateFunctions(BaseModelNoTitle):
             return v
 
 
-class CustomDataLoader(BaseModelNoTitle):
+class CustomDataLoader(BaseModel):
     """Parameters to initialize a custom `DataLoader`.
 
     The :class:`CustomDataLoader` consists of three functions which return the
@@ -200,7 +211,7 @@ class CustomDataLoader(BaseModelNoTitle):
     test_params: Optional[Dict]
 
 
-class DataParams(BaseModelNoTitle):
+class DataParams(BaseModel):
     """Parameters to initialize the data and dataloaders.
 
     Args:
@@ -248,7 +259,12 @@ class DataParams(BaseModelNoTitle):
         return v
 
 
-class TorchDataLoaderParams(BaseModelNoTitle):
+class TorchDataLoaderParams(BaseModel):
+    """A config for parameters of :class:`~torch.utils.data.dataloader.DataLoader`
+
+    See :class:`~torch.utils.data.dataloader.DataLoader` for details.
+
+    """
     batch_size: int = 1
     shuffle: bool = False
     sampler: Optional[Callable] = None
@@ -262,21 +278,55 @@ class TorchDataLoaderParams(BaseModelNoTitle):
     multiprocessing_context: Optional[Callable] = None
 
 
-class DataLoaderParams(BaseModelNoTitle):
+class DataLoaderParams(BaseModel):
+    """Parameters for the dataloaders
+
+    """
     train: TorchDataLoaderParams
     val: Optional[TorchDataLoaderParams]
     test: Optional[TorchDataLoaderParams]
 
 
-class TrainerParams(BaseModelNoTitle):
+class TrainerParams(BaseModel):
+    """A config for parameters :class:`~trainer.trainer`
+
+    Args:
+        gpus: A list or comma separated string of gpus
+        cuda: Whether to use cuda (gpus) or not
+        seed: Seed with which torch will be initialized
+        resume_best: Resume from the previously best state
+        resume_dict: Resume from given weights
+        init_weights: Initialize the model from given weights
+                      but don't resume from state
+        resume: Whether to resume or not.
+        test_frequency: How often in terms of `epoch` to run the test loop
+        check_func: FIXME Don't recall what this does
+        max_epochs: Maximum epochs to train
+        load_all: Load all models into memory
+                  If false, only the models which have `load == True` will be loaded.
+        max_iterations: Maximum iterations to train if training with `iterations`
+        training_steps: Training steps (usually `[train, val, test]`)
+
+    The behaviour of resuming from a previous state depends on both `resume` and
+    the params given. In case `init_weights` are given then `resume` need not be
+    `True`, the weights are loaded into the corresponsding models and the
+    trainer starts from beginning.
+
+    If however, `resume` is `True` then `resume_bset` is checked first and
+    `trainer._resume_path` is set to that. Otherwise if `resume_dict` is
+    given, then the state (including model weights) is resumed from there.
+
+    Otherwise we resume from the last checkpoint.
+
+    """
     gpus: Union[List[int], int, str, None]
     cuda: bool
     seed: int
     resume_best: Optional[Path]
-    test_frequency: Optional[int] = 5
-    resume_weights: Optional[Path]
+    resume_dict: Optional[Path]
     init_weights: Optional[Path]
     resume: bool
+    test_frequency: Optional[int] = 5
     check_func: Optional[Callable]
     max_epochs: Optional[int]
     # NOTE: I'm validating load_all here with ModelParams above. Is that good
@@ -288,7 +338,7 @@ class TrainerParams(BaseModelNoTitle):
 
     _validate_gpus = validator("gpus", allow_reuse=True)(gpus_must_evaluate_to_list_of_int)
 
-    @validator("resume_weights")
+    @validator("resume_dict")
     def resume_weights_must_be_path_and_exist(cls, v: Union[Path, str, None]) -> Optional[Path]:
         if not v:
             return None
@@ -314,7 +364,7 @@ class TrainerParams(BaseModelNoTitle):
             raise ValueError("Only one of init_weights or resume can be given")
         elif not v:
             if (("resume_best" in values and values["resume_best"])
-                    or ("resume_weights" in values and values["resume_weights"])):
+                    or ("resume_dict" in values and values["resume_dict"])):
                 return True
             return v
         else:
@@ -359,7 +409,7 @@ class TrainerParams(BaseModelNoTitle):
         return v
 
 
-class Metric(BaseModelNoTitle):
+class Metric(BaseModel):
     """Custom metrics specification
 
     Args:
@@ -382,7 +432,7 @@ class Metric(BaseModelNoTitle):
             return v
 
 
-class Config(BaseModel):
+class Config(PydanticBaseModel):
     """Config class.
 
     Args:
@@ -401,7 +451,7 @@ class Config(BaseModel):
     """
     model_params: Dict[str, ModelParams]
     trainer_params: TrainerParams
-    log_levels: Optional[LogLevelParams]
+    log_levels: LogLevelParams
     optimizers: Dict[str, Optimizer]
     criteria: Dict[str, Criterion]
     update_functions: UpdateFunctions
@@ -442,7 +492,7 @@ class Config(BaseModel):
     #     if not self._have_resumed:
     #         self._logd("Ignoring resume_params in while resuming")
     #         assert "init_weights" in self._trainer_params
-    #         assert "resume_weights" in self._trainer_params
+    #         assert "resume_dict" in self._trainer_params
     #     if "iterations" in self._trainer_params["training_steps"]:
     #         # NOTE: Rest (test_every_k_iterations etc.) is checked in init_dataloaders
     #         # CHECK: Though should it be? Then that should be a training roadmap

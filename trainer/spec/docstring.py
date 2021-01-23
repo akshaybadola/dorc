@@ -195,6 +195,24 @@ class GoogleDocstring(UnicodeMixin):
         _descs = self.__class__(_descs, self._config).lines()
         return _type, _descs
 
+    def _join_subsection(self, lines):
+        _lines = []
+        prev = ""
+        for line in lines:
+            if line.startswith(" "):
+                prev += line
+                continue
+            else:
+                if prev:
+                    _lines.append(prev)
+                prev = line
+        _lines.append(prev)
+        retval = {}
+        for line in _lines:
+            name, response = [x.strip() for x in line.split(":", 1)]
+            retval[name] = response
+        return retval
+
     def _parse_responses_section(self, section):
         def _ref_repl(x):
             return re.sub(r'(.+)(:[a-zA-Z0-9]+[\-_+:.])`(.+?)`', r'\3', x)
@@ -206,20 +224,7 @@ class GoogleDocstring(UnicodeMixin):
                 if re.match(_xref_regex, split):
                     self.responses = {"responses": _ref_repl(lines[0])}
         else:
-            _lines = []
-            prev = ""
-            for line in lines:
-                if line.startswith(" "):
-                    prev += line
-                    continue
-                else:
-                    if prev:
-                        _lines.append(prev)
-                    prev = line
-            _lines.append(prev)
-            for line in _lines:
-                name, response = [x.strip() for x in line.split(":", 1)]
-                self.responses[name] = response
+            self.responses = self._join_subsection(lines)
         return lines
 
     def _consume_responses_section(self):

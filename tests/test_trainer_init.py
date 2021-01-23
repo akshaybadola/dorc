@@ -6,6 +6,7 @@ from trainer.trainer.model import Model
 from trainer.autoloads import ClassificationStep
 
 
+# TODO
 @pytest.mark.quick
 def test_trainer_init_basic_trainer_data_params(params_and_trainer):
     params, trainer = params_and_trainer
@@ -14,6 +15,7 @@ def test_trainer_init_basic_trainer_data_params(params_and_trainer):
     trainer._init_data_and_dataloaders()
 
 
+# TODO
 @pytest.mark.quick
 def test_trainer_init_bad_data_params(params_and_trainer):
     # inject bad data
@@ -23,6 +25,7 @@ def test_trainer_init_bad_data_params(params_and_trainer):
     trainer._init_data_and_dataloaders()
 
 
+# TODO
 @pytest.mark.quick
 def test_trainer_init_custom_loader_good_params(params_and_trainer):
     # inject custom loader  data
@@ -32,6 +35,7 @@ def test_trainer_init_custom_loader_good_params(params_and_trainer):
     trainer._init_data_and_dataloaders()
 
 
+# TODO
 @pytest.mark.quick
 def test_trainer_init_custom_loader_bad_params(params_and_trainer):
     # inject custom loader with bad params
@@ -41,6 +45,7 @@ def test_trainer_init_custom_loader_bad_params(params_and_trainer):
     trainer._init_data_and_dataloaders()
 
 
+# TODO
 @pytest.mark.quick
 def test_trainer_init_data_check_raw(params_and_trainer):
     pass
@@ -142,3 +147,15 @@ def test_trainer_init_metrics_extra_metrics(params_and_trainer):
     trainer._init_training_steps()
     trainer._init_metrics()
     assert "awesome_metric" in trainer.metrics["train"]
+
+
+# @pytest.mark.quick
+# def test_trainer_init_task_runners(params_and_trainer):
+#     params, trainer = params_and_trainer
+#     trainer._init_device()
+#     trainer._init_models()
+#     trainer._init_data_and_dataloaders()
+#     trainer._init_update_funcs()
+#     trainer._init_training_steps()
+#     trainer._init_metrics()
+#     trainer._init_task_runners()

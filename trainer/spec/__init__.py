@@ -1,11 +1,13 @@
 import typing
-from typing import Union, List, Callable, Dict, Tuple, Optional, Any
+from typing import Union, List, Callable, Dict, Tuple, Optional, Any, Type
 import pathlib
 import werkzeug
 import functools
 import flask
 import re
 import sys
+import pydantic
+import ipaddress
 
 from .. import daemon
 from .. import trainer
@@ -23,6 +25,47 @@ except Exception:
     NoneType = type(None)
 
 
+def recurse_dict_with_pop(jdict: Dict[str, Any],
+                          p_pred: Optional[Callable[[str, Any], bool]],
+                          r_pred: Callable[[str, str], bool],
+                          repl: Callable[[str], str]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    to_pop = []
+    popped: Dict[str, Any] = {}
+    for k, v in jdict.items():
+        # if k == key and v == sub:
+        if p_pred is not None and p_pred(k, v):
+            to_pop.append(k)
+        if r_pred(k, v):          # k == "$ref", v.startswith("#/definitions/")
+            jdict[k] = repl(v)  # v.replace("#/definitions/", "#/components/schemas")
+        if isinstance(v, dict):
+            jdict[k], _popped = recurse_dict_with_pop(v, p_pred, r_pred, repl)
+            popped.update(**_popped)
+    for p in to_pop:
+        popped.update(jdict.pop(p))
+    return jdict, popped
+
+
+def recurse_dict(jdict: Dict[str, Any],
+                 pred: Callable[[str, str], bool],
+                 repl: Callable[[str], str]) -> Dict[str, Any]:
+    if not (isinstance(jdict, dict) or isinstance(jdict, list)):
+        return jdict
+    if isinstance(jdict, dict):
+        for k, v in jdict.items():
+            # if k == key and v == sub:
+            if pred(k, v):         # k == "$ref", v.startswith("#/definitions/")
+                jdict[k] = repl(v)  # v.replace("#/definitions/", "#/components/schemas")
+            if isinstance(v, dict):
+                jdict[k] = recurse_dict(v, pred, repl)
+            if isinstance(v, list):
+                for i, item in enumerate(v):
+                    v[i] = recurse_dict(item, pred, repl)
+    elif isinstance(jdict, list):
+        for i, item in enumerate(jdict):
+            jdict[i] = recurse_dict(item, pred, repl)
+    return jdict
+
+
 file_content = {'content': {'multipart/form-data':
                             {'schema':
                              {'properties':
@@ -35,6 +78,8 @@ file_content = {'content': {'multipart/form-data':
 
 
 ref_regex = re.compile(r'(.*)(:[a-zA-Z0-9]+[\-_+:.])`(.+?)`')
+param_regex = re.compile(r' *([a-zA-Z]+[a-zA-Z0-9_]+?)( *: *)(.+)')
+attr_regex = re.compile(r'(:[a-zA-Z0-9]+[\-_+:.])(`.+?`)( *: *)?([a-zA-Z]+[a-zA-Z0-9_]+?)?')
 
 
 def ref_repl(x: str) -> str:
@@ -48,10 +93,11 @@ def ref_repl(x: str) -> str:
         The replaced string
 
     """
-    return re.sub(r'~(.+)', r'\1', re.sub(ref_regex, r'\3', x))
+    return re.sub(r'~?(.+),.*', r'\1', re.sub(ref_regex, r'\3', x))
 
 
-def exec_and_return(exec_str: str) -> Any:
+def exec_and_return(exec_str: str,
+                    modules: Optional[Dict[str, Any]] = None) -> Any:
     """Execute the exec_str with :meth:`exec` and return the value
 
     Args:
@@ -62,7 +108,10 @@ def exec_and_return(exec_str: str) -> Any:
 
     """
     ldict: Dict[str, Any] = {}
-    exec("testvar = " + exec_str, globals(), ldict)
+    if modules is not None:
+        exec("testvar = " + exec_str, {**modules, **globals()}, ldict)
+    else:
+        exec("testvar = " + exec_str, globals(), ldict)
     retval = ldict['testvar']
     return retval
 
@@ -102,8 +151,17 @@ def get_func_for_redirect(func_name: str, redirect_from: Callable) -> Optional[C
     except Exception:
         pass
     try:
-        func = exec_and_return(".".join([redirect_from.__module__, func_name]))
+        func = exec_and_return(".".join([redirect_from.__module__, func_name]), globals())
         return func
+    except Exception:
+        pass
+    try:
+        modname = redirect_from.__module__
+        exec(f"import {modname}")
+        if modname in sys.modules:
+            func = exec_and_return(".".join([redirect_from.__module__, func_name]),
+                                   {modname: sys.modules[modname]})
+            return func
     except Exception:
         pass
     try:
@@ -229,6 +287,12 @@ def infer_from_annotations(func: Callable) ->\
         return mt.text, ""
     if annot["return"] in st:
         return mt.text, st[annot["return"]]
+    if isinstance(annot["return"], type) and issubclass(annot["return"], pydantic.BaseModel):
+        return mt.json, annot["return"]
+    elif type(annot["return"]) in typing.__dict__.values():
+        class Annot(BaseModel):
+            default: annot["return"]  # type: ignore
+        return mt.json, Annot
     else:
         annot_ret = str(annot["return"])
         # NOTE: Substitute property with Callable. property is not json
@@ -241,7 +305,7 @@ def infer_from_annotations(func: Callable) ->\
 
 
 def get_schema_var(schemas: List[str], var: str,
-                   func: Optional[Callable] = None) -> BaseModel:
+                   func: Optional[Callable] = None) -> Type[BaseModel]:
     """Extract and return a `pydantic.BaseModel` from docstring.
 
     Args:
@@ -253,6 +317,7 @@ def get_schema_var(schemas: List[str], var: str,
 
     """
     ldict: Dict[str, Any] = {}
+    tfunc = None
     for i, s in enumerate(schemas):
         if re.match(ref_regex, s):
             indent = [*filter(None, re.split(r'(\W+)', s))][0]
@@ -272,7 +337,7 @@ def get_schema_var(schemas: List[str], var: str,
                 schemas[i] = indent + typename + ": " + "Optional[Any]"
     exec("\n".join(schemas), globals(), ldict)
     if var not in ldict:
-        return DefaultModel
+        raise AttributeError(f"{var} not in docstring Schemas for {(tfunc or func)}")
     else:
         return ldict[var]
 
@@ -299,7 +364,7 @@ def generate_responses(func: Callable, rulename: str, redirect: str) -> Dict[int
     doc = docstring.GoogleDocstring(func.__doc__)
     responses = {}
 
-    # if rulename == "/batch_props":
+    # if "config_file" in rulename:
     #     import ipdb; ipdb.set_trace()
     def remove_description(schema):
         if "title" in schema:
@@ -311,7 +376,7 @@ def generate_responses(func: Callable, rulename: str, redirect: str) -> Dict[int
     def response_subroutine(name, response_str):
         inner_two = check_indirection(response_str)
         if redirect and inner_two:
-            redir_func = get_func_for_redirect(redirect, func)
+            redir_func = get_func_for_redirect(redirect.lstrip("~"), func)
             if isinstance(redir_func, property):
                 redir_func = redir_func.fget
             mtt, ret = infer_from_annotations(redir_func)
@@ -328,7 +393,7 @@ def generate_responses(func: Callable, rulename: str, redirect: str) -> Dict[int
             response = exec_and_return(response_str)
             if response.mimetype == mt.text:
                 content = response.schema()
-            elif response.mimetype == mt.json:
+            elif response.mimetype in {mt.json, mt.binary}:
                 sf = response.schema_field
                 # Basically there are two cases
                 # 1. we redirect to another view function
@@ -421,22 +486,74 @@ def get_request_params(lines: List[str]) -> List[Dict[str, Any]]:
     return retval
 
 
-def get_request_body(lines: List[str]) -> Dict[str, Any]:
+def join_subsection(lines: List[str]) -> List[str]:
+    """Join indented subsection to a single line.
+
+    Args:
+        lines: List of lines to (possibly) join
+
+
+    For example:
+
+    The following line will be parsed as two lines:
+
+        bleh: Union[List[Dict], None, str, int, bool,
+                    Dict[List[str]], List[List[str]]]
+
+    It will be joined to:
+
+        bleh: Union[List[Dict], None, str, int, bool, Dict[List[str]], List[List[str]]]
+
+    """
+    _lines = []
+    prev = ""
+    for line in lines:
+        if not re.match(param_regex, line):
+            prev += line
+        else:
+            if prev:
+                _lines.append(prev)
+            prev = line
+    _lines.append(prev)
+    return _lines
+
+
+def get_request_body(lines: List[str],
+                     current_func: Optional[Callable] = None) -> Dict[str, Any]:
     ldict: Dict[str, Any] = {}
+    lines = join_subsection(lines)
+    _lines = lines.copy()
+    if current_func is not None:
+        for i, line in enumerate(lines):
+            matches = attr_regex.findall(line)
+            if matches:
+                for match in matches:
+                    attr_str = "".join(match)
+                    redir_func, attr = check_for_redirects(attr_str, current_func)
+                    if redir_func:
+                        if attr == "return":
+                            mtt, ret = infer_from_annotations(redir_func)
+                            # Although mypy gives a type error here, because of
+                            # attr_regex match infer_from_annotations should
+                            # always return some annotation or raise error
+                            attr_name = line.split(":")[0].strip() + "_" + ret.__name__
+                            exec(f"{attr_name} = ret")
+                            exec(f'lines[i] = re.sub(attr_regex, "{attr_name}", lines[i], count=1)')
+                        elif not redir_func.__doc__:
+                            raise AttributeError(f"{redir_func} has no docstring")
+                        else:
+                            doc = docstring.GoogleDocstring(redir_func.__doc__)
+                            if not hasattr(doc, "schemas"):
+                                raise AttributeError(f"No schema in doc for {redir_func}")
+                            else:
+                                exec(f'{attr} = get_schema_var(doc.schemas[1], attr)')
+                                exec(f'lines[i] = re.sub(attr_regex, "{attr}", lines[i], count=1)')
+                    else:
+                        raise ValueError(f"Error parsing for {attr_str} and {current_func}")
     lines = ["    " + x for x in lines]
-    exec("\n".join(["class Body(BaseModel):", *lines]), globals(), ldict)
+    exec("\n".join(["class Body(BaseModel):", *lines]), {**globals(), **locals()}, ldict)
     body = ldict["Body"]
     return body.schema()
-    # retval = []
-    # for k, w in schema["properties"].items():
-    #     temp = {}
-    #     w.pop("title")
-    #     temp["required"] = w.pop("required")
-    #     temp["name"] = k
-    #     temp["in"] = "query"
-    #     temp["schema"] = w
-    #     retval.append(temp)
-    # return retval
 
 
 def get_requests(func: Callable, method: str) -> Dict:
@@ -447,7 +564,7 @@ def get_requests(func: Callable, method: str) -> Dict:
         return {}
     else:
         lines = doc.requests[1]
-        sections: Dict[str, Union[str, List[str]]] = {}
+        sections: Dict[str, Union[List[str], str]] = {}
         for line in lines:
             if not line.startswith(" "):
                 subsection, val = line.split(":", 1)
@@ -535,8 +652,6 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
         retval["description"] = description
     if tags:
         retval["tags"] = tags
-    # if "/trainer" in name:
-    #     import ipdb; ipdb.set_trace()
     parameters: List[Dict[str, Any]] = get_params_in_path(name)
     # TODO: Fix opId in case there's indirection
     #       /props/devices has currently FlaskInterface__props__GET
@@ -546,6 +661,8 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
                                      method_func,
                                      [x["name"] for x in parameters],
                                      method)
+    # if "/props/" in name:
+    #     import ipdb; ipdb.set_trace()
     if "params" in request:
         parameters.extend(get_request_params(request["params"]))
     if parameters:
@@ -554,11 +671,11 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
         if method.lower() == "get":
             return {}, (rule.rule, "Request body cannot be in GET")
         elif method.lower() == "post":
-            body = get_request_body(request["body"])
+            body = get_request_body(request["body"], method_func)
             # NOTE: Hack because for some reason, the title and description are of
             # :class:`BaseModel` instead of the docstring
-            body.pop("title")
-            body.pop("description")
+            body.pop("title", None)
+            body.pop("description", None)
             if "content-type" in request:
                 try:
                     content_type = exec_and_return(request["content-type"]).value
@@ -582,13 +699,27 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
         retval = {}
         # if "local variable" in f"{e}":
         #     import ipdb; ipdb.set_trace()
-        error = (rule.rule, f"{e}")
-    # security = [{'petstore_auth': ['write:pets', 'read:pets']}]
+        error = (str(rule.rule), f"{e}")
     return retval, error
 
 
 def make_paths(app: flask.Flask, excludes: List[str]) ->\
         Tuple[Dict, List[Tuple[str, str]], List[str]]:
+    """Generate OpenAPI `paths` component for a :class:`~flask.Flask` app
+
+    Args:
+        app: :class:`~flask.Flask` app
+        excludes: List of regexps to exclude.
+                  The regexp is matched against the rule name
+
+    Return:
+        A tuple of generated paths, errors and excluded rules.
+
+    Paths returned are a dictionary of rule name and the schema for it. Errors
+    similarly are a tuple of rule name and the error that occurred. Excluded
+    rules are returned as a :class:`list`.
+
+    """
     paths: Dict = {}
     errors: List[Tuple[str, str]] = []
     excluded: List[str] = []
@@ -615,7 +746,7 @@ def make_paths(app: flask.Flask, excludes: List[str]) ->\
                     method_func = getattr(endpoint.view_class, method.lower())
                 else:
                     if not {"GET", "POST"} - set(rule.methods):
-                        print("Multiple methods not supported for rule {rule.rule}" +
+                        print(f"Multiple methods not supported for rule {rule.rule} " +
                               "without MethodView", file=sys.stderr)
                         errors.append((rule.rule, "Multiple methods without methodview"))
                         continue
@@ -647,80 +778,43 @@ def openapi_spec(app: flask.Flask, excludes: List[str] = []) ->\
 
     """
     paths, errors, excluded = make_paths(app, excludes)
+
+    def pred(a, b):
+        if a == "$ref" and b.startswith("#/definitions/"):
+            return True
+        elif a == "type" and b == "type":
+            return True
+        else:
+            return False
+
+    def repl(v):
+        if v.startswith("#/definitions/"):
+            return v.replace("#/definitions/", "#/components/schemas/")
+        elif v == "type":
+            return "string"
+
+    paths = recurse_dict(paths, pred, repl)
+
+    def pop_pred(x, y):
+        return x == "definitions" and isinstance(y, dict)
+
+    def pop_if(pred, jdict):
+        to_pop = []
+        popped = {}
+        for k, v in jdict.items():
+            if pred(k, v):
+                to_pop.append(k)
+            if isinstance(v, dict):
+                popped.update(pop_if(pred, v))
+        for p in to_pop:
+            popped.update(jdict.pop(p))
+        return popped
+
+    definitions = pop_if(pop_pred, paths)
     return {'openapi': '3.0.1',
             'info': {'title': 'DORC Server',
                      'description': 'API specification for Deep Learning ORChestrator',
                      'license': {'name': 'MIT'},
                      'version': '1.0.0'},
-            "paths": paths}, errors, excluded
-
-
-# def alt_paths():
-#     val = "\n".join(getattr(doc, attr))
-#     if val.startswith("$returns") or val.startswith("$redirect"):
-#         return check_for_redirects(val, func)
-#     else:
-#         # GET SCHEMA VAR
-#         import ipdb; ipdb.set_trace()
-#     elif splits[0] == "$responses":
-#         redirect = exec_and_return(splits[1])
-#         app = apps[redirect["app"]]
-#         attr = redirect["attr"]
-#         matches = []
-#         endpoints = getattr(app, attr)
-#         import ipdb; ipdb.set_trace()
-#         for ep in endpoints:
-#             test = [x for x in app.url_map.iter_rules()
-#                     if re.match(x._regex, "|/" + ep)]
-#             matches.extend(test)
-#         func_name = splits[1].strip()
-#         func = get_func_for_redirect(func_name, redirect_from)
-#         if func is None:
-#             return None
-#         else:
-#             doc = docstring.GoogleDocstring(func.__doc__)
-#             val = "\n".join(doc.returns)
-#             if val.startswith("$returns") or val.startswith("$redirect"):
-#                 return check_for_redirects(val, func, rule)
-#             else:
-#                 return None
-#     elif splits[0] == "$schemas":
-#         redirect = exec_and_return(splits[1])
-#         app = apps[redirect["app"]]
-#         attr = redirect["attr"]
-#         matches = []
-#         endpoints = getattr(app, attr)
-#         import ipdb; ipdb.set_trace()
-#         for ep in endpoints:
-#             test = [x for x in app.url_map.iter_rules()
-#                     if re.match(x._regex, "|/" + ep)]
-#             matches.extend(test)
-#         func_name = splits[1].strip()
-#         func = get_func_for_redirect(func_name, redirect_from)
-#         if func is None:
-#             return None
-#         else:
-#             doc = docstring.GoogleDocstring(func.__doc__)
-#             val = "\n".join(doc.returns)
-#             if val.startswith("$returns") or val.startswith("$redirect"):
-#                 return check_for_redirects(val, func, rule)
-#             else:
-#                 return None
-
-
-# def start_app(app_str: str) -> flask.Flask:
-#     ldict = {}
-#     exec("import " + app_str + " as app", globals(), ldict)
-
-
-# def get_redirect(redir_str: str):
-#     ldict: Dict[str, Any] = {}
-#     exec("retval = " + redir_str, globals(), ldict)
-#     rdict: Dict[str, str] = ldict["retval"]
-#     return rdict
-
-
-# import importlib
-# from trainer import util, docstring, api
-
-# daemon = util.make_test_daemon()
+            "paths": paths,
+            "components": {"schemas": definitions}}, errors, excluded

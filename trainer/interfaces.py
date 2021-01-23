@@ -1,4 +1,4 @@
-from typing import Dict, Iterable, Union, List, Any
+from typing import Any, Optional, Dict, Union, Any, Iterable, List
 import os
 import sys
 import ssl
@@ -10,10 +10,13 @@ import logging
 import requests
 import traceback
 from functools import partial
+from pathlib import Path
 
 from flask import Flask, render_template, request, Response
 from flask_cors import CORS
 from werkzeug import serving
+from flask.views import MethodView
+
 
 from .util import _dump
 from .trainer import Trainer
@@ -26,6 +29,72 @@ def __ifaceunti__(_n):
         return True
     else:
         return False
+
+
+
+class ConfigFile(MethodView):
+    def __init__(self, iface):
+        self.iface = iface
+
+    def get(self):
+        """GET the config file for the trainer.
+
+        Schemas:
+            class Success(BaseModel):
+                default: bytes
+
+        Responses:
+            not found: ResponseSchema(404, "Not Found", MimeTypes.text, "File not found")
+            error: ResponseSchema(400, "Error occured", MimeTypes.text,
+                                      "Error reading file on disk")
+            Success: ResponseSchema(200, "Successful", MimeTypes.binary, "Success")
+
+        """
+        config_file = os.path.join(self.iface.data_dir, "session_config.py")
+        if not os.path.exists(config_file):
+            config_file = os.path.join(config_file[:-3], "__init__.py")
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, "rb") as f:
+                    config = f.read()
+                return config
+            except Exception as e:
+                return Response(f"Error occured {e}" + "\n" + traceback.format_exc(), 400)
+        else:
+            return Response(f"File not found", 404)
+
+    def post(self):
+        """Update the config file on disk.
+
+        Requests:
+            content-type: MimeTypes.multipart
+            body:
+                file: bytes
+
+        Responses:
+            bad params: ResponseSchema(405, "File not sent", MimeTypes.text,
+                                       "File not sent in request")
+            error: ResponseSchema(400, "Error occured", MimeTypes.text,
+                                       "Error occured while writing file")
+            Success: ResponseSchema(200, "Successful", MimeTypes.text, "Updated config")
+
+        """
+        config_file = os.path.join(self.iface.data_dir, "session_config.py")
+        if not os.path.exists(config_file):
+            config_file = os.path.join(config_file[:-3], "__init__.py")
+        try:
+            if not request.files:
+                return Response("File not sent with request", status=405)
+            else:
+                file_bytes = request.files["file"].read()
+                shutil.copy(config_file, config_file + ".bak")
+                with open(config_file, "w") as f:
+                    f.write(file_bytes.decode("utf-8"))
+                return self.iface._logi("Updated Config")
+        except Exception as e:
+            shutil.copy(config_file + ".bak", config_file)
+            return self.iface._loge(f"Error updating config {e}. Reverted to earlier." +
+                                    "\n" + traceback.format_exc())
 
 
 class FlaskInterface:
@@ -418,6 +487,15 @@ class FlaskInterface:
 
         @self.app.route("/_shutdown", methods=["GET"])
         def __shutdown_server():
+            """Shutdown the machine
+
+            Tags:
+                interface, maintenance
+
+            Responses:
+                Success: ResponseSchema(200, "Shutting Down", MimeTypes.text, "Shutting Down")
+
+            """
             func = request.environ.get('werkzeug.server.shutdown')
             func()
             return "Shutting down"
@@ -427,17 +505,54 @@ class FlaskInterface:
         # #       one level depth check
         @self.app.route("/destroy", methods=["GET"])
         def __destroy():
+            """Not Implemented
+
+            Tags:
+                interface, maintenance
+
+            Responses:
+                Success: ResponseSchema(200, "Destroying", MimeTypes.text, "Destroying")
+
+            """
             self._logi("Destroying")
             self._logi("Does nothing for now")
 
         @self.app.route("/config", methods=["GET"])
         def __config():
-            return _dump([True, {"config": self._current_config,
-                                 "orig_config": self._orig_config,
-                                 "overrides": self._current_overrides}])
+            """Retrieve the current config, original config and overrides (if any) as a json object
+
+            Tags:
+                trainer, maintenance
+
+            Schema:
+                class Success(BaseModel):
+                    config: trainer.config.Config
+                    orig_config: trainer.config.Config
+                    overrides: Dict
+
+            Responses:
+                Success: ResponseSchema(200, "Success", MimeTypes.json, "Success")
+
+            """
+            return _dump({"config": self._current_config,
+                          "orig_config": self._orig_config,
+                          "overrides": self._current_overrides})
 
         @self.app.route("/list_files", methods=["GET"])
         def __list_files():
+            """Retrieve the list of files (config files?)
+
+            Tags:
+                trainer, maintenance
+
+            Schema:
+                class Success(BaseModel):
+                    default: List[pathlib.Path]
+
+            Responses:
+                Success: ResponseSchema(200, "Success", MimeTypes.json, "Success")
+
+            """
             if os.path.exists(os.path.join(self.data_dir, "session_config.py")):
                 files = ["/session_config.py"]
             else:
@@ -448,6 +563,20 @@ class FlaskInterface:
 
         @self.app.route("/get_file", methods=["POST"])
         def __get_file():
+            """Return a file from the given path
+
+            Tags:
+                trainer, maintenance
+
+            Schema:
+                class Success(BaseModel):
+                    default: List[pathlib.Path]
+
+            Responses:
+                Not found: ResponseSchema(404, "File not found", MimeTypes.text, "File not found")
+                Success: ResponseSchema(200, "Success", MimeTypes.binary, "Success")
+
+            """
             filepath = request.json["filepath"].strip()
             if filepath.startswith("/"):
                 filepath = filepath[1:]
@@ -462,6 +591,25 @@ class FlaskInterface:
 
         @self.app.route("/put_file", methods=["POST"])
         def __put_file():
+            """Put a given file to the path
+
+            Tags:
+                trainer, maintenance
+
+            Requests:
+                content-type: MimeTypes.multipart
+                body:
+                    filepath: str
+                    file: bytes
+
+            Responses:
+                Bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
+                                          "File not sent with request")
+                Error: ResponseSchema(400, "Error occured", MimeTypes.text,
+                                      "Error occured: directory not writable")
+                Success: ResponseSchema(200, "Success", MimeTypes.text, "Written successfully")
+
+            """
             if not request.files:
                 return Response(self._loge("File not sent with request"), status=405)
             elif "filepath" not in request.form or not request.form["filepath"]:
@@ -480,33 +628,47 @@ class FlaskInterface:
                     return self._loge(f"Exception Occured Config {e}. Reverted to earlier." +
                                       "\n" + traceback.format_exc())
 
-        # TODO: Should restart self also, but we can't restart self, only daemon can. LOL
-        @self.app.route("/config_file", methods=["GET", "POST"])
-        def __config_file():
-            config_file = os.path.join(self.data_dir, "session_config.py")
-            if not os.path.exists(config_file):
-                config_file = os.path.join(config_file[:-3], "__init__.py")
-            if request.method == "GET":
-                with open(config_file, "rb") as f:
-                    config = f.read()
-                return config
-            elif request.method == "POST":
-                try:
-                    if not request.files:
-                        return Response("File not sent with request", status=405)
-                    else:
-                        file_bytes = request.files["file"].read()
-                        shutil.copy(config_file, config_file + ".bak")
-                        with open(config_file, "w") as f:
-                            f.write(file_bytes.decode("utf-8"))
-                        return self._logi("Updated Config")
-                except Exception as e:
-                    shutil.copy(config_file + ".bak", config_file)
-                    return self._loge(f"Exception Occured Config {e}. Reverted to earlier." +
-                                      "\n" + traceback.format_exc())
+        # # TODO: Should restart self also, but we can't restart self, only daemon can. LOL
+        # @self.app.route("/config_file", methods=["GET", "POST"])
+        # def __config_file():
+        #     config_file = os.path.join(self.data_dir, "session_config.py")
+        #     if not os.path.exists(config_file):
+        #         config_file = os.path.join(config_file[:-3], "__init__.py")
+        #     if request.method == "GET":
+        #         with open(config_file, "rb") as f:
+        #             config = f.read()
+        #         return config
+        #     elif request.method == "POST":
+        #         try:
+        #             if not request.files:
+        #                 return Response("File not sent with request", status=405)
+        #             else:
+        #                 file_bytes = request.files["file"].read()
+        #                 shutil.copy(config_file, config_file + ".bak")
+        #                 with open(config_file, "w") as f:
+        #                     f.write(file_bytes.decode("utf-8"))
+        #                 return self._logi("Updated Config")
+        #         except Exception as e:
+        #             shutil.copy(config_file + ".bak", config_file)
+        #             return self._loge(f"Exception Occured Config {e}. Reverted to earlier." +
+        #                               "\n" + traceback.format_exc())
+
+        config_file_rule = ConfigFile.as_view("config_file", self)
+        self.app.add_url_rule("/config_file",
+                              view_func=config_file_rule)
+
 
         @self.app.route("/update_restart", methods=["POST"])
         def __update_restart():
+            """Not Implemented
+
+            Tags:
+                interface, maintenance
+
+            Responses:
+                Success: ResponseSchema(200, "Update and restart", MimeTypes.text, "Update and restart")
+
+            """
             return _dump("Does nothing for now")
 
         # NOTE: Add rule for each property `prop` of `Trainer`"

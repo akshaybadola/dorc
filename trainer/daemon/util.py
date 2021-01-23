@@ -1,3 +1,4 @@
+from typing import List, Union, Optional, Any
 import os
 import time
 import shlex
@@ -5,6 +6,7 @@ import requests
 import shutil
 from threading import Thread
 from subprocess import Popen, PIPE, TimeoutExpired
+from pathlib import Path
 
 
 def get_hostname() -> str:
@@ -99,11 +101,29 @@ def register_with_tracker(tracker, host, port):
     return resp
 
 
-def create_module(module_dir, module_files=[]):
+def create_module(module_dir: Union[Path, str],
+                  module_files: List[Union[Path, str]] = [],
+                  env_str: str = ""):
+    """Create a module named module_dir.
+
+    Args:
+        module_dir: The name of the module
+        module_files: Files in the module
+        env_str: Extra lines to be appended at the top of the file
+
+    Usually an `import sys; sys.path.append('some_path')` can be appended to the
+    file(s) to include any extra paths. Care has to be taken so that names are
+    not overwrriten by the preceding lines. `env_str` will be appended to the
+    top of the file.
+
+    """
     if not os.path.exists(module_dir):
         os.mkdir(module_dir)
     if not os.path.exists(os.path.join(module_dir, "__init__.py")):
         with open(os.path.join(module_dir, "__init__.py"), "w") as f:
-            f.write("")
-    for f in module_files:
-        shutil.copy(f, module_dir)
+            f.write(env_str)
+    for mf in module_files:
+        with open(mf) as f:
+            file_str = env_str + f.read()
+        with open(os.path.join(module_dir, os.path.basename(mf)), "w") as f:
+            f.write(file_str)

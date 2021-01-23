@@ -29,9 +29,8 @@ from .model import Model, ModelStep
 from .config import Metric
 from .._log import Log
 from . import config
-from ..helpers import (Tag, ProxyDataset,
-                       get_proxy_dataloader, PropertyProxy, HookDict, Hook,
-                       GET, POST, Exposes, _log_metrics_for_step)
+from ..helpers import (Tag, ProxyDataset, PropertyProxy, HookDict, Hook,
+                       GET, POST, Exposes)
 from ..version import __trainer__version__
 
 
@@ -238,14 +237,14 @@ class Trainer:
                 # try to find and resume best weights
                 self._loge("Resume from best is not yet implemented")
                 self._resume_path = None
-            elif self.trainer_params.resume_weights:
-                if os.path.exists(self.trainer_params.resume_weights):
-                    self._resume_path = self.trainer_params.resume_weights
+            elif self.trainer_params.resume_dict:
+                if os.path.exists(self.trainer_params.resume_dict):
+                    self._resume_path = self.trainer_params.resume_dict
                 else:
                     self._logw("Given resume weights do not exist")
                     self._resume_path = None  # set appropriate path
             else:
-                # if both resume_best and resume_weights are false
+                # if both resume_best and resume_dict are false
                 # AND resume is true AND checkpoint_path is valid
                 if os.path.exists(self._checkpoint_path):
                     self._logi("Checkpoint exists. Will resume from there")
@@ -269,7 +268,7 @@ class Trainer:
         self._init_metrics()
         self._init_update_funcs()
         self._init_state_vars()
-        self._init_epoch_runner()
+        self._init_task_runners()
         self._init_modules()
         self._dump_state()
         # self._init_extra_controls()
@@ -904,9 +903,8 @@ class Trainer:
                             self._loge(f"Not all metric inputs {metric.inputs} for {name} " +
                                        f"and functions return values {retvals}"))
 
-    # FIXME: It should be _init_task_runners instead
-    def _init_epoch_runner(self):
-        """Initialize the :meth:`task_runners`
+    def _init_task_runners(self):
+        """Initialize the :attr:`task_runners`
 
         A `task_runner` is an :class:`Epoch` instance. This method initializes
         three kinds of task runners:
@@ -1562,17 +1560,31 @@ class Trainer:
     # START: Extras
     @POST
     @extras
-    def load_saves(self, data: Dict[str, Any]) -> Tuple[bool, str]:
-        """Loads model weights or trainer state from a given filename. The file must be
+    def load_saves(self, data: Dict[str, str]) -> Tuple[bool, str]:
+        """Load model weights or trainer state from a given filename. The file must be
         present in the `savedir`.
+
+        Args:
+            data: A dictionary of data? WTF
+
+        Request:
+            content-type: MimeTypes.json
+            body:
+                weights: str
+                method: str
+
+        Responses:
+            invalid data: ResponseSchema(405, "Invalid Data", MimeTypes.text,
+                                        "Invalid data {some: json}")
+            bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
+                                       "Session key not in params")
+            Success: ResponseSchema(200, "Initiated Task", MimeTypes.json,
+                                    "See :meth:`~daemon.check_task.CheckTask.get`: Success")
+
 
         Not sure right now, when something should be allowed to load. If it's
         paused? In the middle of current session? Should the session be
         restarted?
-
-        :param data:
-        :returns:
-        :rtype:
 
         """
         self._logi("Calling load saves")
@@ -2573,7 +2585,7 @@ class Trainer:
             return status, message
         # Only if criteria and/or optimizer have changed.  In fact, there might
         # be a mismatch if criteria change suddenly as the model has changed,
-        # but resume_weights should not really be concerned about that, at
+        # but resume_dict should not really be concerned about that, at
         # least.
         # self._init_criteria_optimizers()
         # Only if new metrics are added and even then only update metrics
@@ -2583,7 +2595,7 @@ class Trainer:
         # In fact, this is not in saved state
         self._init_update_funcs()
         self._init_state_vars()
-        self._init_epoch_runner()
+        self._init_task_runners()
         self._init_modules()
 
         # NOTE: The model and optimizer checks are in `Model` now
@@ -2765,9 +2777,6 @@ class Trainer:
         """`abort_loop` aborts only the current loop stops with the aborted flag. Useful
         for changing the parameters and starting again. Saves the current
         metrics gathered.
-
-        :returns: None
-        :rtype: None
 
         """
         try:
@@ -2995,38 +3004,11 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def train_step_func(self) -> Optional[ModelStep]:
-        """The Training Step is a partial function of the `training_step` function, the
-        models and the criteria given to the server
-
-        """
-        return self._train_step_func
-
-    @prop                       # type: ignore
-    @property
-    def val_step_func(self) -> Optional[ModelStep]:
-        """The Validation Step is a partial function of the `validation_step` function,
-        the models and the criteria given to the server
-
-        """
-        return self._val_step_func
-
-    @prop                       # type: ignore
-    @property
-    def test_step_func(self) -> Optional[ModelStep]:
-        """The Test Step is a partial function of the `test_step` function,
-        the models and the criteria given to the server
-
-        """
-        return self._val_step_func
-
-    @prop                       # type: ignore
-    @property
-    def active_model(self):
+    def active_model(self) -> str:
         "Active model is both get and set by setting the _update_function"
         # NOTE: Was self.update_functions[self.trainer_params.training_steps[0]]._model_name
         #       "train" is assumed to be present as a step
-        return self.update_functions["train"]._model_name
+        return ", ".join(self.update_functions.train.models.keys())
 
     @prop                       # type: ignore
     @property
@@ -3271,6 +3253,7 @@ class Trainer:
     @prop                       # type: ignore
     @property
     def log_levels(self) -> config.LogLevelParams:
+        "File and stream Log levels for the trainer"
         return self.config.log_levels
 
     @prop                       # type: ignore
@@ -3346,7 +3329,7 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def update_functions(self) -> Dict[str, ModelStep]:
+    def update_functions(self) -> config.UpdateFunctions:
         return self.config.update_functions
 
     # TODO: Allow extra_metrics, update_funcs and any other params to be updated
@@ -3481,43 +3464,9 @@ class Trainer:
 
         """
         return {"props": {x: self.__class__.__dict__[x].__doc__ for x in self.props}}
-
     # END: Properties
 
     # START: Broken funcs
-    # where are the hooks run?
-    # @post_epoch_hooks_to_run.setter
-    # def post_epoch_hooks_to_run(self, x):
-    #     assert any(_x in x for _x in ["train", "val", "test"])
-    #     assert all(all(__x in self.all_post_batch_hooks for __x in _x) for _x in x.values())
-    #     for _x in x:
-    #         self._post_batch_hooks_to_run[_x] = x[_x]
-
-    # control_validation, e.g., can't call validate if it's already running
-    # Or what can be called in which state
-    # TODO: Define state machine
-    # def _define_controls(self):
-    #     self._controls = ["train", "validate", "test", "reset",
-    #                       "anneal_lr", "set_params", "pause", "abort_current_loop",
-    #                       "resume", "start", "stop", "destroy"]
-    #     assert all(x in self.__class__.__dict__ for x in self._controls)
-    #     assert all(callable(x) for x in self.controls.values())
-
-    # TODO: A lot of these controls and methods which depend on params will
-    #       have to be rewritten.
-    # TODO: multiplier can be a trainer_param
-    # FIXME: Annealing may depend on extra_metrics
-    # TODO: Annealing can be an external function like CheckFunc
-    def anneal_lr(self, multiplier=.9):
-        self._logi("Annealing Learning Rate")
-        check_losses = [l[2] for loss in self.losses if l[0] == self.save_on]
-        if len(check_losses) >= 2:
-            delta = check_losses[-2] - check_losses[-1]
-            if delta < .01 * check_losses[-2]:
-                for param_group in self.optimizer.param_groups:
-                    param_group['lr'] *= multiplier
-                self._logi("Annealing...")
-
     # FIXME: THIS IS totally broken :-(
     # TODO: params should only be predefined names. As such, the required python
     #       objects must already be available to the wrapper. The search
@@ -3669,138 +3618,6 @@ class Trainer:
             self._loge(f"Some weird error occured {e}\n{traceback.format_exc()}")
 
     # END: Training Steps
-
-    # START: Stateless Functions
-    # DONE: There should be a separate definition of "steps" there where it
-    #       could be {train, val, test} or simply iterations
-    #       NOTE: Now iterations are also handled.
-    def _log_metrics(self):
-        if "iterations" in self.trainer_params.training_steps:
-            update_key = self.iterations / self._hooks_run_iter_frequency
-            key_name = "iterations chunk"
-        else:
-            update_key = self.epoch
-            key_name = "epoch"
-        log_func = self._logd
-        for step in self._metrics:
-            if getattr(self, step + "_loader"):
-                _log_metrics_for_step(step, key_name, getattr(self, step + "_loader"),
-                                      self._metrics[step], update_key, log_func)
-            else:
-                self._logd(f"No dataloader for {step}")
-
-    # def batch_info(self):
-    #     """Collect the current metrics for the given epoch regardless of whether it's completed.
-
-    #     This method does not pause or resume the :attr:`epoch_runner`
-    #     """
-    #     return self._epoch_runner.info
-
-    # FIXME: TRAINING_STEPS
-    # NOTE: For this a sample function has to be defined
-    def _log_samples(self, fraction=0.01):
-        """For a few randomly selected datapoints, log the datapoint_name and
-        corresponding model output
-        """
-        if "iterations" in self.trainer_params.training_steps:
-            raise NotImplementedError
-        for step in self.trainer_params.training_steps:
-            dataset = getattr(self, step + "_loader").dataset
-            loader = get_proxy_dataloader(dataset,
-                                          self.dataloader_params[step],
-                                          10,  # seems like a good number
-                                          self.logger)
-            step_func = getattr(self, step + "_step_func")
-            # reset, launch each in a separate thread, wait for finish
-            # CHECK: Is this a good idea? Maybe separate runner from epoch
-            getattr(self._epoch_runner, "run_" + step)(step_func, loader, True)
-
-    def dump_state_post_epoch_hook(self):
-        "Dump everything except weights"
-        self._dump_state()
-
-    # TODO: All these functions should be separate
-    def gather_metrics(self, runner):
-        retval = {}
-        for step in self.trainer_params.training_steps:
-            if step != "iterations" and step in self._metrics:
-                metric_names = self._metrics[step]
-                retval[step] = {}
-                retval[step]["num_datapoints"] = runner.total_samples[step]
-                for m in metric_names:
-                    all_vals = [x[3] for x in runner.batch_vars
-                                if x[0] == step and x[2] == m]
-                    if len(all_vals):
-                        retval[step][m] = np.mean(all_vals)
-        return retval
-
-    def update_metrics_post_epoch_hook(self):
-        """Update the metrics being recorded.
-
-        Gather the tuples from :attr:`epoch_runner` and update :attr:`metrics`
-
-        """
-        self._logd("Updating the metrics")
-        if "iterations" in self.trainer_params.training_steps:
-            update_key = self.iterations / self._hooks_run_iter_frequency
-        else:
-            update_key = self.epoch
-        for step in self._metrics:
-            metric_names = self._metrics[step]
-            self._metrics[step]["num_datapoints"][update_key] =\
-                self._epoch_runner.total_samples[step]
-            for m in metric_names:
-                all_vals = [x[3] for x in self._epoch_runner.batch_vars
-                            if x[0] == step and x[2] == m]
-                if len(all_vals):
-                    self._metrics[step][m][update_key] = np.mean(all_vals)
-
-    # TODO: I should log some image names and output text also
-    #       That should be there in _log_samples
-    def log_post_epoch_hook(self):
-        """Summarizes and log the metrics/losses etc post epoch
-        items_to_log_dict can be accessed and modified by the user
-
-        :returns: None
-        :rtype: None
-
-        """
-        self._logi("Running post epoch log hook")
-        # But these are certain transformations I'm doing to metrics
-        for k, v in self._items_to_log_dict.items():
-            getattr(self, "_log_" + k)()
-
-    def val_post_epoch_hook(self):
-        self.validate_post_epoch_hook(self)
-
-    def validate_post_epoch_hook(self):
-        self._logd("Running post epoch validate hook")
-        if self.val_loader is not None:
-            self.validate(self._epoch_runner)
-        else:
-            self._logi("No val loader. Skipping")
-
-    def test_post_epoch_hook(self):
-        self._logd("Running post epoch test hook")
-        if (self.epoch+1) % self.test_frequency == 0:
-            if self.test_loader is not None:
-                self.test(self._epoch_runner)
-            else:
-                self._logi("No test loader. Skipping")
-
-    def save_history_post_epoch_hook(self):
-        self._logd("Running save history state post epoch hook")
-        self._save(self._save_path_with_epoch)
-
-    def save_best_post_epoch_hook(self):
-        self._logd("Running save best post epoch hook")
-        self.check_and_save()
-
-    def save_checkpoint_post_epoch_hook(self):
-        self._logd("Running post epoch save hook")
-        self._save(self._checkpoint_path)
-        self.check_and_save()
-
     def add_post_epoch_hook(self, hook: Callable[[], None],
                             name: str, position: Union[int, str],
                             overwrite: bool = False):

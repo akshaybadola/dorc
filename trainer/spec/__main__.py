@@ -7,7 +7,7 @@ from .. import util
 from . import openapi_spec
 
 
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser("OpenAPI Spec Generator")
 parser.add_argument("--no-daemon", action="store_false", dest="daemon",
                     help="Do not generate spec for daemon")
 parser.add_argument("--no-interface", action="store_false", dest="interface",
@@ -16,8 +16,12 @@ parser.add_argument("--daemon-spec", type=str, default="daemon.yml",
                     help="Filename for daemon spec")
 parser.add_argument("--interface-spec", type=str, default="iface.yml",
                     help="Filename for interface spec")
+parser.add_argument("--excludes", type=str, default="",
+                    help="Comma separated list of regexps to exclude")
 args = parser.parse_args()
 excludes = [r"^/_devices", r"/.*\<.*?filename\>", r"/static/.*", r"^/$"]
+if args.excludes:
+    excludes.extend(args.excludes.split(","))
 
 
 if args.daemon:
@@ -28,7 +32,7 @@ if args.daemon:
     out, err, ex = openapi_spec(dmn.app, excludes)
     with open(fname, "w") as f:
         yaml.dump(out, f)
-    print("\n\nErrors:\n", "\n".join(str(err)), file=sys.stderr)
+    print("\n\nErrors:\n", "\n".join(map(str, err)), file=sys.stderr)
     print("\n\nExcluded rules:\n", ex, file=sys.stderr)
     util.stop_test_daemon()
 if args.interface:

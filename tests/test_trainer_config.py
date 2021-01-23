@@ -62,7 +62,7 @@ def test_trainer_trainer_params_resume(basic_config):
     basic_config.trainer_params.resume = True
     basic_config.trainer_params.resume = False
     with pytest.raises(ValidationError):
-        basic_config.trainer_params.resume_weights = False
+        basic_config.trainer_params.resume_dict = False
     with pytest.raises(ValidationError):
         basic_config.trainer_params.resume_best = False
     basic_config.trainer_params.init_weights = Path.home()
@@ -71,4 +71,4 @@ def test_trainer_trainer_params_resume(basic_config):
         basic_config.trainer_params.init_weights = Path.home()
     basic_config.trainer_params.init_weights = None
     basic_config.trainer_params.resume = True
-    basic_config.trainer_params.resume_weights = Path.home()
+    basic_config.trainer_params.resume_dict = Path.home()

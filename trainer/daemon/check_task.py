@@ -25,7 +25,7 @@ class CheckTask(MethodView):
                 message: str
 
         Responses:
-            bad_params: ResponseSchema(405, "Bad Params", MimeTypes.text, "task_id not given")
+            bad_params: ResponseSchema(400, "Bad Params", MimeTypes.text, "task_id not given")
             No such task: ResponseSchema(404, "No such Task", MimeTypes.text, "No such task 4")
             Success: ResponseSchema(200, "Check Successful", MimeTypes.json, "Success")
 
@@ -34,7 +34,7 @@ class CheckTask(MethodView):
             task_id = int(request.args.get("task_id").strip())
             return self.check_task(task_id)
         except Exception as e:
-            return self.bad_params(f"Bad params {e}" + "\n" + traceback.format_exc())
+            return Response(f"Bad params {e}" + "\n" + traceback.format_exc(), 400)
         if task_id not in self.__task_ids:
             return Response(f"No such task: {task_id}", 404)
 

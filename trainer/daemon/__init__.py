@@ -40,7 +40,8 @@ from .._log import Log
 from .auth import __unti__, __inti__, User
 from .util import get_hostname, have_internet, create_module, check_ssh_port, register_with_tracker
 
-from .import views
+from . import views
+from . import models
 from .sessions import Sessions
 from .trainer_views import Trainer
 from .check_task import CheckTask
@@ -102,16 +103,23 @@ class Daemon:
         os.mkdir(self.tmp_dir)
         self.production = production
         # FIXME: Code duplication here
+        # NOTE: Append data_dir path
+        self.env_str = f"""
+import sys
+if "{self.data_dir}" not in sys.path:
+    sys.path.append("{self.data_dir}")
+"""
+        self.root_env_str = f"""
+import sys
+if "{self.root_dir}" not in sys.path:
+    sys.path.append("{self.root_dir}")
+"""
         # NOTE: init modules_dir
         self.modules_dir = os.path.join(self.data_dir, "global_modules")
         create_module(self.modules_dir,
                       [os.path.join(self._lib_dir, x)
-                       for x in ["autoloads.py"]])
-        # NOTE: Append data_dir path
-        self.env_str = f"""
-import sys
-sys.path.append("{self.data_dir}")
-"""
+                       for x in ["autoloads.py"]],
+                      env_str=self.root_env_str)
         # NOTE: init datasets_dir
         self.datasets_dir = os.path.join(self.data_dir, "global_datasets")
         create_module(self.datasets_dir)
@@ -640,6 +648,7 @@ sys.path.append("{self.data_dir}")
                             "\n" + traceback.format_exc()
         self._already_scanned = True
 
+    # FIXME: data should be pydantic type
     def create_session(self, task_id, data):
         """Creates a new training session from given data
 
@@ -692,6 +701,7 @@ sys.path.append("{self.data_dir}")
             shutil.rmtree(data_dir)
 
     # NOTE: Only load_session sends load=True to _create_trainer
+    # FIXME: config is a pydantic type already
     def _create_trainer(self, task_id: int, name: str, time_str: str,
                         data_dir: Path, config: dict, overrides=None, load=False):
         """Create a trainer.
@@ -1014,7 +1024,6 @@ sys.path.append("{self.data_dir}")
             time_str: The time stamp of the session
             data: Any additional data passed from the request
 
-
         """
         self._logd(f"Purging {name}/{time_str}")
         try:
@@ -1045,8 +1054,13 @@ sys.path.append("{self.data_dir}")
             time_str: The time stamp of the session
             data: Any additional data passed from the request
 
-        """
+        Schemas:
+            class ArchiveSessionModel(BaseModel):
+                saves: List[pathlib.Path]
+                keep_checkpoint: bool
+                notes: str
 
+        """
         # How do I mark a session as archived?
         if "saves" in data:
             # keep those files in save
@@ -1067,7 +1081,14 @@ sys.path.append("{self.data_dir}")
             task_id: The `task_id` for the task
             name: `name` of the session
             time_str: The time stamp of the session
-            data: Any additional data passed from the request
+            data: CloneToServerModel
+
+        Schemas:
+            class CloneToServerModel(BaseModel):
+                server: ipaddress.IPv4Address
+                config: Dict
+                saves: Optional[List[pathlib.Path]]
+                modules: Optional[List[str]]
 
         """
         self._logd(f"Trying to clone session {name}/{time_str} with data {data}")
@@ -1153,6 +1174,11 @@ sys.path.append("{self.data_dir}")
             time_str: The time stamp of the session
             data: Any additional data passed from the request
 
+        Schemas:
+            class CloneSessionModel(BaseModel):
+                config: trainer.config.Config
+                saves: Optional[List[pathlib.Path]]
+
         """
 
         self._logd(f"Trying to clone session {name}/{time_str} with data {data}")
@@ -1191,7 +1217,11 @@ sys.path.append("{self.data_dir}")
             task_id: The `task_id` for the task
             name: `name` of the session
             time_str: The time stamp of the session
-            data: Any additional data passed from the request
+            data: ReinitSessionModel
+
+        Schemas:
+            class ReinitSessionModel(BaseModel):
+                config: trainer.config.Config
 
         """
         config_file = self._get_config_file(name, time_str)
@@ -1256,21 +1286,32 @@ sys.path.append("{self.data_dir}")
         Args:
             func_name: The name of the helper method
 
+        Schema:
+            class Task(BaseModel):
+                task_id: int
+                message: str
+
         Request:
             content-type: MimeTypes.json
             body:
-                data: Dict
+                session_key: str
+                data: Union[:meth:`daemon.Daemon._archive_session_helper`: ArchiveSessionModel,
+                            :meth:`_reinit_session_helper`: ReinitSessionModel,
+                            :meth:`_clone_session_helper`: CloneSessionModel,
+                            :meth:`_clone_to_helper`: CloneToServerModel,
+                            Dict]
 
         Responses:
             invalid data: ResponseSchema(405, "Invalid Data", MimeTypes.text,
                                         "Invalid data {some: json}")
             bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
                                        "Session key not in params")
-            Success: ResponseSchema(200, "Initiated Task", MimeTypes.json,
-                                    "See :meth:`~daemon.check_task.CheckTask.get`: Success")
+            Success: ResponseSchema(200, "Initiated Task", MimeTypes.json, "Task")
 
         """
-
+        # session_key: str
+        # data: Union[ReinitSessionModel, CloneSessionModel,
+        #             CloneToServerModel, ArchiveSessionModel]
         if not flask_login.current_user.is_authenticated:
             return self.login_manager.unauthorized()
         try:
@@ -1512,11 +1553,6 @@ sys.path.append("{self.data_dir}")
                 Success: ResponseSchema(200, "Current logged in user", MimeTypes.text, "Successfully assigned name")
 
             """
-
-            # print("JSON?", request.json)
-            # if hasattr(request, "data"):
-            #     print("DATA", request.data)
-            # print("FORM", [*request.form.keys()])
             if isinstance(request.json, dict):
                 data = request.json
             else:
@@ -1563,9 +1599,9 @@ sys.path.append("{self.data_dir}")
                 daemon, session
 
             Requests:
-                content-type: MimeTypes.multipart
+                content-type: MimeTypes.json
                 body:
-                    name: str
+                    data: daemon.models.CreateSessionModel
 
             Schemas:
                 class Task(BaseModel):
@@ -1585,6 +1621,7 @@ sys.path.append("{self.data_dir}")
                     file_bytes = request.files["file"].read()
                 except Exception as e:
                     return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
+            # FIXME: saves and stuff in self.create_session here are not parsed here at all
             data = {"name": data, "config": file_bytes}
             task_id = self._get_task_id_launch_func(self.create_session, data)
             return _dump([True, {"task_id": task_id,

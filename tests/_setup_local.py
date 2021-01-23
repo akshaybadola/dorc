@@ -99,7 +99,7 @@ config["criteria"] = {"criterion_ce_loss":
 config["extra_metrics"] = {}
 config["trainer_params"] = {"gpus": "", "cuda": False, "seed": 1111,
                             "resume": False, "resume_best": None,
-                            "resume_weights": None, "init_weights": None,
+                            "resume_dict": None, "init_weights": None,
                             "training_steps": ["train", "val", "test"],
                             "check_func": None, "max_epochs": 100, "load_all": True}
 config["data_params"] = {"name": "mnist",

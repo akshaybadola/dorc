@@ -4,7 +4,7 @@ import datetime
 import os
 from pathlib import Path
 import pytest
-sys.path.append("../")
+sys.path.append("..")
 from trainer.autoloads import ClassificationStep
 from trainer.trainer import config as trainer_config
 

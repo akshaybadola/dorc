@@ -1,19 +1,19 @@
 from typing import List, Dict, Iterable, Any, Union, Tuple, Callable, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel as PydanticBaseModel
+from ..spec.models import add_nullable, remove_attr, remove_prop_titles
 import torch
 import numpy
 from . import model
 
 
-class BaseModelNoTitle(BaseModel):
+class BaseModel(PydanticBaseModel):
     class Config:
         arbitrary_types_allowed = True
         validate_assignment = True
 
         @staticmethod
-        def schema_extra(schema: Dict[str, Any]) -> None:
-            for prop in schema.get('properties', {}).values():
-                prop.pop('title', None)
+        def schema_extra(schema: Dict[str, Any], model: PydanticBaseModel) -> None:
+            remove_prop_titles(schema, model)
 
 
 class NumpyNDArray(numpy.ndarray):
@@ -35,11 +35,11 @@ class NumpyNDArray(numpy.ndarray):
     def __modify_schema__(cls, field_schema):
         field_schema.update(
             type="type",
-            name="numpy.ndarray"
+            default="numpy.ndarray"
         )
 
 
-class DataModel(BaseModelNoTitle):
+class DataModel(BaseModel):
     """Config for :class:`~torch.utils.data.Data`
 
     A simple parser and validator that only checks the type.
@@ -60,7 +60,7 @@ class DataModel(BaseModelNoTitle):
     def __modify_schema__(cls, field_schema):
         field_schema.update(
             type="type",
-            name="numpy.ndarray"
+            default="torch.utils.data.Data"
         )
 
 
@@ -86,7 +86,7 @@ class OptimizerModel(torch.optim.Optimizer):
     def __modify_schema__(cls, field_schema):
         field_schema.update(
             type="type",
-            name="torch.optim.Optimizer"
+            default="torch.optim.Optimizer"
         )
 
 
@@ -112,7 +112,7 @@ class OptimizerModel(torch.optim.Optimizer):
 #     def __modify_schema__(cls, field_schema):
 #         field_schema.update(
 #             type="type",
-#             name="torch.optim.optimizer.Optimizer"
+#             default="torch.optim.optimizer.Optimizer"
 #         )
 
 
@@ -137,7 +137,7 @@ class TorchModule(torch.nn.Module):
     def __modify_schema__(cls, field_schema):
         field_schema.update(
             type="type",
-            name="torch.nn.Module"
+            default="torch.nn.Module"
         )
 
 
@@ -163,7 +163,7 @@ class TorchTensor(torch.Tensor):
     def __modify_schema__(cls, field_schema):
         field_schema.update(
             type="type",
-            name="torch.Tensor"
+            default="torch.Tensor"
         )
 
 
@@ -189,7 +189,7 @@ class TrainerModel(model.Model):
     def __modify_schema__(cls, field_schema):
         field_schema.update(
             type="type",
-            name="trainer.trainer.model.Model"
+            default="trainer.trainer.model.Model"
         )
 
 
@@ -214,5 +214,5 @@ class StepModel(model.ModelStep):
     def __modify_schema__(cls, field_schema):
         field_schema.update(
             type="type",
-            name="trainer.trainer.model.ModelStep"
+            default="trainer.trainer.model.ModelStep"
         )

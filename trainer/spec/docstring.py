@@ -1,4 +1,4 @@
-# Shamelessly copied from sphinxcontrib.napoleon
+# Adapted from sphinxcontrib.napoleon
 # See https://github.com/sphinx-contrib/napoleon
 
 import inspect

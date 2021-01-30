@@ -1,5 +1,5 @@
 from .trainer import trainer
-from .trainer.trainer import Trainer, epoch, model, models, config
+from .trainer.trainer import Trainer, epoch, model, models, config, spec
 from .trainer import interfaces
 from .trainer.trainer.check import *
 from .trainer.overrides import MyDataLoader

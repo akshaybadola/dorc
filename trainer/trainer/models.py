@@ -1,9 +1,40 @@
-from typing import List, Dict, Iterable, Any, Union, Tuple, Callable, Optional
-from pydantic import BaseModel as PydanticBaseModel
-from ..spec.models import add_nullable, remove_attr, remove_prop_titles
+from typing import List, Dict, Iterable, Any, Union, Tuple, Callable as TCallable, Optional
+from pydantic import BaseModel as PydanticBaseModel, validator
 import torch
+from enum import Enum
+from numbers import Number
 import numpy
+
+from ..spec.models import add_nullable, remove_attr, remove_prop_titles
 from . import model
+
+
+class LogLevels(str, Enum):
+    CRITICAL = "CRITICAL"
+    FATAL = "FATAL"
+    ERROR = "ERROR"
+    WARN = "WARN"
+    WARNING = "WARNING"
+    INFO = "INFO"
+    DEBUG = "DEBUG"
+    NOTSET = "NOTSET"
+
+
+# FIXME: Should be defined dynamically
+class When(str, Enum):
+    """When to do something (maybe run some hook)
+
+    Batch or Epoch
+
+    """
+    BATCH = "BATCH"
+    EPOCH = "EPOCH"
+
+
+class DataEnum(str, Enum):
+    train = "train"
+    val = "val"
+    test = "test"
 
 
 class BaseModel(PydanticBaseModel):
@@ -216,3 +247,96 @@ class StepModel(model.ModelStep):
             type="type",
             default="trainer.trainer.model.ModelStep"
         )
+
+
+class AdhocEvalParams(BaseModel):
+    """Params spec for calling an adhoc evaluation or run.
+
+    Args:
+        epoch: :class:`int` num or current,
+        num_or_fraction: Either `int` or `float`. If `float` then the
+                         fraction of the data points from the dataset
+                         are sampled, else the number of points.
+        concurrent: Whether to pause the current loop or run concurrently
+        seed: Set the random seed if given.
+        data: One of train val or test
+        callback: name of callback function
+
+    `data` Can be other than train, val or test, though it's not implemented
+    right now.
+
+    `callaback` can be any one of the existing user functions or available
+    functions in :class:`Trainer`
+
+    """
+    epoch: Union[int, str]
+    num_or_fraction: float
+    concurrent: bool
+    seed: Optional[int]
+    data: DataEnum
+    callback: str
+
+    @validator("epoch")
+    def epoch_must_be_no_more_than_current(cls, v):
+        if isinstance(v, str):
+            return "current"
+        elif isinstance(v, int):
+            return v
+        else:
+            raise TypeError(f"Invalid type {type(v)}")
+
+    @validator("num_or_fraction")
+    def num_or_fraction_must_be_greater_than_zero(cls, v):
+        if not isinstance(v, Number):
+            raise TypeError(f"Invalid type {type(v)}")
+        elif v <= 0:
+            raise ValueError(f"num_or_fraction must be greater than 0")
+        elif v >= 1:
+            return int(v)
+
+
+class CallableModel(TCallable):
+    """Config for :class:`Callable`
+
+    A simple parser and validator that only checks the type.
+
+    """
+
+    @classmethod
+    def __get_validators__(cls):
+        yield cls.validate
+
+    @classmethod
+    def validate(cls, v: Any) -> Any:
+        if callable(v):
+            return v
+        else:
+            raise TypeError(f"Invalid type {type(v)}")
+
+    @classmethod
+    def __modify_schema__(cls, field_schema):
+        field_schema.update(
+            type="function",
+            default="Some function"
+        )
+
+
+class Return(BaseModel):
+    status: bool
+    message: str
+
+
+class ReturnImage(BaseModel):
+    status: bool
+    image: bytes
+
+
+class ReturnBin(BaseModel):
+    status: bool
+    data: bytes
+
+
+class ReturnExtraInfo(BaseModel):
+    status: bool
+    message: str
+    data: Dict

@@ -2,11 +2,31 @@ import sys
 import shutil
 import datetime
 import os
+from threading import Thread
 from pathlib import Path
 import pytest
+import importlib
 sys.path.append("..")
 from trainer.autoloads import ClassificationStep
 from trainer.trainer import config as trainer_config
+from trainer.interfaces import FlaskInterface
+import _setup
+
+
+def create_module(module_dir, module_files=[]):
+    if not os.path.exists(module_dir):
+        os.mkdir(module_dir)
+    if not os.path.exists(os.path.join(module_dir, "__init__.py")):
+        with open(os.path.join(module_dir, "__init__.py"), "w") as f:
+            f.write("")
+    for f in module_files:
+        shutil.copy(f, module_dir)
+
+
+@pytest.fixture
+def json_config():
+    importlib.reload(_setup)
+    return _setup.config
 
 
 @pytest.fixture
@@ -43,6 +63,32 @@ def params_and_trainer(setup_and_net):
     data_dir = f".test_dir/test_session/{time_str}"
     params = {"data_dir": data_dir, "production": False, **config}
     return params, Trainer(**params)
+
+
+@pytest.fixture
+def params_and_iface(setup_and_net):
+    config, _ = setup_and_net
+    hostname = "127.0.0.1"
+    port = 12321
+    data_dir = ".test_dir"
+    host = "http://" + ":".join([hostname, str(port)]) + "/"
+    if os.path.exists(data_dir):
+        shutil.rmtree(data_dir)
+    if not os.path.exists(data_dir):
+        os.mkdir(data_dir)
+    iface = FlaskInterface(hostname, port, data_dir, no_start=True)
+    with open("_setup.py", "rb") as f:
+        f_bytes = f.read()
+        status, message = iface.create_trainer(f_bytes)
+    create_module(os.path.abspath(os.path.join(data_dir, "global_modules")),
+                  [os.path.abspath("../trainer/autoloads.py")])
+    sys.path.append(os.path.abspath(data_dir))
+    from global_modules import autoloads
+    status, message = iface.create_trainer()
+    iface_thread = Thread(target=iface.start)
+    iface_thread.start()
+    pytest.set_trace()
+    return {"config": config, "host": host, "data_dir": data_dir}, iface
 
 
 @pytest.fixture

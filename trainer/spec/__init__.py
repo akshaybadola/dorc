@@ -12,6 +12,7 @@ import ipaddress
 from .. import daemon
 from .. import trainer
 from .. import interfaces
+from ..util import exec_and_return, recurse_dict, pop_if
 
 from . import docstring
 from .schemas import ResponseSchema, MimeTypes, MimeTypes as mt,\
@@ -23,47 +24,6 @@ try:
     from types import NoneType
 except Exception:
     NoneType = type(None)
-
-
-def recurse_dict_with_pop(jdict: Dict[str, Any],
-                          p_pred: Optional[Callable[[str, Any], bool]],
-                          r_pred: Callable[[str, str], bool],
-                          repl: Callable[[str], str]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    to_pop = []
-    popped: Dict[str, Any] = {}
-    for k, v in jdict.items():
-        # if k == key and v == sub:
-        if p_pred is not None and p_pred(k, v):
-            to_pop.append(k)
-        if r_pred(k, v):          # k == "$ref", v.startswith("#/definitions/")
-            jdict[k] = repl(v)  # v.replace("#/definitions/", "#/components/schemas")
-        if isinstance(v, dict):
-            jdict[k], _popped = recurse_dict_with_pop(v, p_pred, r_pred, repl)
-            popped.update(**_popped)
-    for p in to_pop:
-        popped.update(jdict.pop(p))
-    return jdict, popped
-
-
-def recurse_dict(jdict: Dict[str, Any],
-                 pred: Callable[[str, str], bool],
-                 repl: Callable[[str], str]) -> Dict[str, Any]:
-    if not (isinstance(jdict, dict) or isinstance(jdict, list)):
-        return jdict
-    if isinstance(jdict, dict):
-        for k, v in jdict.items():
-            # if k == key and v == sub:
-            if pred(k, v):         # k == "$ref", v.startswith("#/definitions/")
-                jdict[k] = repl(v)  # v.replace("#/definitions/", "#/components/schemas")
-            if isinstance(v, dict):
-                jdict[k] = recurse_dict(v, pred, repl)
-            if isinstance(v, list):
-                for i, item in enumerate(v):
-                    v[i] = recurse_dict(item, pred, repl)
-    elif isinstance(jdict, list):
-        for i, item in enumerate(jdict):
-            jdict[i] = recurse_dict(item, pred, repl)
-    return jdict
 
 
 file_content = {'content': {'multipart/form-data':
@@ -94,26 +54,6 @@ def ref_repl(x: str) -> str:
 
     """
     return re.sub(r'~?(.+),.*', r'\1', re.sub(ref_regex, r'\3', x))
-
-
-def exec_and_return(exec_str: str,
-                    modules: Optional[Dict[str, Any]] = None) -> Any:
-    """Execute the exec_str with :meth:`exec` and return the value
-
-    Args:
-        exec_str: The string to execute
-
-    Returns:
-        The value in the `exec_str`
-
-    """
-    ldict: Dict[str, Any] = {}
-    if modules is not None:
-        exec("testvar = " + exec_str, {**modules, **globals()}, ldict)
-    else:
-        exec("testvar = " + exec_str, globals(), ldict)
-    retval = ldict['testvar']
-    return retval
 
 
 def resolve_partials(func: Callable) -> Callable:
@@ -458,6 +398,15 @@ def generate_responses(func: Callable, rulename: str, redirect: str) -> Dict[int
 
 
 def get_description(func: Callable) -> str:
+    """Return the first line of the description from a docstring.
+
+    Args:
+        func: Function whose docstring will be processed
+
+    Returns:
+        The extracted description.
+
+    """
     if func.__doc__ is None:
         return ""
     else:
@@ -469,6 +418,15 @@ def get_description(func: Callable) -> str:
 
 
 def get_request_params(lines: List[str]) -> List[Dict[str, Any]]:
+    """Return the paramters of an HTTP request if they exist.
+
+    Args:
+        lines: Lines of a function's docstring
+
+    Returns:
+        A List of schema dictionaries.
+
+    """
     ldict: Dict[str, Any] = {}
     lines = ["    " + x for x in lines]
     exec("\n".join(["class Params(ParamsModel):", *lines]), globals(), ldict)
@@ -520,6 +478,19 @@ def join_subsection(lines: List[str]) -> List[str]:
 
 def get_request_body(lines: List[str],
                      current_func: Optional[Callable] = None) -> Dict[str, Any]:
+    """Get the `Body` component of the request from the request lines.
+
+    Args:
+        lines: Lines of the request section of the docstring
+        current_func: The current function which is being processed
+
+    `lines` are joined according to indent and schemas are extracted.
+    `current_func` is used to determine redirects.
+
+    Returns:
+        A :class:`dict` of schema.
+
+    """
     ldict: Dict[str, Any] = {}
     lines = join_subsection(lines)
     _lines = lines.copy()
@@ -556,7 +527,21 @@ def get_request_body(lines: List[str],
     return body.schema()
 
 
-def get_requests(func: Callable, method: str) -> Dict:
+def get_requests(func: Callable, method: str, redirect: str) -> Dict:
+    """Get the request section of a function's docstring
+
+    Args:
+        func: The function whose docstring will be processed.
+        method: GET or POST
+
+    Returns:
+        A :class:`dict` of request with subsections as keys
+
+    The subsections can be `content-type`, `parameters` or `file` etc.
+
+    """
+    # if redirect:
+    #     import ipdb; ipdb.set_trace()
     if func.__doc__ is None:
         return {}
     doc = docstring.GoogleDocstring(func.__doc__)
@@ -579,6 +564,14 @@ def get_requests(func: Callable, method: str) -> Dict:
 
 
 def get_tags(func: Callable) -> List[str]:
+    """Get the `tags` section of a function's docstring
+
+    Args:
+        func: The function whose docstring will be processed.
+
+    Returns:
+        A :class:`list` of tags.
+    """
     if func.__doc__ is None:
         return []
     doc = docstring.GoogleDocstring(func.__doc__)
@@ -594,6 +587,15 @@ def get_tags(func: Callable) -> List[str]:
 
 
 def get_opId(name: str, func: Callable, params: List[str], method: str) -> str:
+    """Generate a unique OpenAPI `operationId` for the function
+
+    Args:
+        name: name of an HTTP (flask usually) endpoint
+        func: The function whose docstring will be processed.
+
+    Returns:
+        An operation id
+    """
     mod = func.__qualname__.split(".")[0]
     name = name.split("/")[1]
     return mod + "__" + name + "__" + "_".join(params) + method.upper()
@@ -641,10 +643,10 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
                        Tuple[Dict[str, Any], Tuple[str, str]]: # NOQA
     retval: Dict[str, Any] = {}
     # FIXME: Find a better way to generate operationId
-    request = get_requests(method_func, method)
+    var, redirect = check_function_redirect(method_func.__doc__, name)
+    request = get_requests(method_func, method, redirect)
     tags = get_tags(method_func)
     description = get_description(method_func)
-    var, redirect = check_function_redirect(method_func.__doc__, name)
     if description:
         if redirect:
             last = redirect.split(".")[-1]
@@ -661,7 +663,7 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
                                      method_func,
                                      [x["name"] for x in parameters],
                                      method)
-    # if "/props/" in name:
+    # if "load_weights" in name:
     #     import ipdb; ipdb.set_trace()
     if "params" in request:
         parameters.extend(get_request_params(request["params"]))
@@ -759,6 +761,8 @@ def make_paths(app: flask.Flask, excludes: List[str]) ->\
                     paths[newname][method.lower()] = default_response
                     errors.append(error)
                 else:
+                    if not spec["responses"]:
+                        errors.append((rule.rule, "Got empty response spec"))
                     paths[newname][method.lower()] = spec
     return paths, errors, excluded
 
@@ -774,7 +778,8 @@ def openapi_spec(app: flask.Flask, excludes: List[str] = []) ->\
                 Useful paths like /static/ etc.
 
     Returns:
-        A tuple of `api_spec` and `errors` which occurred during the spec generation
+        A 3-tuple of `api_spec`, `errors` which occurred during the spec
+        generation and a :class:`list` of rules that were excluded.
 
     """
     paths, errors, excluded = make_paths(app, excludes)
@@ -787,7 +792,7 @@ def openapi_spec(app: flask.Flask, excludes: List[str] = []) ->\
         else:
             return False
 
-    def repl(v):
+    def repl(k, v):
         if v.startswith("#/definitions/"):
             return v.replace("#/definitions/", "#/components/schemas/")
         elif v == "type":
@@ -798,19 +803,7 @@ def openapi_spec(app: flask.Flask, excludes: List[str] = []) ->\
     def pop_pred(x, y):
         return x == "definitions" and isinstance(y, dict)
 
-    def pop_if(pred, jdict):
-        to_pop = []
-        popped = {}
-        for k, v in jdict.items():
-            if pred(k, v):
-                to_pop.append(k)
-            if isinstance(v, dict):
-                popped.update(pop_if(pred, v))
-        for p in to_pop:
-            popped.update(jdict.pop(p))
-        return popped
-
-    definitions = pop_if(pop_pred, paths)
+    definitions = pop_if(paths, pop_pred)
     return {'openapi': '3.0.1',
             'info': {'title': 'DORC Server',
                      'description': 'API specification for Deep Learning ORChestrator',

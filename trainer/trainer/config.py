@@ -1,33 +1,11 @@
 from typing import List, Dict, Iterable, Any, Union, Tuple, Callable, Optional
-from enum import Enum
 from pathlib import Path
 import torch
 
 from pydantic import BaseModel as PydanticBaseModel, validator
 from .models import (BaseModel, TorchModule, DataModel,
                      StepModel, TrainerModel, OptimizerModel)
-
-
-class LogLevels(str, Enum):
-    CRITICAL = "CRITICAL"
-    FATAL = "FATAL"
-    ERROR = "ERROR"
-    WARN = "WARN"
-    WARNING = "WARNING"
-    INFO = "INFO"
-    DEBUG = "DEBUG"
-    NOTSET = "NOTSET"
-
-
-# FIXME
-class When(str, Enum):
-    """When to do something (maybe run some hook)
-
-    Batch or Epoch
-
-    """
-    BATCH = "BATCH"
-    EPOCH = "EPOCH"
+from .models import LogLevels, When
 
 
 class LogLevelParams(BaseModel):

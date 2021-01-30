@@ -12,6 +12,70 @@ import flask
 import pathlib
 
 
+def eval_python_exprs(module_str: Union[str, bytes],
+                      checks: Iterable[Callable[[str], bool]],
+                      modules: Dict[str, Any],
+                      return_keys: List[str]) -> Tuple[bool, Union[str, Dict[str, Any]]]:
+    """Evaluate a string or bytes as python expressions.
+
+    Args:
+        module_str: The string or bytes to evaluate.
+        checks: An Iterable of functions which checks the loaded module. Can be empty.
+        modules: A dictionary of additional modules to load while evaluting the string
+        exec_cmd: Command to execute for loading
+        return_keys: The keys of the objects to return
+    Returns:
+        A tuple of status, and message if fails, or dictionary with
+        the symbols and values.
+
+    """
+    try:
+        ldict: Dict[str, Any] = {}
+        flag = True
+        if isinstance(module_str, bytes):
+            module_str = module_str.decode("utf-8")
+        for check_p in checks:
+            if not check_p(module_str):
+                flag = False
+                break
+        if not flag:
+            return False, f"Module check failed {check_p}"
+        else:
+            print(f"Executing the string")
+            exec(module_str, {**globals(), **modules}, ldict)
+            retval = {}
+            if all(k in ldict for k in return_keys):
+                for k in return_keys:
+                    retval[k] = ldict[k]
+                return True, retval
+            else:
+                return False, f"Keys {set(return_keys) - set(ldict.keys())} not in module"
+    except ImportError as e:
+        return False, f"Could not import module_exports from given file. Error {e}" +\
+            "\n" + traceback.format_exc()
+    except Exception as e:
+        return False, f"Some weird error occured while importing. Error {e}" +\
+            "\n" + traceback.format_exc()
+
+
+def load_module_exports(module_str: Union[str, bytes],
+                        checks: Iterable[Callable[[str], bool]] = [],
+                        modules: Dict[str, Any] = {}) ->\
+        Tuple[bool, Union[str, Dict[str, Any]]]:
+    return_keys = ["module_exports"]
+    return eval_python_exprs(module_str, checks, modules, return_keys)
+
+
+def load_symbols(expr_str: Union[str, bytes],
+                 symbol_names: List[str],
+                 checks: Iterable[Callable[[str], bool]] = [],
+                 modules: Dict[str, Any] = {}) ->\
+        Tuple[bool, Union[str, Dict[str, Any]]]:
+    return_keys = symbol_names
+    return eval_python_exprs(expr_str, checks, modules, return_keys)
+
+
+
 class Modules:
     """Dynamic loading and unloading of python modules.
 

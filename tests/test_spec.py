@@ -184,7 +184,7 @@ def test_check_for_redirects():
 
 @pytest.mark.quick
 def test_get_request_body():
-    request = spec.get_requests(bleh, "GET")
+    request = spec.get_requests(bleh, "GET", "")
     assert request['content-type'] == 'MimeTypes.json'
     assert "body" in request
     body = spec.join_subsection(request["body"])
@@ -210,7 +210,7 @@ def test_get_request_body():
 
 @pytest.mark.quick
 def test_get_request_body_from_annotations():
-    request = spec.get_requests(bleh_annot, "GET")
+    request = spec.get_requests(bleh_annot, "GET", "")
     assert request['content-type'] == 'MimeTypes.json'
     assert "body" in request
     body = spec.get_request_body(request["body"], bleh_annot)

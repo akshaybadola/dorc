@@ -1302,7 +1302,7 @@ if "{self.root_dir}" not in sys.path:
                             Dict]
 
         Responses:
-            invalid data: ResponseSchema(405, "Invalid Data", MimeTypes.text,
+            Invalid data: ResponseSchema(405, "Invalid Data", MimeTypes.text,
                                         "Invalid data {some: json}")
             bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
                                        "Session key not in params")

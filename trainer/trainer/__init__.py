@@ -26,6 +26,7 @@ from .epoch import Epoch
 from ..mods import Modules as Modules
 from ..overrides import MyDataLoader, default_tensorify
 from .model import Model, ModelStep
+from .models import Return, ReturnImage, ReturnExtraInfo, AdhocEvalParams
 from .config import Metric
 from .._log import Log
 from . import config
@@ -105,6 +106,18 @@ prop_names = {"saves", "gpus", "system_info", "devices", "models", "active_model
 #         return self.ret
 
 
+def return_image(status: bool, image: str) -> ReturnImage:
+    return ReturnImage(status=status, image=image)
+
+
+def make_return(status: bool, message: str) -> Return:
+    return Return(status=status, message=message)
+
+
+def make_info(status: bool, message: str, data: Dict) -> ReturnExtraInfo:
+    return ReturnExtraInfo(status=status, message=message, data=data)
+
+
 # TODO: autoprop decorator, expand name to different properties
 #       based on their name, remove leading "_"
 #       e.g., autoprop(self._training_step) becomes
@@ -132,7 +145,8 @@ class Trainer:
         `list` of model params) :class:`dict`
         :param criteria: `dict` where (k, v) are (`str`, :class:`torch.nn.Module`)
         :param optimizer: `dict` where (k, v) are (`str`, :class:`torch.optim.Optimizer`)
-        :param model_init: `dict` where (k, v) are (`str` model_name, :function: returns the initialized model)
+        :param model_init: `dict` where (k, v) are (`str` model_name, :function:
+                            returns the initialized model)
         :param train_step_func: :function: which is called for running each batch forward iteration
         :param trainer_params: TODO
         :param train_loader: a train data loader usually :class:`torch.utils.data.Dataloader`
@@ -458,9 +472,9 @@ class Trainer:
 
         # NOTE: _log_metrics is a function so "metrics" defines a way to log it
         #       rather than just copying the values.
-        self._items_to_log_dict = {"metrics": self._log_metrics}
+        # self._items_to_log_dict = {"metrics": self._log_metrics}
         # CHECK: Why am I initializing device again?
-        self._init_device()
+        # self._init_device()
         self._epoch = 0
         self._iterations = 0
         # self._init_nvml()
@@ -508,10 +522,10 @@ class Trainer:
         self._user_funcs = {}
         self._current_user_func_name = None
         self._current_user_func_params = None
-        self.load_weights.__dict__["content_type"] = "form"
-        self.add_model.__dict__["content_type"] = "form"
-        self.add_user_funcs.__dict__["content_type"] = "form"
-        self.load_image.__dict__["content_type"] = "form"
+        # self.load_weights.__dict__["content_type"] = "form"
+        # self.add_model.__dict__["content_type"] = "form"
+        # self.add_user_funcs.__dict__["content_type"] = "form"
+        # self.load_image.__dict__["content_type"] = "form"
 
     def _init_modules(self):
         self._mods = Modules(self._modules_dir, self._logd, self._loge, self._logi, self._logw)
@@ -570,13 +584,13 @@ class Trainer:
             else:
                 self._models[model_name] = None
 
-    def load_models_state(self, model_state) -> Tuple[bool, str]:
+    def load_models_state(self, model_state) -> Return:
         for model in self.loaded_models:
             status, message = self._models[model].load(model_state[model])
             if not status:
                 self._loge(f"Loading model {model} failed. Error {message}")
-                return False, message
-        return True, ""
+                return make_return(False, message)
+        return make_return(True, "")
 
     def allocate_devices(self, load_models: Union[str, List[str]] = [],
                          unload_models: Union[str, List[str]] = []):
@@ -637,7 +651,10 @@ class Trainer:
                 for i, model_name in enumerate(auto):
                     self.devices[model_name] = []
                     temp_model = self._model_init_helper(model_name)
-                    temp_model.load_into_memory()
+                    if temp_model:
+                        temp_model.load_into_memory()
+                    else:
+                        raise ValueError()
                     num_params[model_name] = np.sum([np.prod(x.shape)
                                                      for x in temp_model.weights.values()])
                     del temp_model
@@ -703,23 +720,23 @@ class Trainer:
 
     @POST
     @methods
-    def load_model(self, name: str) -> Tuple[bool, str]:
+    def load_model(self, name: str) -> Return:
         """Load a model into system and device memory with given `name`."""
         if name in self.model_params:
-            return self._models[name].load_into_memory()
+            return make_return(*self._models[name].load_into_memory())
         else:
-            return False, f"Model {name} not present"
+            return make_return(False, f"Model {name} not present")
 
     @POST
     @methods
-    def unload_model(self, name: str) -> Tuple[bool, str]:
+    def unload_model(self, name: str) -> Return:
         """Unload a model from system with given `name`.
 
         Frees up resources allocated to the model."""
         if name in self.model_params:
-            return self._models[name].unload()
+            return make_return(*self._models[name].unload())
         else:
-            return False, f"Model {name} not present"
+            return make_return(False, f"Model {name} not present")
 
     def _init_data_and_dataloaders(self):
         """Initialize the dataloaders.
@@ -1560,27 +1577,16 @@ class Trainer:
     # START: Extras
     @POST
     @extras
-    def load_saves(self, data: Dict[str, str]) -> Tuple[bool, str]:
+    def load_saves(self, weights: Union[pathlib.Path, str], method: str) -> Return:
         """Load model weights or trainer state from a given filename. The file must be
         present in the `savedir`.
 
         Args:
-            data: A dictionary of data? WTF
+            weights: The name of the weights file
+            method: How to load the saves
 
-        Request:
-            content-type: MimeTypes.json
-            body:
-                weights: str
-                method: str
-
-        Responses:
-            invalid data: ResponseSchema(405, "Invalid Data", MimeTypes.text,
-                                        "Invalid data {some: json}")
-            bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
-                                       "Session key not in params")
-            Success: ResponseSchema(200, "Initiated Task", MimeTypes.json,
-                                    "See :meth:`~daemon.check_task.CheckTask.get`: Success")
-
+        Returns:
+            An instance of :class:`Return`
 
         Not sure right now, when something should be allowed to load. If it's
         paused? In the middle of current session? Should the session be
@@ -1616,17 +1622,10 @@ class Trainer:
         # self._pause_if_running()
         # with self._paused_for_task():
         #     self.do_something()
-        if "weights" not in data:
-            return False, self._logi("Missing params \"weights\"")
-        else:
-            weights = data["weights"]
-        if "method" not in data or data["method"] not in {"resume", "load"}:
-            return False, self._logi("Invalid or no such method")
-        else:
-            method = data["method"]
-        self._logd(f"Data given was {data}")
+        if method not in {"resume", "load"}:
+            return make_return(False, self._logi("Invalid or no such method"))
         if weights not in os.listdir(self._savedir):
-            return False, self._logi("No such file")
+            return make_return(False, self._logi("No such file"))
         else:
             if method == "load":
                 load_state = torch.load(os.path.join(self._savedir, weights))
@@ -1635,22 +1634,24 @@ class Trainer:
                         self._models[name].load_weights(
                             {"name": name, "weights": load_state["models"][name]})
                 except Exception as e:
-                    return False,\
-                        self._loge(f"Could not load weights {weights}. Error occured {e}" +
-                                   + "\n" + traceback.format_exc())
-                return True, self._logi(f"Successfuly loaded weights {weights}")
+                    return make_return(False, self._loge(f"Could not load weights {weights}.\n" +
+                                                         f"Error occured {e}\n" +
+                                                         traceback.format_exc()))
+                return make_return(True, self._logi(f"Successfuly loaded weights {weights}"))
             else:
                 try:
                     self._resume_from_path(os.path.join(self._savedir, weights))
                 except Exception as e:
-                    return False, self._logi(f"Could not resume from {weights}. Error occured {e}" +
-                                             f"\n{traceback.format_exc()}")
-                return True, self._logi(f"Resumed from file")
+                    return make_return(False, self._loge(f"Could not load weights {weights}.\n" +
+                                                         f"Error occured {e}\n" +
+                                                         traceback.format_exc()))
+                return make_return(True, self._logi(f"Resumed from file"))
 
     # CHECK: I think it's more generic now.
     @POST
     @extras
-    def call_user_func(self, data: Dict[str, Any]) -> Tuple[bool, str]:
+    def call_user_func(self, data: Dict[str, Any]) ->\
+            Union[Return, ReturnExtraInfo]:
         """Call an arbitrary function. For now calls any of train/val/test or given
         update_funcs with a subset of the dataset.
 
@@ -1661,22 +1662,22 @@ class Trainer:
 
         """
         if not data:
-            return False, self._loge(f"Called with null data")
+            return make_return(False, self._loge(f"Called with null data"))
         elif len(data) != 1:
-            return False, self._loge(f"Can only call one function at a time. data is: {data}")
+            return make_return(False, self._loge(f"Can only call one function at a time. data is: {data}"))
         self._logi(f"Calling with data: {data}")
         # NOTE: Function is not a dict right now
         # func_name = [*data.keys()][0]
         func_name = data[0]
         if func_name not in self.user_funcs:
-            return False, {"error": self._loge(f"Unknown function {func_name} given"),
-                           "available_functions": self.user_funcs}
+            return make_info(False, self._loge(f"Unknown function {func_name} given"),
+                             {"available_functions": self.user_funcs})
         elif func_name in self.user_funcs:
             func = self._user_funcs[func_name]
             if not all(getattr(self, x, None) for x in inspect.signature(func).parameters):
-                return False, {"error": self._loge(f"Some of the parameters for {func_name}: " +
-                                                   f"{inspect.signature(func).parameters}" +
-                                                   " are not available")}
+                return make_return(False, self._loge(f"Some of the parameters for {func_name}: " +
+                                                     f"{inspect.signature(func).parameters}" +
+                                                     " are not available"))
             else:
                 params = {x: getattr(self, x) for x in inspect.signature(func).parameters}
             self._logi(f"Running the given user func {func_name}")
@@ -1688,11 +1689,11 @@ class Trainer:
             try:
                 output, callback = async_result.get()
             except Exception as e:
-                return False, f"Unexpected output format for function {func_name}," +\
-                    f" Error occured {e}" + f"\n{traceback.format_exc()}"
+                return make_return(False, f"Unexpected output format for function {func_name}," +\
+                                   f" Error occured {e}" + f"\n{traceback.format_exc()}")
             if callback not in self.user_funcs:
-                return False, {"error": self._loge(f"Unknown function {callback} given"),
-                               "available_functions": self.user_funcs}
+                return make_info(False, self._loge(f"Unknown function {callback} given"),
+                                 {"available_functions": self.user_funcs})
             elif callback in self.user_funcs:
                 callback_func = self._user_funcs[callback]
                 param_names = [x for x in inspect.signature(callback_func).parameters]
@@ -1702,16 +1703,21 @@ class Trainer:
                         flag = False
                         break
                 if not flag:
-                    return False, {"error": self._loge(f"Some of the parameters for callback function" +
-                                                       f" {callback}: " +
-                                                       f" {param_names}" +
-                                                       " are not available")}
+                    return make_return(False,
+                                       self._loge(f"Some of the parameters for callback function" +
+                                                  f" {callback}: " +
+                                                  f" {param_names}" +
+                                                  " are not available"))
                 else:
                     params = {"output": output}
                     param_names.remove("output")
                     for _x in param_names:
                         params[_x] = getattr(self, _x)
                     return callback_func(**params)
+            else:
+                return make_return(False, "Unknown execution flow")
+        else:
+            return make_return(False, "Unknown execution flow")
 
     @POST
     @extras
@@ -1736,68 +1742,54 @@ class Trainer:
     #          adhoc_eval(self, None)
     #          # or self.adhoc_eval(None), not sure
     #          False, "Called with null data"
+    # @POST
+    # @extras
+    # def adhoc_eval(self, data: Dict[str, Any]) -> Union[Return, ReturnExtraInfo]:
+    #     """Do an arbitrary evaluation on any or combination of train/val/test data for
+    #     any state in the model's stored history
+
+    #     1. Create a new task runner
+    #     2. adhoc_eval is called on either or combination of train/val/test data
+    #     3. What to gather and callback can be specified beforehand
+    #     4. Result is stored in _adhoc_func_result
+    #     5. Callbacks can be called on the result multiple times.
+
+    #     :param data: data
+    #     :returns: status and response string
+    #     :rtype: :class:`tuple`
+
+    #     """
+    #     if not data:
+    #         return make_return(False, self._loge(f"Called with null data"))
+    #     self._logi(f"Calling adhoc_eval with data: {data}")
+    #     if not any(x in data for x in self.trainer_params.training_steps):
+    #         return make_info(False, self._logi("Required Input. Given unknown dataset"),
+    #                          **self.adhoc_error_dict)
+    #     else:
+    #         for x in data:
+    #             return self.check_adhoc_eval_params(x, data[x])
+
     @POST
     @extras
-    def adhoc_eval(self, data: Dict[str, Any]) -> Tuple[bool, str]:
+    def adhoc_eval(self, adhoc_step: str,
+                   params: AdhocEvalParams) -> Union[Return, ReturnExtraInfo]:
         """Do an arbitrary evaluation on any or combination of train/val/test data for
-        any state in the model's stored history
-
-        1. Create a new task runner
-        2. adhoc_eval is called on either or combination of train/val/test data
-        3. What to gather and callback can be specified beforehand
-        4. Result is stored in _adhoc_func_result
-        5. Callbacks can be called on the result multiple times.
-
-        :param data: data
-        :returns: status and response string
-        :rtype: :class:`tuple`
-
-        """
-        if not data:
-            return False, self._loge(f"Called with null data")
-        self._logi(f"Calling adhoc_eval with data: {data}")
-        if not any(x in data for x in self.trainer_params.training_steps):
-            return False, {"error": self._logi("Required Input. Given unknown dataset"),
-                           **self.adhoc_error_dict}
-        else:
-            for x in data:
-                return self.check_adhoc_eval_params(x, data[x])
-
-    # FIXME: Should be pydantic type or some other type with defined fields
-    def check_adhoc_eval_params(self, func: Callable,
-                                params: Dict[str, BasicType]):
-        """Call :meth:`call_adhoc_func_on_data` with params. Perhaps it can be lifted
-        above though
+        any state in the model's stored history.
 
         Args:
-            func: Function name. Should be present in :meth:`Trainer.user_funcs`
-                  or one of {"train", "val", "test"}
+            adhoc_step: Should be a valid function present in :class:`Trainer`'s
+                        namespace and compatible with :class:`ModelStep`
+            params: Parameters for execution. See :class:`AdhocEvalParams`
 
-            params: `params` is a :class:`dict` like:
-
-                    {"epoch": :class:`int` num or "current",
-                     "num_or_fraction": 0 < x,
-                     "device", "gpu" or "cpu",  # allocated automatically
-                     "parallel", True or False,
-                     "data": "train_val_or_test",
-                     "callback": "name_of_callback_function"}
+        Returns:
+            An instance of :class:`Return` or :class:`ReturnExtraInfo`
 
         """
         # NOTE: Samples should be captured by default, model defines a sampling
         #       mechanism or else simply output is captured
-        self._logw("Ignoring \"epoch\" for now")
-        if params["epoch"] != "current" or self.epoch != params["epoch"]:
-            # Load the model if present in history
+        if params.epoch != "current" or self.epoch != params.epoch:
+            self._logw("Param: \"epoch\" is ignored for now")
             pass
-        try:
-            iter(params)
-        except TypeError:
-            return False, {"error": self._logi("Required Input. Incorrent format"),
-                           **self.adhoc_error_dict}
-        if not all(x in params for x in ["epoch", "num_or_fraction", "data", "device",
-                                         "callback"]):
-            return False, {"error": self._logi("Required Input. Incorrent parameters"),
-                           **self.adhoc_error_dict}
         # NOTE: From now on gather everything the step_func returns and wait for
         #       callback. "metrics" is removed
         # elif not (params["metrics"] != "all") or\
@@ -1814,58 +1806,43 @@ class Trainer:
         #      not len(inspect.signature(self._user_funcs[func]).parameters) == 1:
         #     return False, {"error": self._loge(f"Given function \"{params['function']}\"" +
         #                                        " is not suited to process data")}
-        elif params["num_or_fraction"] <= 0:
-            return False, self._loge(f"Incorrect fraction or number of points" +
-                                     f" {params['num_or_fraction']}")
-        elif params["device"] not in {"gpu", "cpu"}:
-            return False, self._loge(f"Incorrect device given {params['device']}")
-        elif params["data"] not in {"train", "val", "test"}:
-            return False, self._loge(f"Wrong data given {params['data']}")
-        elif params["data"] in {"train", "val", "test"} and not\
-             getattr(self, params["data"] + "_loader"):
-            return False, self._loge(f"Given dataset not available given {params['data']}")
-        else:
-            # NOTE: All this should be rewritten with guards
 
-            # call this in a separate thread and call the callback on the result
-            # then report it.
-            # NOTE: New thread should only be started from _transition
-            self._adhoc_func = self.call_adhoc_eval_on_data
-            self._adhoc_func_params = params
-            self.call_adhoc_eval_on_data(params)
-            # self.pause()
-            # while not self.paused:
-            #     time.sleep(10)
-            # params["function_name"] = func
-            # t = Thread(target=self.call_adhoc_func_on_data, args=[params])
-            # if not self._flag_adhoc_func_running:
-            #     self._flag_adhoc_func_running = True
-            #     t.start()
-            #     return True, {"success": self._logi("Running the given adhoc function")}
-            # else:
-            #     return False, {"error": self._logi("Another adhoc function is still running")}
+        # call this in a separate thread and call the callback on the result
+        # then report it.
 
-    def call_adhoc_eval_on_data(self, params):
-        """Call adhoc evaluation on data and wait for result. Result is processed by the
-        callback given by the user.
+        # NOTE: New thread should only be started from _transition
+        self._adhoc_func = self.call_adhoc_eval_on_data
+        self._adhoc_func_params = params
+        self.call_adhoc_eval_on_data(params)
+        self.pause()
+        while not self.paused:
+            time.sleep(10)
+        t = Thread(target=self.call_adhoc_eval_on_data, args=[params])
+        t.start()
+        return make_return(True, self._logi("Running the given adhoc function"))
 
-        :param params: Parameters specified for the function
-        :returns: None
-        :rtype: None
+    def call_adhoc_eval_on_data(self, params: AdhocEvalParams):
+        """Call adhoc evaluation on data and wait for result.
+
+        Result is processed by the callback given by the user.
+
+        Args:
+            params: Parameters specified for the function
 
         """
-        step = params["data"]
+        step = params.data
         function = self.update_functions[step]
         step_loader = getattr(self, step + "_loader")
-        if "seed" in params:
-            np.random.seed(params["seed"])
-        if params["num_or_fraction"] > 1:
-            indices = np.random.choice(len(step_loader.dataset), params["num_or_fraction"])
+        if params.seed:
+            np.random.seed(params.seed)
+        if params.num_or_fraction >= 1:
+            indices = np.random.choice(len(step_loader.dataset), params.num_or_fraction)
         else:
             indices = np.random.choice(len(step_loader.dataset),
-                                       int(len(step_loader.dataset) * params["num_or_fraction"]))
+                                       int(len(step_loader.dataset) * params.num_or_fraction))
         _proxy_dataset = ProxyDataset(step_loader.dataset, indices)
         temp_params = self.dataloader_params[step].copy()
+        self._logw("batch_size is set to 1 right now")
         temp_params.update({"batch_size": 1})  # stick to 1 right now
 
         # NOTE: MyDataLoader is to solve the problem of collation in data. So
@@ -1994,44 +1971,46 @@ class Trainer:
     # START: Methods
     @POST
     @methods
-    def set_model(self, model_name) -> Tuple[bool, str]:
+    def set_model(self, model_name: str) -> Return:
         """Set one of the available models as current active model"""
         return self._set_model_active(model_name)
 
-    def _set_model_active(self, model_name) -> Tuple[bool, str]:
-        """Model name is an abstraction and a `model` can have multiple
+    def _set_model_active(self, model_name: str) -> Return:
+        """Set model with name `model_name` the active model.
+
+        Model name is an abstraction and a `model` can have multiple
         :class:`torch.nn.Module` modules within it with separate criteria and
         optimizers. It is the prerogative of the update_function to interact
         with the model.
 
-        :param model_name: :class:`str` model_name
-        :returns: None
-        :rtype: None
+        Args:
+            model_name: Name of the model
+
+        Returns:
+            An instance of :class:`Return`
 
         """
         if model_name not in self.models:
-            return False, self._loge(f"No such model {model_name}")
+            return make_return(False, self._loge(f"No such model {model_name}"))
         else:
             for name in self._models:
                 if name != model_name:  # free only GPU resources
                     self._models.set_device(model_name, torch.device("cpu"))
             for x in self.update_functions:
                 self.update_functions[x]._model_name = model_name
-            return True, self._logd(f"Model {model_name} is now the current active model.")
+            return make_return(True, self._logd(f"Model {model_name} is now the current active model."))
 
     # TODO: This should be a given input and not an image
     @POST
     @methods
-    def fetch_preds(self, img_path: Union[pathlib.Path, str]):
-        """Fetch the prediction for a given image. Returns predictions (captions)
+    def fetch_predictions_for_data(self, img_path: Union[pathlib.Path, str]) -> Dict:
+        """Fetch the prediction for a given data instance
 
-        :param img_path: Image Path
-        :returns: preds: {"beam_preds": beam_preds, "greedy_preds": greedy_preds}
-        :rtype: :class:`dict`
+        Args:
+            img_path: The path to the image
 
-        # Test would be something like
-        >>> response = requests.request("GET", server_url)
-        >>>
+        Return:
+            A :class:`dict` of type {"beam_preds": beam_preds, "greedy_preds": greedy_preds}
 
         """
         if True:              # img_path in self._temp_runner._processed_images:
@@ -2088,22 +2067,23 @@ class Trainer:
             # Assuming predictions exist already somewhere in the report
 
     # TODO: These functions for images can be generalized for arbitrary binary data
-    @POST
+    @GET
     @methods
-    def fetch_image(self, img_path: Union[pathlib.Path, str]):
+    def fetch_image(self, img_path: Union[pathlib.Path, str]) ->\
+            Union[Return, ReturnImage]:
         """Fetch the image from a given path.
         """
-        img_path = os.path.join(self.trainer_params["image_root"], img_path)
+        img_path = os.path.join(self.image_root, img_path)
         if not os.path.exists(img_path):
-            return False, self._logd(f"Image {img_path} doesn't exist")
+            return make_return(False, self._logd(f"Image {img_path} doesn't exist"))
         else:
             try:
                 Image.open(img_path)
             except Exception as e:
-                return False, self._loge(f"Error occurred while reading file {e}" +
-                                         f"\n{traceback.format_exc()}")
+                return make_return(False, self._loge(f"Error occurred while reading file {e}" +
+                                                     f"\n{traceback.format_exc()}"))
             with open(img_path, "rb") as img_file:
-                return True, base64.b64encode(img_file.read()).decode("utf-8")
+                return return_image(True, base64.b64encode(img_file.read()).decode("utf-8"))
 
     @POST
     @methods
@@ -2134,37 +2114,43 @@ class Trainer:
 
     @POST
     @methods
-    def load_weights(self, request):
+    def load_weights(self, model_names: List[str], weights_file: Dict[str, bytes]) -> Return:
         """Load weights for given model names.
 
         The weights file must be sent in the request along with the model names
         and must be loadable from :meth:`torch.load` with all the model names
         present in the keys for the file.
 
+        Args:
+            model_names: A list of model names
+            weights_file: File with all the model names present in the keys for the file.
+
+        Returns:
+            An instance of :class:`Return`
+
         """
-        if "model_names" not in request.form:
-            return False, self._logd(f"Model names not sent in data")
         try:
-            model_names = json.loads(request.form["model_names"])
-            weights = torch.load(request.files["file"], map_location="cpu")
+            weights = torch.load(weights_file, map_location="cpu")
         except Exception as e:
-            return False, self._loge(f"Error occured while reading data {e}" +
-                                     f"\n{traceback.format_exc()}")
+            return make_return(False,
+                               self._loge(f"Error occured while reading data {e}" +
+                                          f"\n{traceback.format_exc()}"))
         if not all(x in weights for x in model_names):
-            return False, self._logd(f"Check save file! " +
-                                     f"Not all {model_names} in given weights {weights.keys()}")
+            return make_return(False,
+                               self._logd(f"Check save file! Not all {model_names} " +
+                                          f"in given weights {weights.keys()}"))
         if not all(x in self.models for x in model_names):
-            return False, self._logd(f"Some models currently not in scope")
+            return make_return(False, self._logd(f"Some models currently not in scope"))
         try:
             for model_name in model_names:
                 status, err = self._models[model_name].load_weights(
                     {"name": model_name, "weights": weights[model_name]})
                 if err:
-                    return False, self._loge(f"Error while updating component {err}")
-            return True, self._logd(f"Updated Models {model_names}")
+                    return make_return(False, self._loge(f"Error while updating component {err}"))
+            return make_return(True, self._logd(f"Updated Models {model_names}"))
         except Exception as e:
-            return False, self._loge(f"Error occured while loading models {e}" +
-                                     f"\n{traceback.format_exc()}")
+            return make_return(False, self._loge(f"Error occured while loading models {e}" +
+                                                 f"\n{traceback.format_exc()}"))
 
     # FIXME: Switch to pydantic for such type checking
     @POST
@@ -2389,16 +2375,16 @@ class Trainer:
 
     # START: Save, Load, Resume
     @internals
-    def _dump_state(self) -> Dict:
+    def _dump_state(self) -> Return:
         "Dump everything except weights"
         try:
             dump_path = os.path.join(self._data_dir, "session_state")
             state = self._get_state(True)
             with open(dump_path, "w") as f:
                 f.write(_dump(state))
-            return True, "Dumped"
+            return make_return(True, "Dumped")
         except Exception as e:
-            return False, f"{e}" + f"\n{traceback.format_exc()}"
+            return make_return(False, self._loge(f"{e}" + f"\n{traceback.format_exc()}"))
 
     @property
     def _save_and_load_keys(self):

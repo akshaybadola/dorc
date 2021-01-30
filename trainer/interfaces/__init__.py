@@ -1,5 +1,6 @@
-from typing import Any, Optional, Dict, Union, Any, Iterable, List
+from typing import Any, Optional, Dict, Union, Any, Iterable, List, Callable
 import os
+import re
 import sys
 import ssl
 import glob
@@ -11,17 +12,23 @@ import requests
 import traceback
 from functools import partial
 from pathlib import Path
+from trainer.spec.models import BaseModel
 
 from flask import Flask, render_template, request, Response
 from flask_cors import CORS
 from werkzeug import serving
-from flask.views import MethodView
+
+from ..util import _dump, deprecated
+from ..trainer import Trainer
+from ..trainer.models import Return
+from ..mods import Modules
+from .._log import Log
+
+from .views import ConfigFile
 
 
-from .util import _dump
-from .trainer import Trainer
-from .mods import Modules
-from ._log import Log
+def make_return(status: bool, message: str) -> Return:
+    return Return(status=status, message=message)
 
 
 def __ifaceunti__(_n):
@@ -29,72 +36,6 @@ def __ifaceunti__(_n):
         return True
     else:
         return False
-
-
-
-class ConfigFile(MethodView):
-    def __init__(self, iface):
-        self.iface = iface
-
-    def get(self):
-        """GET the config file for the trainer.
-
-        Schemas:
-            class Success(BaseModel):
-                default: bytes
-
-        Responses:
-            not found: ResponseSchema(404, "Not Found", MimeTypes.text, "File not found")
-            error: ResponseSchema(400, "Error occured", MimeTypes.text,
-                                      "Error reading file on disk")
-            Success: ResponseSchema(200, "Successful", MimeTypes.binary, "Success")
-
-        """
-        config_file = os.path.join(self.iface.data_dir, "session_config.py")
-        if not os.path.exists(config_file):
-            config_file = os.path.join(config_file[:-3], "__init__.py")
-        if os.path.exists(config_file):
-            try:
-                with open(config_file, "rb") as f:
-                    config = f.read()
-                return config
-            except Exception as e:
-                return Response(f"Error occured {e}" + "\n" + traceback.format_exc(), 400)
-        else:
-            return Response(f"File not found", 404)
-
-    def post(self):
-        """Update the config file on disk.
-
-        Requests:
-            content-type: MimeTypes.multipart
-            body:
-                file: bytes
-
-        Responses:
-            bad params: ResponseSchema(405, "File not sent", MimeTypes.text,
-                                       "File not sent in request")
-            error: ResponseSchema(400, "Error occured", MimeTypes.text,
-                                       "Error occured while writing file")
-            Success: ResponseSchema(200, "Successful", MimeTypes.text, "Updated config")
-
-        """
-        config_file = os.path.join(self.iface.data_dir, "session_config.py")
-        if not os.path.exists(config_file):
-            config_file = os.path.join(config_file[:-3], "__init__.py")
-        try:
-            if not request.files:
-                return Response("File not sent with request", status=405)
-            else:
-                file_bytes = request.files["file"].read()
-                shutil.copy(config_file, config_file + ".bak")
-                with open(config_file, "w") as f:
-                    f.write(file_bytes.decode("utf-8"))
-                return self.iface._logi("Updated Config")
-        except Exception as e:
-            shutil.copy(config_file + ".bak", config_file)
-            return self.iface._loge(f"Error updating config {e}. Reverted to earlier." +
-                                    "\n" + traceback.format_exc())
 
 
 class FlaskInterface:
@@ -166,12 +107,12 @@ class FlaskInterface:
             self._logd(f"Config doesn't exist. Cannot create trainer")
 
     @property
-    def config_exists(self):
+    def config_exists(self) -> bool:
         return (os.path.exists(os.path.join(self.data_dir, "session_config")) or
                 os.path.exists(os.path.join(self.data_dir, "session_config.py")))
 
     @property
-    def state_exists(self):
+    def state_exists(self) -> bool:
         return os.path.exists(os.path.join(self.data_dir, "session_state"))
 
     @property
@@ -186,7 +127,7 @@ class FlaskInterface:
         result = json.loads(response.content)
         return result
 
-    def free_gpus(self, gpus: List[int]):
+    def free_gpus(self, gpus: List[int]) -> Dict:
         response = requests.post(self._daemon_url + "_devices",
                                  json={"action": "free",
                                        "gpus": gpus,
@@ -251,7 +192,7 @@ class FlaskInterface:
         except Exception as e:
             return False, f"{e}" + "\n" + traceback.format_exc()
 
-    def create_trainer(self, config=None):
+    def create_trainer(self, config: Union[Path, str, None] = None):
         if self.config_exists:
             return self._create_trainer_helper()
         elif not self.config_exists and config is None:
@@ -328,14 +269,22 @@ class FlaskInterface:
         """
         return _dump(self.trainer.__class__.__dict__[prop_name].fget(self.trainer))
 
-    def trainer_get(self, func_name):
-        status, response = getattr(self.trainer, func_name)()
-        if status:
-            response = _dump([True, response])
-        else:
-            response = _dump([False, response])
+    def trainer_get(self, func_name: str) -> Response:
+        """Call a trainer `func_name` via HTTP GET, after some checks.
 
-    def trainer_post_form(self, func_name):
+        Args:
+            func_name: Name of the function to call
+
+        Returns:
+            An instance of :class:`Return`
+
+        """
+        retval = getattr(self.trainer, func_name)()
+        status = 200 if retval.status else 400
+        return Response(retval.json(), status=status, mimetype='application/json')
+
+    @deprecated
+    def trainer_post_form(self, func_name: str) -> Response:
         status, response = getattr(self.trainer, func_name)(request)
         if status:
             response = _dump([True, response])
@@ -344,42 +293,88 @@ class FlaskInterface:
             response = _dump([False, response])
             return Response(response, status=500, mimetype='application/json')
 
-    def trainer_post(self, func_name):
-        """Helper function to conduct standard checks for a POST request.  After the
-           checks the function `func_name` from :class:`Trainer` is invoked and
-           returned as json.
+    def remove_class(self, v: Any) -> str:
+        return re.sub(r'<class \'?\"?([a-zA-Z\._]+)\'?\"?>', r'\1', str(v))
+
+    def get_model_from_args(self, func) -> BaseModel:
+        annotations = func.__annotations__.copy()
+        annotations.pop("return", None)
+        lines = [f"    {k}: {self.remove_class(v)}" for k, v in annotations.items()]
+        ldict: Dict[str, Any] = {}
+        exec("\n".join(["class Annot(BaseModel):", *lines]), globals(), ldict)
+        return ldict["Annot"]
+
+    def check_data_trainer_method(self, func_name: str, data: Dict):
+        func = getattr(self.trainer, func_name)
+        if func is None:
+            return Return(status=False, message=f"No such method {func_name}")
+        else:
+            Model = self.get_model_from_args(func)
+            try:
+                model = Model(**data)
+            except Exception as e:
+                return make_return(False, f"{e}")
+            return make_return(True, "")
+
+    def trainer_post(self, func_name: str) -> Response:
+        """Call a trainer `func_name` via HTTP POST, after some checks.
+
+        Args:
+            func_name: Name of the function to call
+
+        Returns:
+            An instance of :class:`Return`
 
         """
         if hasattr(request, "json"):
             data = request.json
-            status, response = getattr(self.trainer, func_name)(data)
-            response = _dump(response)
-            if not status:
-                return Response(response, status=400, mimetype='application/json')
-            else:
-                return Response(response, status=200, mimetype='application/json')
+        elif hasattr(request, "form") and request.form:
+            data = {}
+            for k, v in request.form.items():
+                data[k] = request.form[k]
         else:
-            response = _dump([False, "No data given"])
-            return Response(response, status=400, mimetype='application/json')
+            retval = Return(status=False, message="No data given")
+            return Response(retval.json(), status=400, mimetype='application/json')
+        retval = self.check_data_trainer_method(func_name, data)
+        if retval.status:
+            retval = getattr(self.trainer, func_name)(data)
+        status = 200 if retval.status else 400
+        return Response(retval.json(), status=status, mimetype='application/json')
 
-    def trainer_route(self, func_name):
+    def trainer_route(self, func_name: str) -> Response:
+        """Return a property `prop_name` from the trainer
+
+        Tags:
+            trainer, methods
+
+        Map:
+            /methods/<method_name>: :class:`~trainer.Trainer`.<method_name>
+            /extras/<method_name>: :class:`~trainer.Trainer`.<method_name>
+
+        Responses:
+            not found: ResponseSchema(404, "Not found", MimeTypes.text, "Method not found")
+            bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
+                                            "Required param weights not in params")
+            invalid data: ResponseSchema(405, "Invalid Data", MimeTypes.text,
+                                              "Invalid data {some: json}")
+            success: ResponseSchema(200, "Success", :class:`trainer.Trainer`.<method_name>,
+                                                    :class:`trainer.Trainer`.<method_name>)
+
+        """
         if request.method == "POST":
-            if getattr(getattr(self.trainer, func_name), "content_type", "json") == "form":
-                return self.trainer_post_form(func_name)
-            else:
-                return self.trainer_post(func_name)
+            return self.trainer_post(func_name)
         elif request.method == "GET":
             return self.trainer_get(func_name)
         else:
             return Response(status=405)
 
-    def trainer_internals(self, func_name):
+    def trainer_internals(self, func_name: str) -> Response:
         if hasattr(request, "json"):
             data = request.json
             if "secret" not in data:
-                return _dump([False, None])
+                return make_return(False, "Secret not in data")
             elif "secret" in data and not __ifaceunti__(data["secret"]):
-                return _dump([False, None])
+                return make_return(False, "Bleh")
             else:
                 data.pop("secret")
                 status, response = getattr(self.trainer, func_name)(**data)
@@ -389,7 +384,7 @@ class FlaskInterface:
             else:
                 return Response(response, status=200, mimetype='application/json')
         else:
-            response = _dump([False, "No data given"])
+            response = make_return(False, "No data given")
             return Response(response, status=400, mimetype='application/json')
 
     def start(self):

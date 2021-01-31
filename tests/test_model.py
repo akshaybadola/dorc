@@ -6,8 +6,8 @@ import torch
 import sys
 from _setup_local import config
 sys.path.append("../")
-from trainer.device import all_devices
-from trainer.trainer.model import Model
+from dorc.device import all_devices
+from dorc.trainer.model import Model
 
 
 def get_model(name, config, gpus):

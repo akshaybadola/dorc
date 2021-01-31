@@ -1,6 +1,6 @@
 import pytest
 from typing import Union, List, Callable, Dict, Tuple, Optional, Any
-from trainer.spec.models import BaseModel
+from dorc.spec.models import BaseModel
 
 
 def dget(obj, *args):

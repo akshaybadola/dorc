@@ -7,7 +7,7 @@ import time
 from _setup_local import config
 import torch
 sys.path.append("../")
-from trainer.trainer import Trainer
+from dorc.trainer import Trainer
 
 
 class StateTest(unittest.TestCase):

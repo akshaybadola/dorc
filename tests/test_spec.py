@@ -4,12 +4,12 @@ from pydantic import BaseModel as PydanticBaseModel, Field
 import yaml
 import sys
 sys.path.append("..")
-from trainer.spec.models import (BaseModel, ModelNoTitleNoRequiredNoPropTitle,
-                                 add_nullable, remove_attr, remove_prop_titles)
-from trainer.spec.schemas import ResponseSchema
-from trainer import daemon
-from trainer import spec
-from trainer.spec import docstring
+from dorc.spec.models import (BaseModel, ModelNoTitleNoRequiredNoPropTitle,
+                              add_nullable, remove_attr, remove_prop_titles)
+from dorc.spec.schemas import ResponseSchema
+from dorc import daemon
+from dorc import spec
+from dorc.spec import docstring
 
 
 class FooModel(BaseModel):

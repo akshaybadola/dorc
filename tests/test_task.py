@@ -5,7 +5,7 @@ from threading import Thread, Event
 import pytest
 import time
 sys.path.append("../")
-from trainer.task import DiscreteTask, LoopTask, Signals
+from dorc.task import DiscreteTask, LoopTask, Signals
 
 
 @pytest.mark.threaded

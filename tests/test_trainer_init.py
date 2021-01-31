@@ -1,9 +1,9 @@
 import pytest
 import sys
 sys.path.append("..")
-from trainer.trainer import Trainer, config
-from trainer.trainer.model import Model
-from trainer.autoloads import ClassificationStep
+from dorc.trainer import Trainer, config
+from dorc.trainer.model import Model
+from dorc.autoloads import ClassificationStep
 
 
 # TODO

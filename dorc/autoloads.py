@@ -1,5 +1,5 @@
 import torch
-from trainer.trainer.model import ModelStep
+from dorc.trainer.model import ModelStep
 
 
 class ClassificationStep(ModelStep):

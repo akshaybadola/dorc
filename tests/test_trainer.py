@@ -6,7 +6,7 @@ import unittest
 import sys
 from _setup_local import config
 sys.path.append("../")
-from trainer.trainer import Trainer
+from dorc.trainer import Trainer
 
 
 class TrainerTestDevice(unittest.TestCase):

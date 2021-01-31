@@ -2,7 +2,7 @@ import pytest
 import unittest
 import sys
 sys.path.append("../")
-from trainer.checks import Checks
+from dorc.checks import Checks
 
 
 @pytest.mark.quick

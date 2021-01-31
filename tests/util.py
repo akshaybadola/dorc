@@ -5,9 +5,9 @@ import datetime
 import os
 import torch
 sys.path.append("../")
-from trainer.trainer import Trainer
-from trainer.trainer.model import Model
-from trainer.autoloads import ClassificationStep
+from dorc.trainer import Trainer
+from dorc.trainer.model import Model
+from dorc.autoloads import ClassificationStep
 
 
 
@@ -16,7 +16,7 @@ def make_daemon():
     import time
     import shutil
     import requests
-    from trainer.daemon import _start_daemon
+    from dorc.daemon import _start_daemon
 
     data_dir = ".test_dir"
     if os.path.exists(data_dir):

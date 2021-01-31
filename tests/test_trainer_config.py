@@ -2,8 +2,8 @@ import pytest
 from pydantic import ValidationError
 import sys
 sys.path.append("..")
-from trainer.autoloads import ClassificationStep
-from trainer.trainer import Trainer, config
+from dorc.autoloads import ClassificationStep
+from dorc.trainer import Trainer, config
 
 
 

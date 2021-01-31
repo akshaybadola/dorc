@@ -7,7 +7,7 @@ import requests
 import zipfile
 import unittest
 sys.path.append("../")
-from trainer.daemon import _start_daemon
+from dorc.daemon import _start_daemon
 
 
 mod_string = """

@@ -6,8 +6,8 @@ import unittest
 import sys
 from _setup_local import config
 sys.path.append("../")
-from trainer.device import all_devices, useable_devices
-from trainer.trainer import Trainer
+from dorc.device import all_devices, useable_devices
+from dorc.trainer import Trainer
 
 
 class SubTrainer(Trainer):

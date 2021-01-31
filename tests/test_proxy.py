@@ -6,7 +6,7 @@ import time
 import json
 import requests
 sys.path.append("../")
-from trainer.daemon import _start_daemon
+from dorc.daemon import _start_daemon
 
 
 class ProxyTest(unittest.TestCase):

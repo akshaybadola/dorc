@@ -93,8 +93,8 @@ config["log_levels"] = {"file": "error", "stream": "error"}
 config["load_modules"] = {"module": {"source": """
 import torch
 import torchvision
-from trainer.autoloads import ClassificationStep
-from trainer.trainer.model import Model
+from dorc.autoloads import ClassificationStep
+from dorc.trainer.model import Model
 from torchvision import transforms
 module_exports = {"torch": torch, "torchvision": torchvision, "transforms": transforms,
                   "ClassificationStep": ClassificationStep, "Model": Model}

@@ -4,7 +4,7 @@ import unittest
 import sys
 import time
 sys.path.append("../")
-from trainer.daemon import Daemon
+from dorc.daemon import Daemon
 
 
 class DaemonTest(unittest.TestCase):

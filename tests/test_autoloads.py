@@ -5,12 +5,12 @@ import sys
 from _setup_local import config
 from util import get_batch
 sys.path.append("../")
-from trainer.autoloads import (ClassificationStep, accuracy, CheckFunc,
+from dorc.autoloads import (ClassificationStep, accuracy, CheckFunc,
                                CheckGreater, CheckGreaterName, CheckLesserName,
                                CheckAccuracy)
-from trainer.autoloads import ModelStep
-from trainer.trainer.model import Model
-from trainer.device import all_devices
+from dorc.autoloads import ModelStep
+from dorc.trainer.model import Model
+from dorc.device import all_devices
 
 
 Net = config["model_params"]["net"]["model"]

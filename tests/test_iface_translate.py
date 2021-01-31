@@ -1,9 +1,9 @@
 import pytest
 import sys
 sys.path.append("..")
-from trainer.mods import load_module_exports, eval_python_exprs
-from trainer.interfaces.translation import TranslationLayer
-from trainer.trainer import config as trainer_config
+from dorc.mods import load_module_exports, eval_python_exprs
+from dorc.interfaces.translation import TranslationLayer
+from dorc.trainer import config as trainer_config
 
 
 @pytest.mark.quick

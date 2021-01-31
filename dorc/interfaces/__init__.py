@@ -12,12 +12,12 @@ import requests
 import traceback
 from functools import partial
 from pathlib import Path
-from trainer.spec.models import BaseModel
 
 from flask import Flask, render_template, request, Response
 from flask_cors import CORS
 from werkzeug import serving
 
+from ..spec.models import BaseModel
 from ..util import _dump, deprecated
 from ..trainer import Trainer
 from ..trainer.models import Return

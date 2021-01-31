@@ -6,7 +6,7 @@ import shutil
 import requests
 import unittest
 sys.path.append("../")
-from trainer.daemon import _start_daemon
+from dorc.daemon import _start_daemon
 
 
 class DaemonHTTPTest(unittest.TestCase):
@@ -96,7 +96,7 @@ class DaemonHTTPTest(unittest.TestCase):
         # def test():
         #     import sys
         #     sys.path.append("..")
-        #     from trainer.trainer import Trainer
+        #     from dorc.trainer import Trainer
         #     if os.path.exists(".meh"):
         #         import shutil
         #         shutil.rmtree(".meh")

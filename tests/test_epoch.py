@@ -7,8 +7,8 @@ import time
 from _setup_local import config
 from threading import Thread
 sys.path.append("../")
-from trainer.trainer.epoch import EpochLoop
-from trainer.trainer import Trainer
+from dorc.trainer.epoch import EpochLoop
+from dorc.trainer import Trainer
 
 
 class EpochTest(unittest.TestCase):

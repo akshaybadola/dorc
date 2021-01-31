@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 import importlib
 sys.path.append("..")
-from trainer.autoloads import ClassificationStep
-from trainer.trainer import config as trainer_config
-from trainer.interfaces import FlaskInterface
+from dorc.autoloads import ClassificationStep
+from dorc.trainer import config as trainer_config
+from dorc.interfaces import FlaskInterface
 import _setup
 
 
@@ -52,7 +52,7 @@ def get_step(setup_and_net):
 
 @pytest.fixture
 def params_and_trainer(setup_and_net):
-    from trainer.trainer import Trainer
+    from dorc.trainer import Trainer
     config, _ = setup_and_net
     if os.path.exists(".test_dir"):
         shutil.rmtree(".test_dir")
@@ -95,7 +95,7 @@ def params_and_iface(setup_and_net):
 def daemon_and_cookies():
     import time
     import requests
-    from trainer.daemon import _start_daemon
+    from dorc.daemon import _start_daemon
     data_dir = ".test_dir"
     if os.path.exists(data_dir):
         shutil.rmtree(data_dir)

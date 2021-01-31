@@ -2,8 +2,8 @@ import torch
 from torchvision import datasets, transforms
 import sys
 sys.path.append("..")
-from trainer.autoloads import ClassificationStep
-from trainer.trainer.model import Model
+from dorc.autoloads import ClassificationStep
+from dorc.trainer.model import Model
 
 
 class Net(torch.nn.Module):

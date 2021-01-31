@@ -8,7 +8,7 @@ from threading import Thread
 import zipfile
 import unittest
 sys.path.append("../")
-from trainer.interfaces import FlaskInterface
+from dorc.interfaces import FlaskInterface
 
 
 def create_module(module_dir, module_files=[]):

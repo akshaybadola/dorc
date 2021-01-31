@@ -4,7 +4,7 @@ import sys
 # from _setup_local import config
 from util import get_model, get_batch
 sys.path.append("../")
-from trainer.device import all_devices
+from dorc.device import all_devices
 
 
 @pytest.mark.quick

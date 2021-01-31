@@ -5,7 +5,7 @@ import unittest
 import zipfile
 import sys
 sys.path.append("../")
-from trainer.mods import Modules
+from dorc.mods import Modules
 
 
 @pytest.mark.quick

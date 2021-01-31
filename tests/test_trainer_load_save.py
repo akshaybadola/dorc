@@ -7,8 +7,8 @@ import json
 import torch
 from _setup_local import config, Net
 sys.path.append("../")
-from trainer.device import all_devices, useable_devices
-from trainer.trainer import Trainer
+from dorc.device import all_devices, useable_devices
+from dorc.trainer import Trainer
 
 
 class FakeRequest:

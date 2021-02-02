@@ -1,18 +1,13 @@
-import os
-import shutil
+import pytest
 import time
-from datetime import datetime
-import unittest
 import sys
-from _setup_local import config
 sys.path.append("../")
-from dorc.device import all_devices, useable_devices
 from dorc.trainer import Trainer
 
 
 class SubTrainer(Trainer):
     def __init__(self, _cuda, *args, **kwargs):
-        self._cuda = _cuda
+        _cuda = _cuda
         super().__init__(*args, **kwargs)
 
     @property
@@ -20,68 +15,49 @@ class SubTrainer(Trainer):
         return self._cuda
 
 
-class TrainerTestMetrics(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        """Setup a simple trainer with MNIST dataset."""
-        cls.config = config
-        if os.path.exists(".test_dir"):
-            shutil.rmtree(".test_dir")
-        os.mkdir(".test_dir")
-        os.mkdir(".test_dir/test_session")
-        time_str = datetime.now().isoformat()
-        os.mkdir(f".test_dir/test_session/{time_str}")
-        cls.data_dir = f".test_dir/test_session/{time_str}"
-        cls.params = {"data_dir": cls.data_dir, **cls.config}
-        cls.trainer = SubTrainer(False, **cls.params)
-        cls.trainer.reserved_gpus = []
-        cls.trainer.reserve_gpus = lambda x: [True, None]
-        cls.trainer._trainer_params["cuda"] = True
+@pytest.mark.threaded
+def test_trainer_capture_metrics_epoch(trainer):
+    trainer.reserved_gpus = []
+    trainer.reserve_gpus = lambda x: [True, None]
+    trainer.trainer_params.cuda = True
 
-    def test_trainer_init(self):
-        self.trainer._init_all()
-        self.assertFalse(self.trainer._have_resumed)
-        self.assertTrue(self.trainer.paused)
-
-    def test_trainer_capture_metrics_epoch(self):
-        self.trainer._init_all()
-        self.trainer.start()
-        time.sleep(2)
-        self.trainer.pause()
-        time.sleep(1)
-        metrics = self.trainer.gather_metrics(self.trainer._epoch_runner)
-        self.assertIn("train", metrics)
-        self.assertIn("test", metrics)
-        self.assertNotIn("val", metrics)
-        self.assertIn("loss", metrics["train"])
-        self.assertIn("num_datapoints", metrics["train"])
-        self.assertTrue(metrics["train"]["num_datapoints"] > 0)
-        self.assertTrue(metrics["train"]["loss"] > 0)
-        self.trainer.abort_loop()
-
-    def test_trainer_capture_metrics_iterations(self):
-        self.new_config = self.config.copy()
-        self.new_config["trainer_params"]["training_steps"] = ["iterations"]
-        self.new_config["trainer_params"]["max_iterations"] = 800
-        self.new_config["trainer_params"]["hooks_run_iter_frequency"] = 200
-        self.new_config["dataloader_params"]["train"]["batch_size"] = 64
-        self.new_trainer = Trainer(**{"data_dir": self.data_dir, **self.new_config})
-        self.new_trainer._init_all()
-        self.new_trainer.start()
-        while not self.new_trainer.iterations:
-            time.sleep(1)
-        self.new_trainer.pause()
-        time.sleep(2)
-        self.assertTrue(self.new_trainer.metrics["train"])
-        self.assertIn("loss", self.new_trainer.metrics["train"])
-        self.assertTrue(self.new_trainer.metrics["train"]["loss"][0])
-        self.new_trainer.abort_loop()
-
-    @classmethod
-    def tearDownClass(cls):
-        if os.path.exists(".test_dir"):
-            shutil.rmtree(".test_dir")
+    trainer._init_all()
+    trainer.start()
+    time.sleep(2)
+    trainer.pause()
+    time.sleep(1)
+    retval = trainer.run_hook_with_args("gather_metrics_hook_with_args",
+                                        trainer.epoch_runner)
+    assert retval.status
+    metrics = retval.data
+    assert "train" in metrics
+    assert "test" in metrics
+    assert "val" not in metrics
+    assert "loss" in metrics["train"]
+    assert "num_datapoints" in metrics["train"]
+    assert(metrics["train"]["num_datapoints"] > 0)
+    assert(metrics["train"]["loss"] > 0)
+    trainer.abort_loop()
 
 
-if __name__ == '__main__':
-    unittest.main()
+@pytest.mark.threaded
+def test_trainer_capture_metrics_iterations(trainer):
+    bleh = trainer.trainer_params.dict()
+    new_config = {}
+    new_config["training_type"] = "iterations"
+    new_config["max_epochs"] = 0
+    new_config["max_iterations"] = 800
+    new_config["test_frequency"] = 200
+    bleh.update(new_config)
+    trainer.config.trainer_params = trainer.trainer_params.__class__(**bleh)
+    trainer._init_all()
+    trainer.start()
+    time.sleep(2)
+    trainer.pause()
+    result = trainer.run_hook_with_args("gather_metrics_hook_with_args",
+                                        trainer.epoch_runner)
+    assert(result.data["train"])
+    assert "loss" in result.data["train"]
+    assert "num_datapoints" in result.data["train"]
+    assert result.data["train"]["loss"] != 0
+    trainer.abort_loop()

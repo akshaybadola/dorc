@@ -1,0 +1,17 @@
+# ChangeLog for Deep learning ORChestrator (DORC)
+
+## [2021-02-02 Tue 15:42]
+- Fixed return type annotation of `dorc.device.gpu_ranking`
+- Fixed bug in `spec.exec_and_return` where modules weren't loaded while doing
+  `exec` (added `globals()` to modules)
+- Removed `self` reference from hooks in `dorc.task.LoopTaskWithHooks`
+- Added `init_hooks` and `init_hooks_with_args` to `dorc.trainer`
+- Added `hooks` and `hooks_with_args` to `dorc/trainer` and `dorc.epoch.Epoch`
+- Added `_init_data_helper` to `dorc.trainer`. Fixes data initialization.
+- Added `TrainingType` and how it's handled in `dorc.trainer`
+- Changed how the step functions are determined in `dorc.trainer`. They're now
+  in `_training_steps`.
+- Hooks can now be added and removed from `dorc.epoch.Epoch`. For `dorc.trainer`
+  they're loaded from `dorc/trainer/hooks.py`
+- Added `trainer` to `tests/fixtures.py`.
+- Fixed tests up to `test_trainer_metrics.py`.

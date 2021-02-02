@@ -22,17 +22,19 @@ from ..device import (init_nvml, gpu_ranking, gpu_util, gpu_name,
                       cpu_info, memory_info, DeviceMonitor)
 from ..util import gen_file_and_stream_logger, deprecated, _dump, concat, diff_as_sets, BasicType
 from ..task import Signals
-from .epoch import Epoch
 from ..mods import Modules as Modules
 from ..overrides import MyDataLoader, default_tensorify
-from .model import Model, ModelStep
-from .models import Return, ReturnImage, ReturnExtraInfo, AdhocEvalParams
-from .config import Metric
 from .._log import Log
-from . import config
 from ..helpers import (Tag, ProxyDataset, PropertyProxy, HookDict, Hook,
                        GET, POST, Exposes)
 from ..version import __trainer__version__
+
+from .epoch import Epoch
+from .model import Model, ModelStep
+from .models import Return, ReturnImage, ReturnExtraInfo, AdhocEvalParams
+from . import config
+from .config import Metric
+from . import hooks as hooks_module
 
 
 control = Tag("control")
@@ -164,9 +166,9 @@ class Trainer:
             update_functions = config.UpdateFunctions(
                 function=update_functions["function"],
                 params=config.UpdateFunctionsParams(**update_functions["params"]))
-        else:
-            update_functions = config.UpdateFunctions(**update_functions)
-
+        # else:
+        #     update_functions = update_functions
+        #     update_functions = config.UpdateFunctions(**update_functions)
         self.config = config.Config(model_params={k: config.ModelParams(**v)
                                                   for k, v in model_params.items()},
                                     trainer_params=config.TrainerParams(**trainer_params),
@@ -279,12 +281,14 @@ class Trainer:
         self._init_device()
         self._init_models()
         self._init_data_and_dataloaders()
-        self._init_metrics()
         self._init_update_funcs()
+        self._init_training_steps()
+        self._init_metrics()
         self._init_state_vars()
         self._init_task_runners()
         self._init_modules()
-        self._dump_state()
+        self._init_hooks()
+        # self._dump_state()
         # self._init_extra_controls()
 
     # # NOTE: Shouldn't export this to Checks as name will be mangled
@@ -463,6 +467,8 @@ class Trainer:
         #       hooks.
         self._post_epoch_hooks_to_run = Hook(["validate", "test", "update_metrics"])
 
+        if not getattr(self, "_hooks_run_iter_frequency", None):
+            self._hooks_run_iter_frequency = self.trainer_params.test_frequency
         # FIXME: validate, test, update_metrics is mandatory for now,
         #        unless val_loader and test_loader are none of course
         self._post_epoch_hooks_to_run.append("save_history")
@@ -584,6 +590,15 @@ class Trainer:
             else:
                 self._models[model_name] = None
 
+    def _init_hooks(self):
+        self._hooks = {}
+        self._hooks_with_args = {}
+        for x in hooks_module.__dict__:
+            if x.endswith("_hook"):
+                self._hooks[x] = hooks_module.__dict__[x]
+            if x.endswith("_hook_with_args"):
+                self._hooks_with_args[x] = hooks_module.__dict__[x]
+
     def load_models_state(self, model_state) -> Return:
         for model in self.loaded_models:
             status, message = self._models[model].load(model_state[model])
@@ -646,12 +661,13 @@ class Trainer:
                     self._logw(f"{model_name} not in known models")
             remaining = set(self.gpus) - set(self.allocated_devices)
             if len(remaining) > 0:
+                # FIXME: NEW
                 ranking = [*gpu_ranking(self._device_handles).items()]
                 num_params = {x: 0 for x in auto}
                 for i, model_name in enumerate(auto):
                     self.devices[model_name] = []
                     temp_model = self._model_init_helper(model_name)
-                    if temp_model:
+                    if temp_model is not None:
                         temp_model.load_into_memory()
                     else:
                         raise ValueError()
@@ -694,16 +710,20 @@ class Trainer:
                     else:
                         self._logw(f"{model_name} not in known models")
 
-    def _model_init_helper(self, model_name) -> Union[Model, bool]:
+    def _model_init_helper(self, model_name) -> Optional[Model]:
         model = self.model_params[model_name].model
         model_params = self.model_params[model_name].params
         try:
             optim_name: str = self.model_params[model_name].optimizer
             if optim_name in self.optimizers:
                 optim_func: Callable = self.optimizers[optim_name].function
+                optim_params: Dict = self.optimizers[optim_name].params
+            # FIXME: how give optim params if optimizer not in self.optimizers?
             elif hasattr(torch.optim, optim_name):
                 optim_func = getattr(torch.optim, optim_name)
-            optim_params: Dict = self.optimizers[optim_name].params
+                optim_params = {}
+            else:
+                optim_params = {}
             optimizer = {"name": optim_name,
                          "function": optim_func,
                          "params": optim_params}
@@ -711,7 +731,7 @@ class Trainer:
             return Model(model_name, model, model_params, optimizer, gpus)
         except Exception as e:
             self._loge(f"Error occured {e}")
-            return False
+            return None
 
     @prop                       # type: ignore
     @property
@@ -737,6 +757,17 @@ class Trainer:
             return make_return(*self._models[name].unload())
         else:
             return make_return(False, f"Model {name} not present")
+
+    def _init_data_helper(self, params: Union[Dict, Iterable]) -> Iterable:
+        if isinstance(params, dict):
+            if "function" in params and "params" in params:
+                return params["function"](**params["params"])
+            else:
+                raise AttributeError(f"Unknown or bad parameters {params}")
+        elif iter(params) and len(params) and not isinstance(params, str):  # type: ignore
+            return params
+        else:
+            raise AttributeError(f"Unknown or bad parameters {params}")
 
     def _init_data_and_dataloaders(self):
         """Initialize the dataloaders.
@@ -787,18 +818,21 @@ class Trainer:
                            " Drawing samples from validation data is available!")
 
         if self.data_params.train:
-            self.train_loader = DataLoader(self.data_params.train,
+            train_data = self._init_data_helper(self.data_params.train)
+            self.train_loader = DataLoader(train_data,
                                            **self.dataloader_params.train.__dict__)
             _check_raw(self.train_loader, "Train")
             if self.data_params.val:
-                self.val_loader = DataLoader(self.data_params.val,
+                val_data = self._init_data_helper(self.data_params.val)
+                self.val_loader = DataLoader(val_data,
                                              **self.dataloader_params.val.__dict__)
                 _check_raw(self.train_loader, "Val")
             else:
                 self._logi("No Val loader. Will not do validation")
                 self.val_loader = None
             if self.data_params.test:
-                self.test_loader = DataLoader(self.data_params.test,
+                test_data = self._init_data_helper(self.data_params.test)
+                self.test_loader = DataLoader(test_data,
                                               **self.dataloader_params.test.__dict__)
                 _check_raw(self.test_loader, "Test")
             else:
@@ -871,14 +905,18 @@ class Trainer:
 
         """
         self._training_steps = {}
-        for x in self.trainer_params.training_steps:
-            if getattr(self, x + "_loader"):
+        if self.trainer_params.training_type == "iterations":
+            loaders = ["train", "val", "test"]
+        else:
+            loaders = self.trainer_params.training_steps
+        for x in loaders:
+            if getattr(self, x + "_loader", None):
                 if self._model_step_func:
                     self._training_steps[x] = (self._model_step_func,
                                                self._model_step_func.returns(x),
                                                self._model_step_func.logs(x))
                 else:
-                    func = self.update_functions.train
+                    func = getattr(self.update_functions, x)
                     self._training_steps[x] = func, func.returns, func.logs
 
     def _init_metrics(self):
@@ -3041,7 +3079,7 @@ class Trainer:
     @property
     def max_iterations(self) -> int:
         "Max iterations to run if training type is iterations. See `loop_type`"
-        return self.config.max_iterations
+        return self.trainer_params.max_iterations
 
     @prop                       # type: ignore
     @property
@@ -3318,6 +3356,8 @@ class Trainer:
     def update_functions(self) -> config.UpdateFunctions:
         return self.config.update_functions
 
+    # FIXME: NEW Now a whole bunch of things can be sent anyway. Updatable
+    #        params should be dynamicall determined
     # TODO: Allow extra_metrics, update_funcs and any other params to be updated
     @prop                       # type: ignore
     @property
@@ -3539,18 +3579,15 @@ class Trainer:
         :rtype: None
 
         """
-        if "iterations" in self.trainer_params.training_steps:
-            loop_type = "iterations"
-        else:
-            loop_type = "epoch"
+        loop_type = self.trainer_params.training_type.value
         self._logd(f"Beginning training. Loop type is {loop_type}.")
         if loop_type == "iterations":
-            self._logd(f"Total number of iterations is {self._max_iterations}")
+            self._logd(f"Total number of iterations is {self.max_iterations}")
             self._logd(f"Will run hooks after {self._hooks_run_iter_frequency} iterations")
             while self.iterations < self.max_iterations:
                 self._epoch_runner.reset()
                 # NOTE: run for self._hooks_run_iter_frequency
-                self._epoch_runner.run_train(self.train_step_func, self.train_loader,
+                self._epoch_runner.run_train(self._training_steps["train"][0], self.train_loader,
                                              loop_type, self._hooks_run_iter_frequency)
                 if not self._epoch_runner.status[0]:
                     self._loge(f"Error in train loop {self._epoch_runner.status[1]}")
@@ -3568,7 +3605,7 @@ class Trainer:
             self._logd(f"Total number of batches is {len(self.train_loader)}")
             while self.epoch < self.max_epochs:
                 self._epoch_runner.reset()
-                self._epoch_runner.run_train(self.train_step_func, self.train_loader,
+                self._epoch_runner.run_train(self._training_steps["train"][0], self.train_loader,
                                              loop_type)
                 if not self._epoch_runner.status[0]:
                     self._loge(f"Error in train loop {self._epoch_runner.status[1]}")
@@ -3586,7 +3623,7 @@ class Trainer:
     def validate(self, runner):
         self._logd(f"Validating with {runner.name}")
         try:
-            runner.run_val(self.val_step_func, self.val_loader)
+            runner.run_val(self._training_steps["val"][0], self.val_loader)
             if not self._epoch_runner.status[0]:
                 self._loge(f"Error in val loop {self._epoch_runner.status[1]}")
                 self._abort_current(self._epoch_runner.status[1])
@@ -3596,7 +3633,7 @@ class Trainer:
     def test(self, runner):
         self._logd(f"Testing with {runner.name}")
         try:
-            runner.run_test(self.test_step_func, self.test_loader)
+            runner.run_test(self._training_steps["test"][0], self.test_loader)
             if not self._epoch_runner.status[0]:
                 self._loge(f"Error in val loop {self._epoch_runner.status[1]}")
                 self._abort_current(self._epoch_runner.status[1])
@@ -3634,4 +3671,28 @@ class Trainer:
         hook_prefixes = self.post_epoch_hooks_to_run
         for hook in hook_prefixes:
             all_hooks["_".join([hook, "post_epoch_hook"])](self)
+
+    @prop                       # type: ignore
+    @property
+    def hooks(self) -> List[str]:
+        return [*self._hooks.keys()]
+
+    @prop                       # type: ignore
+    @property
+    def hooks_with_args(self) -> List[str]:
+        return [*self._hooks_with_args.keys()]
+
+    def run_hook(self, hook_name) -> Union[Return, ReturnExtraInfo]:
+        if hook_name in self.hooks:
+            retval = self._hooks[hook_name](self)
+            return make_info(True, f"Ran hook {hook_name}", retval)
+        else:
+            return make_return(False, f"Hook {hook_name} not found")
+
+    def run_hook_with_args(self, hook_name, *args, **kwargs) -> Union[Return, ReturnExtraInfo]:
+        if hook_name in self.hooks_with_args:
+            retval = self._hooks_with_args[hook_name](self, *args, **kwargs)
+            return make_info(True, f"Ran hook {hook_name}", retval)
+        else:
+            return make_return(False, f"Hook {hook_name} not found")
     # END: Stateless Functions

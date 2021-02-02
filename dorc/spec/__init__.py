@@ -86,7 +86,7 @@ def get_func_for_redirect(func_name: str, redirect_from: Callable) -> Optional[C
 
     """
     try:
-        func = exec_and_return(func_name)
+        func = exec_and_return(func_name, globals())
         return func
     except Exception:
         pass
@@ -100,7 +100,7 @@ def get_func_for_redirect(func_name: str, redirect_from: Callable) -> Optional[C
         exec(f"import {modname}")
         if modname in sys.modules:
             func = exec_and_return(".".join([redirect_from.__module__, func_name]),
-                                   {modname: sys.modules[modname]})
+                                   {modname: sys.modules[modname], **globals()})
             return func
     except Exception:
         pass
@@ -330,7 +330,7 @@ def generate_responses(func: Callable, rulename: str, redirect: str) -> Dict[int
                 response = ResponseSchema(*inner_two, mtt, spec=schema)
             content = response.schema()
         else:
-            response = exec_and_return(response_str)
+            response = exec_and_return(response_str, globals())
             if response.mimetype == mt.text:
                 content = response.schema()
             elif response.mimetype in {mt.json, mt.binary}:
@@ -377,7 +377,7 @@ def generate_responses(func: Callable, rulename: str, redirect: str) -> Dict[int
                     response_subroutine(name, response_str)
         elif name == "returns":
             # print(name, func.__qualname__)
-            response_str = exec_and_return(response_str)
+            response_str = exec_and_return(response_str, globals())
             response_subroutine(name, response_str)
         else:
             # print(name, func.__qualname__)
@@ -663,8 +663,6 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
                                      method_func,
                                      [x["name"] for x in parameters],
                                      method)
-    # if "load_weights" in name:
-    #     import ipdb; ipdb.set_trace()
     if "params" in request:
         parameters.extend(get_request_params(request["params"]))
     if parameters:
@@ -680,7 +678,7 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
             body.pop("description", None)
             if "content-type" in request:
                 try:
-                    content_type = exec_and_return(request["content-type"]).value
+                    content_type = exec_and_return(request["content-type"], globals()).value
                 except Exception as e:
                     try:
                         content_type = mt(request["content-type"]).value

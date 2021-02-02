@@ -134,10 +134,9 @@ class ModelTest(unittest.TestCase):
                                       "params": {}, "gpus": [0],
                                       "state_dict": model.dump()["state_dict"]})
         self.assertTrue(status)
-        self.assertIsInstance(message, list)
-        self.assertEqual(len(message), 2)
-        self.assertTrue(any("different gpus" in x.lower() for x in message))
-        self.assertTrue(any("optimizer" in x.lower() for x in message))
+        self.assertIsInstance(message, str)
+        self.assertTrue("different gpus" in message.lower())
+        self.assertTrue("optimizer" in message.lower())
 
     @unittest.skipIf(len(all_devices()) < 1, f"Cannot run without gpus.")
     def test_model_load_gpus(self):

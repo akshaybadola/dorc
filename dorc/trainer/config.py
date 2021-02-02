@@ -5,7 +5,7 @@ import torch
 from pydantic import BaseModel as PydanticBaseModel, validator
 from .models import (BaseModel, TorchModule, DataModel,
                      StepModel, TrainerModel, OptimizerModel)
-from .models import LogLevels, When
+from .models import LogLevels, When, TrainingType
 
 
 class LogLevelParams(BaseModel):
@@ -284,6 +284,7 @@ class TrainerParams(BaseModel):
                   If false, only the models which have `load == True` will be loaded.
         max_iterations: Maximum iterations to train if training with `iterations`
         training_steps: Training steps (usually `[train, val, test]`)
+        training_type: Type of training loop `iterations` or `epoch`
 
     The behaviour of resuming from a previous state depends on both `resume` and
     the params given. In case `init_weights` are given then `resume` need not be
@@ -313,6 +314,7 @@ class TrainerParams(BaseModel):
     load_all: bool
     max_iterations: Optional[int]
     training_steps: List[str]
+    training_type: TrainingType
 
     _validate_gpus = validator("gpus", allow_reuse=True)(gpus_must_evaluate_to_list_of_int)
 
@@ -354,37 +356,37 @@ class TrainerParams(BaseModel):
             raise ValueError("training_steps can't be empty")
         return v
 
-    @validator("training_steps")
+    @validator("training_type")
     def training_with_iterations_should_have_max_iterations_but_not_max_epochs(cls, v, values):
-        if "iterations" in v:
+        if v == "iterations":
             if not values["max_iterations"]:
                 raise ValueError("max_iterations cannot be" +
                                  f" {values['max_iterations']} with iterations")
-            if values["max_epochs"]:
+            if "max_epochs" in values and values["max_epochs"]:
                 raise ValueError("training with iterations cannot have" +
                                  f" max_epochs {values['max_epochs']}")
             values["max_epochs"] = 0
         return v
 
-    @validator("training_steps")
+    @validator("training_type")
     def training_with_epochs_should_have_max_epochs_but_not_max_iterations(cls, v, values):
-        if "train" in v:
+        if v == "epoch":
             if not values["max_epochs"]:
                 raise ValueError("max_epochs cannot be" +
                                  f" {cls.max_epochs} while training with epochs")
-            if values['max_iterations']:
+            if "max_iterations" in values and values['max_iterations']:
                 raise ValueError("training with epochs cannot have" +
                                  f" max_iterations {values['max_iterations']}")
             values["max_iterations"] = 0
         return v
 
-    @validator("training_steps")
-    def training_with_iterations_should_not_have_other_steps(cls, v):
-        if "iterations" in v:
-            if len(v) > 1:
-                raise ValueError("train, val, test or other steps" +
-                                 " cannot be included with iterations")
-        return v
+    # @validator("training_steps")
+    # def training_with_iterations_should_not_have_other_steps(cls, v):
+    #     if "iterations" in v:
+    #         if len(v) > 1:
+    #             raise ValueError("train, val, test or other steps" +
+    #                              " cannot be included with iterations")
+    #     return v
 
 
 class Metric(BaseModel):

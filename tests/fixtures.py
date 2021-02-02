@@ -10,6 +10,8 @@ sys.path.append("..")
 from dorc.autoloads import ClassificationStep
 from dorc.trainer import config as trainer_config
 from dorc.interfaces import FlaskInterface
+from dorc.interfaces.translation import TranslationLayer
+from dorc.trainer import Trainer
 import _setup
 
 
@@ -27,6 +29,21 @@ def create_module(module_dir, module_files=[]):
 def json_config():
     importlib.reload(_setup)
     return _setup.config
+
+
+@pytest.fixture
+def trainer(json_config):
+    config = json_config
+    if os.path.exists(".test_dir"):
+        shutil.rmtree(".test_dir")
+    os.mkdir(".test_dir")
+    os.mkdir(".test_dir/test_session")
+    time_str = datetime.datetime.now().isoformat()
+    os.mkdir(f".test_dir/test_session/{time_str}")
+    tlayer = TranslationLayer(config)
+    test_config = tlayer.from_json()
+    test_config.pop("model_step_params")
+    return Trainer(**test_config)
 
 
 @pytest.fixture
@@ -52,7 +69,6 @@ def get_step(setup_and_net):
 
 @pytest.fixture
 def params_and_trainer(setup_and_net):
-    from dorc.trainer import Trainer
     config, _ = setup_and_net
     if os.path.exists(".test_dir"):
         shutil.rmtree(".test_dir")

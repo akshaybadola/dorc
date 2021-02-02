@@ -31,6 +31,16 @@ class When(str, Enum):
     EPOCH = "EPOCH"
 
 
+class TrainingType(str, Enum):
+    """What type of training loop are we running?
+
+    `iterations` or `epoch`
+
+    """
+    epoch = "epoch"
+    iterations = "iterations"
+
+
 class DataEnum(str, Enum):
     train = "train"
     val = "val"
@@ -82,7 +92,7 @@ class DataModel(BaseModel):
 
     @classmethod
     def validate(cls, v: Any) -> Any:
-        if iter(v) and len(v):
+        if iter(v) and len(v) and not isinstance(v, str):
             return v
         else:
             raise TypeError((f"{v} of type {type(v)} is not a Sequence"))

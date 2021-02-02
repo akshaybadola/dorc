@@ -22,8 +22,7 @@ class Model:
     """
     def __init__(self, name: str, model_def: Callable[..., torch.nn.Module],
                  params: Dict,
-                 optimizer: Dict[str, Union[Callable[..., torch.optim.Optimizer],
-                                            str, Dict]],
+                 optimizer: Dict[str, Any],
                  gpus: List[int]):
         self._name = name
         self._model_def = model_def
@@ -49,7 +48,9 @@ class Model:
     def forward(self, x):
         return self.model.forward(x)
 
-    def load_into_memory(self):
+    def load_into_memory(self, force: bool = False) -> Tuple[bool, str]:
+        if self.loaded and not force:
+            return True, "Already loaded. Use force=True to force reload"
         try:
             self._model = self._model_def(**self._model_params)
             self._optimizer = self._optimizer_func(self._model.parameters(),
@@ -77,25 +78,28 @@ class Model:
         backedup up to a default path in case it's needed to be loaded again.
 
         """
-        try:
-            if backup_path == "RAM":
-                # simply backup to RAM
-                self._model = self._model.cpu()
-                # self._optimizer = self._optimizer.cpu()
-                self._loaded = False
-                self._backup_path = "RAM"
-                return True, f"Unloaded {self.name} to RAM"
-            else:
-                torch.save(self.dump(), backup_path)
-                del self._model
-                del self._optimizer
-                self._model = None
-                self._optimizer = None
-                self._loaded = False
-                self._backup_path = backup_path
-                return True, f"Unloaded {self.name} to {backup_path}"
-        except Exception as e:
-            return False, f"Error occured {e}"
+        if self.loaded:
+            try:
+                if backup_path == "RAM":
+                    # simply backup to RAM
+                    self._model = self._model.cpu()
+                    # self._optimizer = self._optimizer.cpu()
+                    self._loaded = False
+                    self._backup_path = "RAM"
+                    return True, f"Unloaded {self.name} to RAM"
+                else:
+                    torch.save(self.dump(), backup_path)
+                    del self._model
+                    del self._optimizer
+                    self._model = None
+                    self._optimizer = None
+                    self._loaded = False
+                    self._backup_path = backup_path
+                    return True, f"Unloaded {self.name} to {backup_path}"
+            except Exception as e:
+                return False, f"Error occured {e}"
+        else:
+            return True, f"Already unloaded {self.name}"
 
     def reinit(self):
         self._init()
@@ -140,7 +144,10 @@ class Model:
     @property
     def weights(self) -> Dict[str, torch.Tensor]:
         "Return model state_dict"
-        return self._model.state_dict()
+        if self._model is None:
+            raise ValueError("Model not initialized")
+        else:
+            return self._model.state_dict()
 
     @property
     def gpus(self):
@@ -180,6 +187,8 @@ class Model:
         try:
             if self.name != state_dict["name"] and not force:
                 return False, "Names don't match. Set force=True to force loading weights"
+            if not self.loaded:
+                self.load_into_memory()
             self._model.load_state_dict({k: self.to(v)
                                          for k, v in state_dict["weights"].items()})
             return True, None
@@ -258,7 +267,7 @@ class Model:
             if not status:
                 return status, message
             else:
-                return True, warnings
+                return True, "\n".join(warnings)
         except Exception as e:
             return False, f"{e}" + f"\n{traceback.format_exc()}"
 

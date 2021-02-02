@@ -249,11 +249,11 @@ class LoopTaskWithHooks(LoopTask):
 
     def _run_hooks(self):
         for hook in self._hooks:
-            hook(self)
+            hook()
 
     def _run_hooks_with_args(self, *args, **kwargs):
         for hook in self._hooks_with_args:
-            hook(self, *args, **kwargs)
+            hook(*args, **kwargs)
 
     def run_task(self, **kwargs):
         self._init = False

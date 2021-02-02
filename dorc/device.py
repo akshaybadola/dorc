@@ -33,7 +33,7 @@ def gpu_util(handles: Dict[int, Any]) -> Optional[Dict[int, Dict[str, Union[int,
         return None
 
 
-def gpu_ranking(handles: Dict[int, Any]) -> Optional[Dict[int, int]]:
+def gpu_ranking(handles: Dict[int, Any]) -> Optional[Dict[int, Dict[str, int]]]:
     ranking = ["geforce rtx 3080", "geforce rtx 3080", "geforce rtx 2080 ti",
                "geforce gtx 1080 ti", "geforce rtx 2080",
                "geforce rtx 2070", "geforce gtx 1080",

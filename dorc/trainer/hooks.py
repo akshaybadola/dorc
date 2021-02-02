@@ -39,7 +39,7 @@ def save_checkpoint_post_epoch_hook(cls):
     cls.check_and_save()
 
 
-def gather_metrics(cls, runner):
+def gather_metrics_hook_with_args(cls, runner):
     retval = {}
     for step in cls.trainer_params.training_steps:
         if step != "iterations" and step in cls._metrics:
@@ -129,7 +129,6 @@ def log_post_epoch_hook(cls):
     # But these are certain transformations I'm doing to metrics
     for k, v in cls._items_to_log_dict.items():
         getattr(cls, "_log_" + k)()
-
 
 
 def update_metrics_post_epoch_hook(cls):

@@ -1,6 +1,5 @@
 import unittest
 import sys
-# from types import SimpleNamespace
 from threading import Thread, Event
 import pytest
 import time

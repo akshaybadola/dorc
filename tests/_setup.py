@@ -6,7 +6,7 @@
 source = """
 class Net(torch.nn.Module):
     def __init__(self):
-        super(Net, self).__init__()
+        super().__init__()
         self.conv1 = torch.nn.Conv2d(1, 32, 3, 1)
         self.conv2 = torch.nn.Conv2d(32, 64, 3, 1)
         self.dropout1 = torch.nn.Dropout2d(0.25)
@@ -51,6 +51,7 @@ config["trainer_params"] = {"gpus": "", "cuda": False, "seed": 1111,
                             "resume": False, "resume_best": None,
                             "resume_dict": None, "init_weights": None,
                             "training_steps": ["train", "val", "test"],
+                            "training_type": "epoch",
                             "check_func": None, "max_epochs": 100, "load_all": True}
 config["data_params"] = {"name": "mnist",
                          "train": {"function": {"path": "torchvision.datasets.MNIST",

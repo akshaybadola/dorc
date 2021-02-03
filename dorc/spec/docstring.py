@@ -542,6 +542,7 @@ class GoogleDocstring(UnicodeMixin):
             else:
                 if not self._parsed_lines:
                     lines = self._consume_contiguous() + self._consume_empty()
+                    self.description = " ".join([line.lstrip() for line in lines])
                 else:
                     lines = self._consume_to_next_section()
             self._parsed_lines.extend(lines)

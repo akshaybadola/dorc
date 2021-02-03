@@ -15,3 +15,10 @@
   they're loaded from `dorc/trainer/hooks.py`
 - Added `trainer` to `tests/fixtures.py`.
 - Fixed tests up to `test_trainer_metrics.py`.
+
+## [2021-02-03 Wed 22:54]
+- Added more docs to interfaces.
+- Consolidated methods and extras in the FlaskInterface
+- Added `spec` to pytest markers and separated spec tests.
+- Fixed some tests in `test_spec_schema`.
+- Added `test_spec_docstring.py`

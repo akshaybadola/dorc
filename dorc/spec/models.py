@@ -36,6 +36,15 @@ def add_nullable(schema: Dict[str, Any], model: PydanticBaseModel) -> None:
                     # NOTE: we only check the first one for the dict as it has only one
                     add_nullable_subroutine(field.sub_fields[0], value["additionalProperties"],
                                             process_all)
+            elif "type" in value and value["type"] == "object" and\
+                 "properties" in value:
+                if process_all:
+                    for i, s in enumerate(field.sub_fields):
+                        add_nullable_subroutine(s, value["properties"][i], process_all)
+                else:
+                    # NOTE: we only check the first one for the dict as it has only one
+                    add_nullable_subroutine(field.sub_fields[0], value["properties"],
+                                            process_all)
             elif "anyOf" in value:
                 for i, sub_field in enumerate(field.sub_fields):
                     add_nullable_subroutine(sub_field, value["anyOf"][i],
@@ -45,19 +54,19 @@ def add_nullable(schema: Dict[str, Any], model: PydanticBaseModel) -> None:
                                         process_all)
         if field.args_field and isinstance(field.args_field.sub_fields, tuple) and\
            not field.args_field.sub_fields:  # empty args list
-            value["additionalProperties"]["args"] = {"type": "array"}
+            value["properties"]["args"] = {"type": "array"}
         elif field.args_field and field.args_field.sub_fields is None:  # empty args list
-            value["additionalProperties"]["args"] = {"type": "object"}
+            value["properties"]["args"] = {"type": "object"}
         # FIXME: WTF does this do?
         # elif field.args_field and field.args_field == list:
         #     for a in field.args_field.sub_fields:
         #         add_nullable_subroutine(a, value["additionalProperties"]["args"],
         #                                 process_all)
         elif field.args_field is not None:
-            add_nullable_subroutine(field.args_field, value["additionalProperties"]["args"],
+            add_nullable_subroutine(field.args_field, value["properties"]["args"],
                                     process_all)
         if field.ret_field is not None:
-            add_nullable_subroutine(field.ret_field, value["additionalProperties"]["retval"])
+            add_nullable_subroutine(field.ret_field, value["properties"]["retval"])
     for prop, value in schema.get('properties', {}).items():
         field = [x for x in model.__fields__.values() if x.alias == prop][0]
         pa = 'x-type' in value and value['x-type'] == "function"

@@ -1,9 +1,6 @@
 import pytest
 from typing import Union, List, Callable, Dict, Tuple, Optional, Any
 from pydantic import BaseModel as PydanticBaseModel, Field
-import yaml
-import sys
-sys.path.append("..")
 from dorc.spec.models import (BaseModel, ModelNoTitleNoRequiredNoPropTitle,
                               add_nullable, remove_attr, remove_prop_titles)
 from dorc.spec.schemas import ResponseSchema
@@ -162,7 +159,7 @@ def bleh_annot():
     pass
 
 
-@pytest.mark.quick
+@pytest.mark.spec
 def test_get_requests():
     doc = docstring.GoogleDocstring(bleh.__doc__)
     assert not hasattr(doc, "params")
@@ -170,7 +167,7 @@ def test_get_requests():
     assert hasattr(doc, "schemas")
 
 
-@pytest.mark.quick
+@pytest.mark.spec
 def test_check_for_redirects():
     check_str = ':meth:`daemon.Daemon._reinit_session_helper`: ReinitSessionModel'
     func, attr = spec.check_for_redirects(check_str, bleh)
@@ -182,7 +179,7 @@ def test_check_for_redirects():
     assert attr == "return"
 
 
-@pytest.mark.quick
+@pytest.mark.spec
 def test_get_request_body():
     request = spec.get_requests(bleh, "GET", "")
     assert request['content-type'] == 'MimeTypes.json'
@@ -208,7 +205,7 @@ def test_get_request_body():
         any(model_name in x for x in models_in_props)
 
 
-@pytest.mark.quick
+@pytest.mark.spec
 def test_get_request_body_from_annotations():
     request = spec.get_requests(bleh_annot, "GET", "")
     assert request['content-type'] == 'MimeTypes.json'
@@ -218,7 +215,7 @@ def test_get_request_body_from_annotations():
     # TODO: Check for attributes in body by redirect to '$ref'
 
 
-@pytest.mark.quick
+@pytest.mark.spec
 def test_fix_nullable():
     class YourModel(BaseModel):
         a_int: int
@@ -239,7 +236,7 @@ def test_fix_nullable():
     assert "nullable" in props["obj_int_union"]["anyOf"][-1]["additionalProperties"]
 
 
-@pytest.mark.quick
+@pytest.mark.spec
 def test_remove_prop_titles():
     class YourModel(PydanticBaseModel):
         a_int: int
@@ -270,7 +267,7 @@ def test_remove_prop_titles():
         assert "title" not in v
 
 
-@pytest.mark.quick
+@pytest.mark.spec
 def test_remove_attr():
     class Simple(PydanticBaseModel):
         pass
@@ -305,7 +302,7 @@ def test_remove_attr():
     assert "title" not in Simple.schema()
 
 
-@pytest.mark.quick
+@pytest.mark.spec
 def test_response_schema():
     class Response(ModelNoTitleNoRequiredNoPropTitle):
         "Simple Description"
@@ -317,7 +314,7 @@ def test_response_schema():
     assert all("title" not in x for x in schema["properties"].values())
 
 
-@pytest.mark.quick
+@pytest.mark.spec
 def test_response_model_binary():
     class Response(ModelNoTitleNoRequiredNoPropTitle):
         "Simple Description"

@@ -2247,7 +2247,7 @@ class Trainer:
 
     @POST
     @methods
-    def add_model(self, request: flask.Request) -> Tuple[bool, str]:
+    def add_model(self, model_str: Union[str, bytes]) -> Return:
         """Add a model from a given python or module as a zip file.  Delegates the
         request to :meth:`add_module`
 
@@ -2278,12 +2278,6 @@ class Trainer:
                                                            "param_1": True, "param_2": False}}
                               "optimizers": {"YourOptimizer": {"function": YourOptimizer,
                                                                "params": {"lr": 0.01, "theta": 0.9}}}}
-
-        Request:
-        
-
-        Response:
-            
 
         In the above example`Adam`'s parameteres are omitted here for `model_1`
         so first they'll be searched in existing optimizers with trainer, else
@@ -3083,7 +3077,7 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def controls(self) -> Dict[str, Union[Callable[[], None], property]]:
+    def controls(self) -> Dict[str, Callable[[], str]]:
         """Controls are primary functions through which training is controlled. They
         affect the main training loop and other functions can be run either in
         parallel or while the main loop is paused.
@@ -3094,7 +3088,7 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def methods(self) -> Dict[str, Union[Callable[[], None], property]]:
+    def methods(self) -> Dict[str, Callable]:
         """Trainer methods are additional methods besides the controls to manage and
         modify the training session.  Containing such functions which upload
         weights to the server, load previous saves, add/set a model or view
@@ -3105,7 +3099,7 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def all_props(self) -> Dict[str, Union[Callable, property]]:
+    def all_props(self) -> Dict[str, property]:
         return prop.members
 
     @prop                       # type: ignore
@@ -3117,7 +3111,7 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
-    def extras(self) -> Dict[str, Union[Callable, property]]:
+    def extras(self) -> Dict[str, Callable]:
         """Extras are experimental methods whose execution is more complicated and
         should be used with caution. They include calling an pausing and
         evaluating any combination of train/val/test data on current or any

@@ -1,4 +1,4 @@
-from typing import List, Dict, Callable, Iterable, Union
+from typing import List, Dict, Callable, Iterable, Union, Any
 import torch
 from torch.utils.data import Dataset
 import numpy as np
@@ -128,7 +128,7 @@ class Tag:
         return [*self._members.keys()]
 
     @property
-    def members(self) -> Dict[str, Union[Callable, property]]:
+    def members(self) -> Dict[str, Any]:
         return self._members
 
     def __call__(self, f):

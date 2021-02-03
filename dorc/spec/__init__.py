@@ -53,7 +53,7 @@ def ref_repl(x: str) -> str:
         The replaced string
 
     """
-    return re.sub(r'~?(.+),.*', r'\1', re.sub(ref_regex, r'\3', x))
+    return re.sub(r'~?(.+),?.*', r'\1', re.sub(ref_regex, r'\3', x))
 
 
 def resolve_partials(func: Callable) -> Callable:
@@ -397,26 +397,6 @@ def generate_responses(func: Callable, rulename: str, redirect: str) -> Dict[int
 #                    "content": {mimetype: {"schema": content}}}}
 
 
-def get_description(func: Callable) -> str:
-    """Return the first line of the description from a docstring.
-
-    Args:
-        func: Function whose docstring will be processed
-
-    Returns:
-        The extracted description.
-
-    """
-    if func.__doc__ is None:
-        return ""
-    else:
-        doc = docstring.GoogleDocstring(func.__doc__)
-        if doc.lines():
-            return doc.lines()[0]
-        else:
-            return ""
-
-
 def get_request_params(lines: List[str]) -> List[Dict[str, Any]]:
     """Return the paramters of an HTTP request if they exist.
 
@@ -646,12 +626,29 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
     var, redirect = check_function_redirect(method_func.__doc__, name)
     request = get_requests(method_func, method, redirect)
     tags = get_tags(method_func)
-    description = get_description(method_func)
-    if description:
-        if redirect:
-            last = redirect.split(".")[-1]
-            description = re.sub(f"`{var}`", f"`{last}`", description)
-        retval["description"] = description
+    # if name == "/props/controls":
+    #     import ipdb; ipdb.set_trace()
+    if "load_saves" in name:
+        import ipdb; ipdb.set_trace()
+    if redirect:
+        redir_func = get_func_for_redirect(redirect, method_func)
+        if redir_func is None:
+            raise ValueError(f"Redirect {redirect} not found for {method_func}")
+        else:
+            try:
+                doc = docstring.GoogleDocstring(redir_func.__doc__ or "")
+            except Exception as e:
+                raise ValueError(f"Error parsing docstring for {redir_func}, {e}")
+            description = getattr(doc, "description", "")
+            tags.extend(get_tags(redir_func))
+    else:
+        redir_func = None
+        try:
+            doc = docstring.GoogleDocstring(method_func.__doc__ or "")
+        except Exception as e:
+            raise ValueError(f"Error parsing docstring for {method_func}, {e}")
+        description = getattr(doc, "description", "")
+    retval["description"] = description
     if tags:
         retval["tags"] = tags
     parameters: List[Dict[str, Any]] = get_params_in_path(name)

@@ -31,6 +31,12 @@ def make_return(status: bool, message: str) -> Return:
     return Return(status=status, message=message)
 
 
+def make_json(data: Any, status_code: int = 200) -> Response:
+    if not isinstance(data, str):
+        data = data.json()
+    return Response(data, status=status_code, mimetype='application/json')
+
+
 def __ifaceunti__(_n):
     if _n == "_sxde#@_":
         return True
@@ -368,13 +374,33 @@ class FlaskInterface:
         else:
             return Response(status=405)
 
-    def trainer_internals(self, func_name: str) -> Response:
+    def trainer_internals(self, attr_name: str) -> Response:
+        """Return an `internals` object from the trainer
+
+        `internals` member can be function, property or arbitrary attribute.
+
+        Tags:
+            trainer, internals
+
+        Map:
+            /_internals/<attr_name>: :class:`~trainer.Trainer`.<attr_name>
+
+        Responses:
+            not found: ResponseSchema(404, "Not found", MimeTypes.text, "Method not found")
+            bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
+                                            "Required param weights not in params")
+            invalid data: ResponseSchema(405, "Invalid Data", MimeTypes.text,
+                                              "Invalid data {some: json}")
+            success: ResponseSchema(200, "Success", :class:`trainer.Trainer`.<attr_name>,
+                                                    :class:`trainer.Trainer`.<attr_name>)
+
+        """
         if hasattr(request, "json"):
             data = request.json
             if "secret" not in data:
-                return make_return(False, "Secret not in data")
+                return make_json(make_return(False, "Secret not in data"))
             elif "secret" in data and not __ifaceunti__(data["secret"]):
-                return make_return(False, "Bleh")
+                return make_json(make_return(False, "Bleh"))
             else:
                 data.pop("secret")
                 status, response = getattr(self.trainer, func_name)(**data)
@@ -686,12 +712,22 @@ class FlaskInterface:
 
         # NOTE: Adding extras
         for x, y in self.trainer.extras.items():
+            http_methods = []
+            if "POST" in y.__http_methods__:
+                http_methods.append("POST")
             if "GET" in y.__http_methods__:
-                self.app.add_url_rule("/extras/" + x, x, partial(self.trainer_get, x),
-                                      methods=["GET"])
-            elif "POST" in y.__http_methods__:
-                self.app.add_url_rule("/extras/" + x, x, partial(self.trainer_post, x),
-                                      methods=["POST"])
+                http_methods.append("GET")
+            self.app.add_url_rule("/extras/" + x, x, partial(self.trainer_route, x),
+                                  methods=http_methods)
+
+        # # NOTE: Adding extras
+        # for x, y in self.trainer.extras.items():
+        #     if "GET" in y.__http_methods__:
+        #         self.app.add_url_rule("/extras/" + x, x, partial(self.trainer_get, x),
+        #                               methods=["GET"])
+        #     elif "POST" in y.__http_methods__:
+        #         self.app.add_url_rule("/extras/" + x, x, partial(self.trainer_post, x),
+        #                               methods=["POST"])
 
         for x, y in self.trainer._internals.items():
             self.app.add_url_rule("/_internals/" + x, x, partial(self.trainer_internals, x),

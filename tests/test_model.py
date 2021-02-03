@@ -149,7 +149,8 @@ class ModelTest(unittest.TestCase):
                                       "params": {}, "gpus": [0],
                                       "state_dict": model.dump()["state_dict"]})
         self.assertTrue(status)
-        self.assertTrue(any("optimizer" in x.lower() for x in message))
+        self.assertTrue("different gpus" in message.lower())
+        self.assertTrue("optimizer" in message.lower() and "not given" in message.lower())
 
     @classmethod
     def tearDownClass(cls):

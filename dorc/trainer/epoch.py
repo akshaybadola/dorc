@@ -79,6 +79,8 @@ def _log_post_batch_hook(epoch: "Epoch", **kwargs):
                 em_inputs = epoch.extra_metrics[step][m]["inputs"]
                 f_inputs = dict((x, kwargs[x]) for x in em_inputs)
                 epoch.batch_vars.append((step, epoch.batch_num[step], m, em_func(**f_inputs)))
+        # if "device_mon" not in kwargs:
+        #     print("NO DEVICE MON in kwargs")
         if "device_mon" in kwargs:
             dm = kwargs["device_mon"]
             print("LOGGING device_mon in kwargs", dm.__dict__)
@@ -106,6 +108,7 @@ def _log_post_batch_hook(epoch: "Epoch", **kwargs):
         epoch.total_samples[step] += kwargs["total"]  # always there
         return True, None
     except Exception as e:
+        print("BUT WE GET A WEIRD EXCEPTION")
         return False, f"{e}" + "\n" + traceback.format_exc()
 
 

@@ -82,8 +82,8 @@ def params_and_trainer(setup_and_net):
 
 
 @pytest.fixture
-def params_and_iface(setup_and_net):
-    config, _ = setup_and_net
+def params_and_iface(json_config):
+    config = json_config
     hostname = "127.0.0.1"
     port = 12321
     data_dir = ".test_dir"
@@ -97,7 +97,7 @@ def params_and_iface(setup_and_net):
         f_bytes = f.read()
         status, message = iface.create_trainer(f_bytes)
     create_module(os.path.abspath(os.path.join(data_dir, "global_modules")),
-                  [os.path.abspath("../trainer/autoloads.py")])
+                  [os.path.abspath("../dorc/autoloads.py")])
     sys.path.append(os.path.abspath(data_dir))
     from global_modules import autoloads
     status, message = iface.create_trainer()

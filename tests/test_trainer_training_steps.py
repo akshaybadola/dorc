@@ -24,7 +24,7 @@ def test_train_step_no_gpu(setup_and_net, get_step):
 @pytest.mark.skipif(not all_devices(), reason=f"Cannot run without GPUs.")
 def test_train_step_single_gpu(setup_and_net, get_step):
     config, _ = setup_and_net
-    train_step = get_step
+    train_step = config["update_functions"]["train"]
     model = get_model("net", config, [0])
     train_step.set_models({"net": model})
     cname = [*config["criteria"].keys()][0]
@@ -39,7 +39,7 @@ def test_train_step_single_gpu(setup_and_net, get_step):
                     reason=f"Cannot run without at least 2 GPUs.")
 def test_val_step_single_gpu(setup_and_net, get_step):
     config, _ = setup_and_net
-    train_step = get_step
+    train_step = config["update_functions"]["train"]
     train_step.test = True
     model = get_model("net", config, [0])
     train_step.set_models({"net": model})
@@ -55,7 +55,7 @@ def test_val_step_single_gpu(setup_and_net, get_step):
 @pytest.mark.skipif(not all_devices(), reason=f"Cannot run without GPUs.")
 def test_dataparallel(setup_and_net, get_step):
     config, _ = setup_and_net
-    train_step = get_step
+    train_step = config["update_functions"]["train"]
     train_step.test = True
     model = get_model("net", config, [0, 1])
     train_step.set_models({"net": model})

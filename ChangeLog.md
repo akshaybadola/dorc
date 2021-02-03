@@ -15,3 +15,6 @@
   they're loaded from `dorc/trainer/hooks.py`
 - Added `trainer` to `tests/fixtures.py`.
 - Fixed tests up to `test_trainer_metrics.py`.
+
+## [2021-02-03 Wed 14:49]
+- Fixed gpu tests.

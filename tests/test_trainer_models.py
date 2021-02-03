@@ -74,7 +74,7 @@ class TrainerTestModels(unittest.TestCase):
         self.trainer = SubTrainer(False, **self.params)
         self.trainer.reserved_gpus = []
         self.trainer.reserve_gpus = lambda x: [True, None]
-        self.trainer._trainer_params["cuda"] = True
+        self.trainer.trainer_params.cuda = True
         self.trainer._init_device()
         self.trainer._init_models()
         self.assertIn("net", self.trainer._models)
@@ -94,7 +94,7 @@ class TrainerTestModels(unittest.TestCase):
         self.trainer = SubTrainer(False, **self.params)
         self.trainer.reserved_gpus = []
         self.trainer.reserve_gpus = lambda x: [True, None]
-        self.trainer._trainer_params["cuda"] = True
+        self.trainer.trainer_params.cuda = True
         self.trainer._init_device()
         self.trainer._init_models()
         self.assertIn("net_1", self.trainer._models)
@@ -116,7 +116,7 @@ class TrainerTestModels(unittest.TestCase):
         self.trainer = SubTrainer(False, **self.params)
         self.trainer.reserved_gpus = []
         self.trainer.reserve_gpus = lambda x: [True, None]
-        self.trainer._trainer_params["cuda"] = True
+        self.trainer.trainer_params.cuda = True
         self.trainer._init_device()
         self.trainer._init_models()
         self.assertIn("net_1", self.trainer._models)
@@ -138,7 +138,7 @@ class TrainerTestModels(unittest.TestCase):
         self.trainer = SubTrainer(False, **self.params)
         self.trainer.reserved_gpus = []
         self.trainer.reserve_gpus = lambda x: [True, None]
-        self.trainer._trainer_params["cuda"] = True
+        self.trainer.trainer_params.cuda = True
         self.trainer._init_device()
         self.trainer._init_models()
         self.assertIn("net_1", self.trainer._models)
@@ -173,7 +173,7 @@ class TrainerTestModels(unittest.TestCase):
         self.trainer = SubTrainer(False, **self.params)
         self.trainer.reserved_gpus = []
         self.trainer.reserve_gpus = lambda x: [True, None]
-        self.trainer._trainer_params["cuda"] = True
+        self.trainer.trainer_params.cuda = True
         self.trainer._init_device()
         self.trainer._init_models()
         self.assertIn("net_1", self.trainer._models)

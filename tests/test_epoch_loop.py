@@ -39,8 +39,40 @@ def test_epoch_loop_run_task(params_and_trainer):
     assert t.is_alive()
     time.sleep(.5)
     assert len(trainer.epoch_runner.batch_vars)
+    assert train_loop.paused
+    train_loop.finish()
+    signals.paused.set()
+    time.sleep(.5)
+    assert train_loop.finished
+
+
+# NOTE: Consumer
+@pytest.mark.threaded
+def test_epoch_loop_run_task_have_gpus(params_and_trainer):
+    _, trainer = params_and_trainer
+    trainer.config.trainer_params.gpus = [0]
+    trainer.config.trainer_params.cuda = True
+    trainer.reserved_gpus = []
+    trainer.reserve_gpus = lambda x: [True, None]
+    trainer._init_all()
+    signals = trainer._epoch_runner.signals
+    signals.paused.clear()
+    hooks_with_args = [*trainer._epoch_runner._post_batch_hooks_with_args["train"].values()]
+    step = trainer.update_functions.train
+    step.models["net"].load_into_memory()
+    train_loop = EpochLoop(partial(train_one_batch, step), signals,
+                           trainer.train_loader, [], hooks_with_args,
+                           trainer._epoch_runner.device_mon)
+    t = Thread(target=train_loop.run_task)
+    t.start()
+    signals.paused.set()
+    time.sleep(1)
+    signals.paused.clear()
+    assert t.is_alive()
+    time.sleep(.5)
+    assert len(trainer.epoch_runner.batch_vars)
     if all_devices():
-        assert any("gpu" in x[2] for x in trainer.batch_vars)
+        assert any("gpu" in x[2] for x in trainer.epoch_runner.batch_vars)
     assert train_loop.paused
     train_loop.finish()
     signals.paused.set()

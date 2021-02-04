@@ -6,7 +6,7 @@ import shutil
 import requests
 import unittest
 sys.path.append("../")
-from trainer.daemon import _start_daemon
+from dorc.daemon import _start_daemon
 
 
 class DaemonHTTPTest(unittest.TestCase):
@@ -96,7 +96,7 @@ class DaemonHTTPTest(unittest.TestCase):
         # def test():
         #     import sys
         #     sys.path.append("..")
-        #     from trainer.trainer import Trainer
+        #     from dorc.trainer import Trainer
         #     if os.path.exists(".meh"):
         #         import shutil
         #         shutil.rmtree(".meh")
@@ -129,6 +129,16 @@ class DaemonHTTPTest(unittest.TestCase):
         response = requests.request("GET", self.host + f"check_task?task_id={task_id}",
                                     cookies=self.cookies)
         self.assertIn("task_id", json.loads(response.content)[1])
+        time.sleep(1)
+        key = [k for k, v in self.daemon._sessions_list.items() if v["loaded"]][0]
+        port = self.daemon._sessions_list[key]["port"]
+        response = requests.request("GET", self.host + f"trainer/{port}/props",
+                                    cookies=self.cookies)
+        retval = json.loads(response.content)
+        self.assertIsInstance(retval, list)
+        for x in ["epoch", "max_epochs", "methods"]:
+            with self.subTest(i=x):
+                self.assertIn(x, retval)
 
     @classmethod
     def shutdown_daemon(cls, host):

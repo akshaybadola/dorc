@@ -1,4 +1,4 @@
-name: Quick Test
+name: Test and Validate OpenAPI Spec
 on: [push]
 
 jobs:
@@ -25,8 +25,13 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        export SKIP_CYTHON=1
         if [ -f requirements-${{ matrix.python-version }}.txt ]; then python -m pip install -r requirements-${{ matrix.python-version }}.txt; fi
         python -m pip install pytest==6.2.1
-    - name: Test with pytest
+        python -m pip install openapi-spec-validator==0.2.9
+    - name: Test spec generation
       run: |
-        cd tests && python -m pytest -m ci
+        cd tests && pytest -m spec && cd ..
+    - name: Validate OpenAPI spec generation
+      run: |
+        bash make_spec

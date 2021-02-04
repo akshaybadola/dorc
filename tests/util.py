@@ -1,21 +1,37 @@
 import pytest
 import sys
+import shutil
+import datetime
+import os
 import torch
 sys.path.append("../")
-from trainer.model import Model
-from trainer.autoloads import ClassificationStep
+from dorc.trainer import Trainer
+from dorc.trainer.model import Model
+from dorc.autoloads import ClassificationStep
 
 
-@pytest.fixture
-def get_local_config():
-    from _setup_local import config
-    return config
 
+def make_daemon():
+    import os
+    import time
+    import shutil
+    import requests
+    from dorc.daemon import _start_daemon
 
-@pytest.fixture
-def get_remote_config():
-    from _setup import config
-    return config
+    data_dir = ".test_dir"
+    if os.path.exists(data_dir):
+        shutil.rmtree(data_dir)
+    if not os.path.exists(data_dir):
+        os.mkdir(data_dir)
+    port = 23232
+    hostname = "127.0.0.1"
+    daemon = _start_daemon(hostname, port, ".test_dir")
+    host = "http://" + ":".join([hostname, str(port) + "/"])
+    time.sleep(.5)
+    cookies = requests.request("POST", host + "login",
+                               data={"username": "admin",
+                                     "password": "AdminAdmin_33"}).cookies
+    return daemon, cookies
 
 
 def get_batch():

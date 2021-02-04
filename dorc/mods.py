@@ -12,6 +12,70 @@ import flask
 import pathlib
 
 
+def eval_python_exprs(module_str: Union[str, bytes],
+                      checks: Iterable[Callable[[str], bool]],
+                      modules: Dict[str, Any],
+                      return_keys: List[str]) -> Tuple[bool, Union[str, Dict[str, Any]]]:
+    """Evaluate a string or bytes as python expressions.
+
+    Args:
+        module_str: The string or bytes to evaluate.
+        checks: An Iterable of functions which checks the loaded module. Can be empty.
+        modules: A dictionary of additional modules to load while evaluting the string
+        exec_cmd: Command to execute for loading
+        return_keys: The keys of the objects to return
+    Returns:
+        A tuple of status, and message if fails, or dictionary with
+        the symbols and values.
+
+    """
+    try:
+        ldict: Dict[str, Any] = {}
+        flag = True
+        if isinstance(module_str, bytes):
+            module_str = module_str.decode("utf-8")
+        for check_p in checks:
+            if not check_p(module_str):
+                flag = False
+                break
+        if not flag:
+            return False, f"Module check failed {check_p}"
+        else:
+            print(f"Executing the string")
+            exec(module_str, {**globals(), **modules}, ldict)
+            retval = {}
+            if all(k in ldict for k in return_keys):
+                for k in return_keys:
+                    retval[k] = ldict[k]
+                return True, retval
+            else:
+                return False, f"Keys {set(return_keys) - set(ldict.keys())} not in module"
+    except ImportError as e:
+        return False, f"Could not import module_exports from given file. Error {e}" +\
+            "\n" + traceback.format_exc()
+    except Exception as e:
+        return False, f"Some weird error occured while importing. Error {e}" +\
+            "\n" + traceback.format_exc()
+
+
+def load_module_exports(module_str: Union[str, bytes],
+                        checks: Iterable[Callable[[str], bool]] = [],
+                        modules: Dict[str, Any] = {}) ->\
+        Tuple[bool, Union[str, Dict[str, Any]]]:
+    return_keys = ["module_exports"]
+    return eval_python_exprs(module_str, checks, modules, return_keys)
+
+
+def load_symbols(expr_str: Union[str, bytes],
+                 symbol_names: List[str],
+                 checks: Iterable[Callable[[str], bool]] = [],
+                 modules: Dict[str, Any] = {}) ->\
+        Tuple[bool, Union[str, Dict[str, Any]]]:
+    return_keys = symbol_names
+    return eval_python_exprs(expr_str, checks, modules, return_keys)
+
+
+
 class Modules:
     """Dynamic loading and unloading of python modules.
 
@@ -248,14 +312,14 @@ class Modules:
         """
         test_py_file = self._check_file_magic(module_file, "python")
         return_key = "config"
-        checks = []
+        checks: List[Callable] = []
         if config_dir not in sys.path:
-            sys.path.append(config_dir)
+            sys.path.append(str(config_dir))
         tmp_dir = tmp_name = "session_config"
         if env:
             exec_cmd = env + "\n" + f"from session_config import config"
         else:
-            exec_cmd = f"from session_confing import config"
+            exec_cmd = f"from session_config import config"
         if test_py_file:
             tmp_file = os.path.join(os.path.abspath(config_dir), tmp_name + ".py")
             return self._load_python_file(module_file, checks, tmp_file, exec_cmd, return_key)
@@ -266,12 +330,12 @@ class Modules:
         # sys.path.remove(config_dir)
 
     def add_named_module(self, mods_dir: Union[str, pathlib.Path], module_file: bytes,
-                         module_name: str) -> Tuple[bool, str]:
+                         module_name: str) -> Tuple[bool, Dict[str, List[str]]]:
         test_py_file = self._check_file_magic(module_file, "python")
         return_key = module_name
-        checks = []
+        checks: List[Callable] = []
         if mods_dir not in sys.path:
-            sys.path.append(mods_dir)
+            sys.path.append(str(mods_dir))
         if test_py_file:
             tmp_name = module_name
             tmp_file = os.path.join(os.path.abspath(mods_dir), tmp_name + ".py")
@@ -284,7 +348,7 @@ class Modules:
             print("WRITE PATH", mods_dir, tmp_path, module_name)
             exec_cmd = f"import {module_name}"
             mod = self._load_zip_file(module_file, checks, tmp_path, exec_cmd, return_key)
-        sys.path.remove(mods_dir)
+        sys.path.remove(str(mods_dir))
         if mod[0]:
             symbol_names = [x for x in mod[1].__dict__ if not x.startswith("__")]
             return True, {module_name: symbol_names}
@@ -301,7 +365,7 @@ class Modules:
 
         """
         exec_cmd = f"import {mod_name}"
-        ldict = {}
+        ldict: Dict[str, Any] = {}
         exec(exec_cmd, globals(), ldict)
         symbol_names = [x for x in ldict[mod_name].__dict__
                         if not x.startswith("__")]
@@ -321,7 +385,7 @@ class Modules:
         """
         modules_dict = {}
         if mods_dir not in sys.path:
-            sys.path.append(mods_dir)
+            sys.path.append(str(mods_dir))
         py_mods = [x[:-3] for x in os.listdir(mods_dir) if x.endswith(".py")]
         dir_mods = [x for x in os.listdir(mods_dir) if not x.endswith(".py")
                     and os.path.isdir(os.path.join(mods_dir, x))]
@@ -330,5 +394,5 @@ class Modules:
         for m in mods:
             if not any(e(m) for e in excludes):
                 modules_dict[m] = self._get_symbols_from_module(m)
-        sys.path.remove(mods_dir)
+        sys.path.remove(str(mods_dir))
         return modules_dict

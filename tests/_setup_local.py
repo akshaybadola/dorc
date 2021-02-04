@@ -1,5 +1,9 @@
 import torch
 from torchvision import datasets, transforms
+import sys
+sys.path.append("..")
+from dorc.autoloads import ClassificationStep
+from dorc.trainer.model import Model
 
 
 class Net(torch.nn.Module):
@@ -75,33 +79,45 @@ class ClassificationTestStep:
                     "labels": labels.detach(), "total": len(labels)}
 
 
+model = Model("net", Net, {},
+              optimizer={"name": "Adam",
+                         "function": torch.optim.Adam,
+                         "params": {}},
+              gpus=[])
+
+
+def identity(x):
+    return True
+
+
 config = {}
 config["optimizers"] = {"Adam": {"function": torch.optim.Adam,
                                  "params": {"lr": 0.01,
                                             "weight_decay": 0}}}
 config["criteria"] = {"criterion_ce_loss":
                       {"function": torch.nn.CrossEntropyLoss, "params": {}}}
-config["extra_metrics"] = None
+config["extra_metrics"] = {}
 config["trainer_params"] = {"gpus": "", "cuda": False, "seed": 1111,
-                            "resume": False, "resume_best": False,
-                            "resume_weights": False, "init_weights": False,
+                            "resume": False, "resume_best": None,
+                            "resume_dict": None, "init_weights": None,
                             "training_steps": ["train", "val", "test"],
+                            "training_type": "epoch",
                             "check_func": None, "max_epochs": 100, "load_all": True}
-config["data"] = {"name": "mnist",
-                  "train": datasets.MNIST('.data',
-                                          train=True,
-                                          download=True,
-                                          transform=transforms.Compose([
-                                              transforms.ToTensor(),
-                                              transforms.Normalize((0.1307,), (0.3081,))
-                                          ])),
-                  "val": None,
-                  "test": datasets.MNIST('.data',
-                                         train=False,
-                                         transform=transforms.Compose([
-                                             transforms.ToTensor(),
-                                             transforms.Normalize((0.1307,), (0.3081,))
-                                         ]))}
+config["data_params"] = {"name": "mnist",
+                         "train": datasets.MNIST('.data',
+                                                 train=True,
+                                                 download=True,
+                                                 transform=transforms.Compose([
+                                                     transforms.ToTensor(),
+                                                     transforms.Normalize((0.1307,), (0.3081,))
+                                                 ])),
+                         "val": None,
+                         "test": datasets.MNIST('.data',
+                                                train=False,
+                                                transform=transforms.Compose([
+                                                    transforms.ToTensor(),
+                                                    transforms.Normalize((0.1307,), (0.3081,))
+                                                ]))}
 config["dataloader_params"] = {"train": {"batch_size": 32,
                                          "num_workers": 0,
                                          "shuffle": True,
@@ -112,7 +128,20 @@ config["dataloader_params"] = {"train": {"batch_size": 32,
                                         "shuffle": False,
                                         "pin_memory": False}}
 config["model_params"] = {"net": {"model": Net, "optimizer": "Adam", "params": {}, "gpus": "auto"}}
-config["update_functions"] = {"train": ClassificationTrainStep("net", "criterion_ce_loss"),
-                              "val": ClassificationTestStep("net", "criterion_ce_loss"),
-                              "test": ClassificationTestStep("net", "criterion_ce_loss")}
+train_step = ClassificationStep(models={"net": model},
+                                criteria_map={"net": "criterion_ce_loss"},
+                                checks={"net": identity},
+                                logs=["loss"])
+train_step.returns = train_step.returns("train")
+train_step.logs = train_step.logs("train")
+test_step = ClassificationStep(models={"net": model},
+                               criteria_map={"net": "criterion_ce_loss"},
+                               checks={"net": identity},
+                               logs=["loss"])
+test_step.returns = test_step.returns("test")
+test_step.logs = test_step.logs("test")
+test_step.train = False
+config["update_functions"] = {"train": train_step,
+                              "val": test_step,
+                              "test": test_step}
 config["log_levels"] = {"file": "error", "stream": "error"}

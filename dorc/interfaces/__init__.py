@@ -1,5 +1,6 @@
-from typing import Dict, Iterable, Union, List
+from typing import Any, Optional, Dict, Union, Any, Iterable, List, Callable
 import os
+import re
 import sys
 import ssl
 import glob
@@ -10,15 +11,30 @@ import logging
 import requests
 import traceback
 from functools import partial
+from pathlib import Path
 
 from flask import Flask, render_template, request, Response
 from flask_cors import CORS
 from werkzeug import serving
 
-from .util import _dump
-from .trainer import Trainer
-from .mods import Modules
-from ._log import Log
+from ..spec.models import BaseModel
+from ..util import _dump, deprecated
+from ..trainer import Trainer
+from ..trainer.models import Return
+from ..mods import Modules
+from .._log import Log
+
+from .views import ConfigFile
+
+
+def make_return(status: bool, message: str) -> Return:
+    return Return(status=status, message=message)
+
+
+def make_json(data: Any, status_code: int = 200) -> Response:
+    if not isinstance(data, str):
+        data = data.json()
+    return Response(data, status=status_code, mimetype='application/json')
 
 
 def __ifaceunti__(_n):
@@ -97,12 +113,12 @@ class FlaskInterface:
             self._logd(f"Config doesn't exist. Cannot create trainer")
 
     @property
-    def config_exists(self):
+    def config_exists(self) -> bool:
         return (os.path.exists(os.path.join(self.data_dir, "session_config")) or
                 os.path.exists(os.path.join(self.data_dir, "session_config.py")))
 
     @property
-    def state_exists(self):
+    def state_exists(self) -> bool:
         return os.path.exists(os.path.join(self.data_dir, "session_state"))
 
     @property
@@ -110,12 +126,20 @@ class FlaskInterface:
         return requests.get(self._daemon_url + "_devices").json()
 
     def reserve_gpus(self, gpus: List[int]) -> List[Union[bool, None, str]]:
-        return requests.post(self._daemon_url + "_devices",
-                             json={"action": "reserve", "gpus": gpus, "port": self.api_port})
+        response = requests.post(self._daemon_url + "_devices",
+                                 json={"action": "reserve",
+                                       "gpus": gpus,
+                                       "port": self.api_port})
+        result = json.loads(response.content)
+        return result
 
-    def free_gpus(self, gpus: List[int]):
-        return requests.post(self._daemon_url + "_devices",
-                             json={"action": "free", "gpus": gpus, "port": self.api_port})
+    def free_gpus(self, gpus: List[int]) -> Dict:
+        response = requests.post(self._daemon_url + "_devices",
+                                 json={"action": "free",
+                                       "gpus": gpus,
+                                       "port": self.api_port})
+        result = json.loads(response.content)
+        return result
 
     def _update_config(self, config: Dict, overrides: Iterable[Union[int, float, str]]):
         def _check(conf, seq):
@@ -174,7 +198,7 @@ class FlaskInterface:
         except Exception as e:
             return False, f"{e}" + "\n" + traceback.format_exc()
 
-    def create_trainer(self, config=None):
+    def create_trainer(self, config: Union[Path, str, None] = None):
         if self.config_exists:
             return self._create_trainer_helper()
         elif not self.config_exists and config is None:
@@ -213,24 +237,60 @@ class FlaskInterface:
         else:
             self.context = None
 
-    def trainer_control(self, func_name):
+    def trainer_control(self, func_name: str) -> Any:
+        """Call a trainer `control`
+
+        Tags:
+            trainer, controls
+
+        Map:
+            /<control>: :class:`~trainer.Trainer`.<control>
+
+        Responses:
+            not found: ResponseSchema(404, "Not found", MimeTypes.text, "No such control")
+            success: ResponseSchema(200, "Success", :class:`trainer.Trainer`.<control>,
+                                    :class:`trainer.Trainer`.<control>)
+
+        """
         retval = getattr(self.trainer, func_name)()
         if retval:
             return _dump(retval)
         else:
             return _dump("Performing %s\n" % func_name)
 
-    def trainer_props(self, prop_name):
+    def trainer_props(self, prop_name: str) -> Any:
+        """Return a property `prop_name` from the trainer
+
+        Tags:
+            trainer, properties
+
+        Map:
+            /props/<prop_name>: :class:`~trainer.Trainer`.<prop_name>
+
+        Responses:
+            not found: ResponseSchema(404, "Not found", MimeTypes.text, "Property not found")
+            success: ResponseSchema(200, "Success", :class:`trainer.Trainer`.<prop_name>,
+                                    :class:`trainer.Trainer`.<prop_name>)
+
+        """
         return _dump(self.trainer.__class__.__dict__[prop_name].fget(self.trainer))
 
-    def trainer_get(self, func_name):
-        status, response = getattr(self.trainer, func_name)()
-        if status:
-            response = _dump([True, response])
-        else:
-            response = _dump([False, response])
+    def trainer_get(self, func_name: str) -> Response:
+        """Call a trainer `func_name` via HTTP GET, after some checks.
 
-    def trainer_post_form(self, func_name):
+        Args:
+            func_name: Name of the function to call
+
+        Returns:
+            An instance of :class:`Return`
+
+        """
+        retval = getattr(self.trainer, func_name)()
+        status = 200 if retval.status else 400
+        return Response(retval.json(), status=status, mimetype='application/json')
+
+    @deprecated
+    def trainer_post_form(self, func_name: str) -> Response:
         status, response = getattr(self.trainer, func_name)(request)
         if status:
             response = _dump([True, response])
@@ -239,42 +299,108 @@ class FlaskInterface:
             response = _dump([False, response])
             return Response(response, status=500, mimetype='application/json')
 
-    def trainer_post(self, func_name):
-        """Helper function to conduct standard checks for a POST request.  After the
-           checks the function `func_name` from :class:`Trainer` is invoked and
-           returned as json.
+    def remove_class(self, v: Any) -> str:
+        return re.sub(r'<class \'?\"?([a-zA-Z\._]+)\'?\"?>', r'\1', str(v))
+
+    def get_model_from_args(self, func) -> BaseModel:
+        annotations = func.__annotations__.copy()
+        annotations.pop("return", None)
+        lines = [f"    {k}: {self.remove_class(v)}" for k, v in annotations.items()]
+        ldict: Dict[str, Any] = {}
+        exec("\n".join(["class Annot(BaseModel):", *lines]), globals(), ldict)
+        return ldict["Annot"]
+
+    def check_data_trainer_method(self, func_name: str, data: Dict):
+        func = getattr(self.trainer, func_name)
+        if func is None:
+            return Return(status=False, message=f"No such method {func_name}")
+        else:
+            Model = self.get_model_from_args(func)
+            try:
+                model = Model(**data)
+            except Exception as e:
+                return make_return(False, f"{e}")
+            return make_return(True, "")
+
+    def trainer_post(self, func_name: str) -> Response:
+        """Call a trainer `func_name` via HTTP POST, after some checks.
+
+        Args:
+            func_name: Name of the function to call
+
+        Returns:
+            An instance of :class:`Return`
 
         """
         if hasattr(request, "json"):
             data = request.json
-            status, response = getattr(self.trainer, func_name)(data)
-            response = _dump(response)
-            if not status:
-                return Response(response, status=400, mimetype='application/json')
-            else:
-                return Response(response, status=200, mimetype='application/json')
+        elif hasattr(request, "form") and request.form:
+            data = {}
+            for k, v in request.form.items():
+                data[k] = request.form[k]
         else:
-            response = _dump([False, "No data given"])
-            return Response(response, status=400, mimetype='application/json')
+            retval = Return(status=False, message="No data given")
+            return Response(retval.json(), status=400, mimetype='application/json')
+        retval = self.check_data_trainer_method(func_name, data)
+        if retval.status:
+            retval = getattr(self.trainer, func_name)(data)
+        status = 200 if retval.status else 400
+        return Response(retval.json(), status=status, mimetype='application/json')
 
-    def trainer_route(self, func_name):
+    def trainer_route(self, func_name: str) -> Response:
+        """Return a property `prop_name` from the trainer
+
+        Tags:
+            trainer, methods
+
+        Map:
+            /methods/<method_name>: :class:`~trainer.Trainer`.<method_name>
+            /extras/<method_name>: :class:`~trainer.Trainer`.<method_name>
+
+        Responses:
+            not found: ResponseSchema(404, "Not found", MimeTypes.text, "Method not found")
+            bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
+                                            "Required param weights not in params")
+            invalid data: ResponseSchema(405, "Invalid Data", MimeTypes.text,
+                                              "Invalid data {some: json}")
+            success: ResponseSchema(200, "Success", :class:`trainer.Trainer`.<method_name>,
+                                                    :class:`trainer.Trainer`.<method_name>)
+
+        """
         if request.method == "POST":
-            if getattr(getattr(self.trainer, func_name), "content_type", "json") == "form":
-                return self.trainer_post_form(func_name)
-            else:
-                return self.trainer_post(func_name)
+            return self.trainer_post(func_name)
         elif request.method == "GET":
             return self.trainer_get(func_name)
         else:
             return Response(status=405)
 
-    def trainer_internals(self, func_name):
+    def trainer_internals(self, attr_name: str) -> Response:
+        """Return an `internals` object from the trainer
+
+        `internals` member can be function, property or arbitrary attribute.
+
+        Tags:
+            trainer, internals
+
+        Map:
+            /_internals/<attr_name>: :class:`~trainer.Trainer`.<attr_name>
+
+        Responses:
+            not found: ResponseSchema(404, "Not found", MimeTypes.text, "Method not found")
+            bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
+                                            "Required param weights not in params")
+            invalid data: ResponseSchema(405, "Invalid Data", MimeTypes.text,
+                                              "Invalid data {some: json}")
+            success: ResponseSchema(200, "Success", :class:`trainer.Trainer`.<attr_name>,
+                                                    :class:`trainer.Trainer`.<attr_name>)
+
+        """
         if hasattr(request, "json"):
             data = request.json
             if "secret" not in data:
-                return _dump([False, None])
+                return make_json(make_return(False, "Secret not in data"))
             elif "secret" in data and not __ifaceunti__(data["secret"]):
-                return _dump([False, None])
+                return make_json(make_return(False, "Bleh"))
             else:
                 data.pop("secret")
                 status, response = getattr(self.trainer, func_name)(**data)
@@ -284,7 +410,7 @@ class FlaskInterface:
             else:
                 return Response(response, status=200, mimetype='application/json')
         else:
-            response = _dump([False, "No data given"])
+            response = make_return(False, "No data given")
             return Response(response, status=400, mimetype='application/json')
 
     def start(self):
@@ -304,19 +430,67 @@ class FlaskInterface:
 
         @self.app.route('/_ping')
         def __ping():
+            """Return Pong.
+
+            Tags:
+                iface, status
+
+            Schemas:
+                class Pong(BaseModel):
+                    pong: str = "pong"
+
+            Responses:
+                success: ResponseSchema(200, "Pong", MimeTypes.text, "Pong")
+
+            """
             return "pong"
 
         @self.app.route('/props')
         def __props():
+            """Return list of available trainer properties
+
+            Tags:
+                trainer, properties
+
+            Responses:
+                success: ResponseSchema(200, "List of trainer properties", MimeTypes.json,
+                                        "See :attr:`~trainer.Trainer.props`")
+
+            """
             return _dump(self.trainer.props)
 
         @self.app.route('/docs')
         def __docs():
-            return _dump(["Currently only {props} docs are sent. Rest will be added soon",
-                          self.trainer.docs()])
+            """Return documentation for trainer and interface
+
+            Currently only docs for `~trainer.Trainer.props` are sent. Rest will
+            be added soon.
+
+            Tags:
+                trainer, docs
+
+            Responses:
+                success: ResponseSchema(200, "Success", MimeTypes.json,
+                                        "See :attr:`~trainer.Trainer.props`")
+
+            """
+            return self.trainer.docs()
 
         @self.app.route("/batch_props", methods=["POST"])
         def __batch_props():
+            """Return trainer properties which are requested.
+
+            Instead of retrieving a single prop at a time, this helps reducing
+            the network overhead as one can request multiple props directly.
+
+            Tags:
+                trainer, properties
+
+            Responses:
+                success: ResponseSchema(200, "Success", MimeTypes.json,
+                                        "See :attr:`~trainer.Trainer.props`")
+
+            """
             print(f"{request.json}, {request.data}, {request.form}")
             if hasattr(request, "json"):
                 props = request.json
@@ -334,6 +508,15 @@ class FlaskInterface:
 
         @self.app.route("/_shutdown", methods=["GET"])
         def __shutdown_server():
+            """Shutdown the machine
+
+            Tags:
+                interface, maintenance
+
+            Responses:
+                Success: ResponseSchema(200, "Shutting Down", MimeTypes.text, "Shutting Down")
+
+            """
             func = request.environ.get('werkzeug.server.shutdown')
             func()
             return "Shutting down"
@@ -343,17 +526,54 @@ class FlaskInterface:
         # #       one level depth check
         @self.app.route("/destroy", methods=["GET"])
         def __destroy():
+            """Not Implemented
+
+            Tags:
+                interface, maintenance
+
+            Responses:
+                Success: ResponseSchema(200, "Destroying", MimeTypes.text, "Destroying")
+
+            """
             self._logi("Destroying")
             self._logi("Does nothing for now")
 
         @self.app.route("/config", methods=["GET"])
         def __config():
-            return _dump([True, {"config": self._current_config,
-                                 "orig_config": self._orig_config,
-                                 "overrides": self._current_overrides}])
+            """Retrieve the current config, original config and overrides (if any) as a json object
+
+            Tags:
+                trainer, maintenance
+
+            Schema:
+                class Success(BaseModel):
+                    config: trainer.config.Config
+                    orig_config: trainer.config.Config
+                    overrides: Dict
+
+            Responses:
+                Success: ResponseSchema(200, "Success", MimeTypes.json, "Success")
+
+            """
+            return _dump({"config": self._current_config,
+                          "orig_config": self._orig_config,
+                          "overrides": self._current_overrides})
 
         @self.app.route("/list_files", methods=["GET"])
         def __list_files():
+            """Retrieve the list of files (config files?)
+
+            Tags:
+                trainer, maintenance
+
+            Schema:
+                class Success(BaseModel):
+                    default: List[pathlib.Path]
+
+            Responses:
+                Success: ResponseSchema(200, "Success", MimeTypes.json, "Success")
+
+            """
             if os.path.exists(os.path.join(self.data_dir, "session_config.py")):
                 files = ["/session_config.py"]
             else:
@@ -364,6 +584,20 @@ class FlaskInterface:
 
         @self.app.route("/get_file", methods=["POST"])
         def __get_file():
+            """Return a file from the given path
+
+            Tags:
+                trainer, maintenance
+
+            Schema:
+                class Success(BaseModel):
+                    default: List[pathlib.Path]
+
+            Responses:
+                Not found: ResponseSchema(404, "File not found", MimeTypes.text, "File not found")
+                Success: ResponseSchema(200, "Success", MimeTypes.binary, "Success")
+
+            """
             filepath = request.json["filepath"].strip()
             if filepath.startswith("/"):
                 filepath = filepath[1:]
@@ -378,6 +612,25 @@ class FlaskInterface:
 
         @self.app.route("/put_file", methods=["POST"])
         def __put_file():
+            """Put a given file to the path
+
+            Tags:
+                trainer, maintenance
+
+            Requests:
+                content-type: MimeTypes.multipart
+                body:
+                    filepath: str
+                    file: bytes
+
+            Responses:
+                Bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
+                                          "File not sent with request")
+                Error: ResponseSchema(400, "Error occured", MimeTypes.text,
+                                      "Error occured: directory not writable")
+                Success: ResponseSchema(200, "Success", MimeTypes.text, "Written successfully")
+
+            """
             if not request.files:
                 return Response(self._loge("File not sent with request"), status=405)
             elif "filepath" not in request.form or not request.form["filepath"]:
@@ -396,33 +649,47 @@ class FlaskInterface:
                     return self._loge(f"Exception Occured Config {e}. Reverted to earlier." +
                                       "\n" + traceback.format_exc())
 
-        # TODO: Should restart self also, but we can't restart self, only daemon can. LOL
-        @self.app.route("/config_file", methods=["GET", "POST"])
-        def __config_file():
-            config_file = os.path.join(self.data_dir, "session_config.py")
-            if not os.path.exists(config_file):
-                config_file = os.path.join(config_file[:-3], "__init__.py")
-            if request.method == "GET":
-                with open(config_file, "rb") as f:
-                    config = f.read()
-                return config
-            elif request.method == "POST":
-                try:
-                    if not request.files:
-                        return Response("File not sent with request", status=405)
-                    else:
-                        file_bytes = request.files["file"].read()
-                        shutil.copy(config_file, config_file + ".bak")
-                        with open(config_file, "w") as f:
-                            f.write(file_bytes.decode("utf-8"))
-                        return self._logi("Updated Config")
-                except Exception as e:
-                    shutil.copy(config_file + ".bak", config_file)
-                    return self._loge(f"Exception Occured Config {e}. Reverted to earlier." +
-                                      "\n" + traceback.format_exc())
+        # # TODO: Should restart self also, but we can't restart self, only daemon can. LOL
+        # @self.app.route("/config_file", methods=["GET", "POST"])
+        # def __config_file():
+        #     config_file = os.path.join(self.data_dir, "session_config.py")
+        #     if not os.path.exists(config_file):
+        #         config_file = os.path.join(config_file[:-3], "__init__.py")
+        #     if request.method == "GET":
+        #         with open(config_file, "rb") as f:
+        #             config = f.read()
+        #         return config
+        #     elif request.method == "POST":
+        #         try:
+        #             if not request.files:
+        #                 return Response("File not sent with request", status=405)
+        #             else:
+        #                 file_bytes = request.files["file"].read()
+        #                 shutil.copy(config_file, config_file + ".bak")
+        #                 with open(config_file, "w") as f:
+        #                     f.write(file_bytes.decode("utf-8"))
+        #                 return self._logi("Updated Config")
+        #         except Exception as e:
+        #             shutil.copy(config_file + ".bak", config_file)
+        #             return self._loge(f"Exception Occured Config {e}. Reverted to earlier." +
+        #                               "\n" + traceback.format_exc())
+
+        config_file_rule = ConfigFile.as_view("config_file", self)
+        self.app.add_url_rule("/config_file",
+                              view_func=config_file_rule)
+
 
         @self.app.route("/update_restart", methods=["POST"])
         def __update_restart():
+            """Not Implemented
+
+            Tags:
+                interface, maintenance
+
+            Responses:
+                Success: ResponseSchema(200, "Update and restart", MimeTypes.text, "Update and restart")
+
+            """
             return _dump("Does nothing for now")
 
         # NOTE: Add rule for each property `prop` of `Trainer`"
@@ -445,15 +712,27 @@ class FlaskInterface:
 
         # NOTE: Adding extras
         for x, y in self.trainer.extras.items():
+            http_methods = []
+            if "POST" in y.__http_methods__:
+                http_methods.append("POST")
             if "GET" in y.__http_methods__:
-                self.app.add_url_rule("/extras/" + x, x, partial(self.trainer_get, x),
-                                      methods=["GET"])
-            elif "POST" in y.__http_methods__:
-                self.app.add_url_rule("/extras/" + x, x, partial(self.trainer_post, x),
-                                      methods=["POST"])
+                http_methods.append("GET")
+            self.app.add_url_rule("/extras/" + x, x, partial(self.trainer_route, x),
+                                  methods=http_methods)
+
+        # # NOTE: Adding extras
+        # for x, y in self.trainer.extras.items():
+        #     if "GET" in y.__http_methods__:
+        #         self.app.add_url_rule("/extras/" + x, x, partial(self.trainer_get, x),
+        #                               methods=["GET"])
+        #     elif "POST" in y.__http_methods__:
+        #         self.app.add_url_rule("/extras/" + x, x, partial(self.trainer_post, x),
+        #                               methods=["POST"])
 
         for x, y in self.trainer._internals.items():
             self.app.add_url_rule("/_internals/" + x, x, partial(self.trainer_internals, x),
                                   methods=["POST"])
+        # reference to url_map for generating schemas
+        self.endpoints = self.app.url_map
         serving.run_simple(self.api_host, self.api_port, self.app, threaded=True,
                            ssl_context=self.context)

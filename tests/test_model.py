@@ -6,8 +6,8 @@ import torch
 import sys
 from _setup_local import config
 sys.path.append("../")
-from trainer.device import all_devices
-from trainer.model import Model
+from dorc.device import all_devices
+from dorc.trainer.model import Model
 
 
 def get_model(name, config, gpus):
@@ -19,7 +19,7 @@ def get_model(name, config, gpus):
     return Model(name, model_def, params, optimizer, gpus)
 
 
-@pytest.mark.ci
+@pytest.mark.quick
 class ModelTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -134,10 +134,9 @@ class ModelTest(unittest.TestCase):
                                       "params": {}, "gpus": [0],
                                       "state_dict": model.dump()["state_dict"]})
         self.assertTrue(status)
-        self.assertIsInstance(message, list)
-        self.assertEqual(len(message), 2)
-        self.assertTrue(any("different gpus" in x.lower() for x in message))
-        self.assertTrue(any("optimizer" in x.lower() for x in message))
+        self.assertIsInstance(message, str)
+        self.assertTrue("different gpus" in message.lower())
+        self.assertTrue("optimizer" in message.lower())
 
     @unittest.skipIf(len(all_devices()) < 1, f"Cannot run without gpus.")
     def test_model_load_gpus(self):
@@ -150,7 +149,8 @@ class ModelTest(unittest.TestCase):
                                       "params": {}, "gpus": [0],
                                       "state_dict": model.dump()["state_dict"]})
         self.assertTrue(status)
-        self.assertTrue(any("optimizer" in x.lower() for x in message))
+        self.assertTrue("different gpus" in message.lower())
+        self.assertTrue("optimizer" in message.lower() and "not given" in message.lower())
 
     @classmethod
     def tearDownClass(cls):

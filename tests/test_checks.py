@@ -2,10 +2,10 @@ import pytest
 import unittest
 import sys
 sys.path.append("../")
-from trainer.checks import Checks
+from dorc.checks import Checks
 
 
-@pytest.mark.ci
+@pytest.mark.quick
 class ChecksTest(unittest.TestCase):
     def setUp(self):
         self.checks = Checks(print, print)

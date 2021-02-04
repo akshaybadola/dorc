@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Union, Callable
+from typing import List, Dict, Any, Union, Callable, Optional
 import os
 import sys
 import ssl
@@ -26,124 +26,27 @@ from markupsafe import escape
 from functools import partial
 
 import flask_login
-from flask import Flask, render_template, request, Response
+from flask import Flask, render_template, request, Response, make_response
 from flask_cors import CORS
 from werkzeug import serving
 
-from .version import __daemon__version__
-from .mods import Modules
-from .helpers import Tag
-from .interfaces import FlaskInterface
-# from .util import _dump as dump
-from .util import _dump, diff_as_sets
-from ._log import Log
-from .auth import __unti__, __inti__, User
+from ..version import __daemon__version__
+from ..mods import Modules
+from ..helpers import Tag
+from ..interfaces import FlaskInterface
+from ..util import _dump, diff_as_sets, make_json
+from .._log import Log
 
+from .auth import __unti__, __inti__, User
+from .util import get_hostname, have_internet, create_module, check_ssh_port, register_with_tracker
+
+from . import views
+from . import models
+from .sessions import Sessions
+from .trainer_views import Trainer
+from .check_task import CheckTask
 
 session_method = Tag("session_method")
-
-
-def get_hostname() -> str:
-    p = Popen("hostname", stdout=PIPE, stderr=PIPE)
-    out, err = p.communicate()
-    return out.decode("utf-8")
-
-
-def check_ssh_port(host: str, port: int) -> int:
-    timeout = 2
-    while True:
-        print(f"Checking port {port}")
-        out, err = b"", b""
-        ip_addr = host.split("@")[1]
-        p = Popen(f"nc -z -v {ip_addr} 22", shell=True, stdout=PIPE, stderr=PIPE)
-        try:
-            out, err = p.communicate(timeout=timeout)
-        except TimeoutExpired:
-            port = "UNREACHABLE"
-            break
-        p = Popen(shlex.split(f"ssh -R {port}:localhost:20202 {host} hostname"),
-                  stdout=PIPE, stderr=PIPE)
-        try:
-            out, err = p.communicate(timeout=timeout)
-        except Exception:
-            pass
-        print(f"Got values {out}, {err}")
-        if out.decode("utf-8") and "warn" in err.decode("utf-8").lower():
-            port += 101
-        elif out.decode("utf-8") and not err.decode("utf-8").lower():
-            break
-        p.kill()
-    return port
-
-
-def have_internet():
-    auth_cmd = ('curl -L -k -d username="15mcpc15" -d password="unmission@123"' +
-                ' -d mode=191 http://192.168.56.2:8090/login.xml')
-
-    def communicate(p, vals):
-        vals['out'], vals['err'] = p.communicate()
-
-    def connect(auth_cmd):
-        vals = {'out': None, 'err': None}
-        p = Popen(auth_cmd, shell=True, stdout=PIPE, stderr=PIPE)
-        t = Thread(target=communicate, args=[p, vals])
-        t.start()
-        t.join(timeout=5)
-        p.kill()
-        if vals['out'] and "You have successfully logged in" in vals['out'].decode('utf-8'):
-            return True
-        else:
-            return False
-
-    while True:
-        vals = {'out': None, 'err': None}
-        p = Popen("curl google.com".split(), stdout=PIPE, stderr=PIPE)
-        t = Thread(target=communicate, args=[p, vals])
-        t.start()
-        t.join(timeout=5)
-        p.kill()
-        if vals['out']:
-            if "the document has moved" not in vals['out'].decode('utf-8').lower():
-                connect(auth_cmd)
-        time.sleep(60)
-
-
-def register_with_tracker(tracker, host, port):
-    status = False
-    fwd_port = 11111
-    procs = []
-    while not status:
-        procs.append(Popen(shlex.split(f"ssh -N -L {fwd_port}:localhost:11111 {tracker}"),
-                           stdout=PIPE, stderr=PIPE))
-        time.sleep(3)
-        try:
-            print(f"Registering port {port} at {tracker}")
-            resp = requests.request("POST", f"http://localhost:{fwd_port}/",
-                                    json={"put": True,
-                                          "hostname": host,
-                                          "port": port}).content
-            status = True
-        except requests.ConnectionError as e:
-            print(f"Connection refused from server {e}")
-            resp = None
-            status = True
-        except Exception as e:
-            print(f"Register request at port {fwd_port} with {tracker} failed {e}. Trying again")
-            resp = None
-    for p in procs:
-        p.kill()
-    return resp
-
-
-def create_module(module_dir, module_files=[]):
-    if not os.path.exists(module_dir):
-        os.mkdir(module_dir)
-    if not os.path.exists(os.path.join(module_dir, "__init__.py")):
-        with open(os.path.join(module_dir, "__init__.py"), "w") as f:
-            f.write("")
-    for f in module_files:
-        shutil.copy(f, module_dir)
-
 
 Path = Union[str, pathlib.Path]
 
@@ -170,9 +73,10 @@ class Daemon:
             self._have_internet.start()
         else:
             self._have_internet = None
+        self._lib_dir = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+        self._init_root_dir(root_dir)
         self._init_data_dirs(data_dir, production)
         self._init_flask_dirs(template_dir, static_dir)
-        self._init_root_dir(root_dir)
         self._init_app()
         self._init_resources()
         self._init_logger()
@@ -199,16 +103,23 @@ class Daemon:
         os.mkdir(self.tmp_dir)
         self.production = production
         # FIXME: Code duplication here
-        # NOTE: init modules_dir
-        self.modules_dir = os.path.join(self.data_dir, "global_modules")
-        create_module(self.modules_dir,
-                      [os.path.join(os.path.dirname(__file__), x)
-                       for x in ["autoloads.py"]])
         # NOTE: Append data_dir path
         self.env_str = f"""
 import sys
-sys.path.append("{self.data_dir}")
+if "{self.data_dir}" not in sys.path:
+    sys.path.append("{self.data_dir}")
 """
+        self.root_env_str = f"""
+import sys
+if "{self.root_dir}" not in sys.path:
+    sys.path.append("{self.root_dir}")
+"""
+        # NOTE: init modules_dir
+        self.modules_dir = os.path.join(self.data_dir, "global_modules")
+        create_module(self.modules_dir,
+                      [os.path.join(self._lib_dir, x)
+                       for x in ["autoloads.py"]],
+                      env_str=self.root_env_str)
         # NOTE: init datasets_dir
         self.datasets_dir = os.path.join(self.data_dir, "global_datasets")
         create_module(self.datasets_dir)
@@ -218,24 +129,11 @@ sys.path.append("{self.data_dir}")
                                     self.tmp_dir])]
         self._session_exclude_dirs = ["modules", "datasets"]
 
-    def _init_flask_dirs(self, template_dir, static_dir):
-        "Initialize flask template and static dirs"
-        if template_dir is None:
-            self._template_dir = os.path.join(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__))), "dist")
-        else:
-            self._template_dir = template_dir
-        if static_dir is None:
-            self._static_dir = os.path.join(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__))), "dist")
-        else:
-            self._static_dir = static_dir
-
+    # FIXME: These paths should be better
     def _init_root_dir(self, root_dir):
         # NOTE: root_dir is relative (CHECK why?)
         if root_dir is None:
-            self._root_dir = os.path.join(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__))))
+            self._root_dir = os.path.dirname(self._lib_dir)
         else:
             self._root_dir = root_dir
         if not os.path.exists(self._root_dir):
@@ -243,6 +141,17 @@ sys.path.append("{self.data_dir}")
         if_run_file = os.path.join(self.root_dir, "if_run.py")
         if not os.path.exists(if_run_file):
             raise FileNotFoundError(f"FATAL ERROR! {if_run_file} doesn't exist")
+
+    def _init_flask_dirs(self, template_dir, static_dir):
+        "Initialize flask template and static dirs"
+        if template_dir is None:
+            self._template_dir = os.path.join(self._root_dir, "dist")
+        else:
+            self._template_dir = template_dir
+        if static_dir is None:
+            self._static_dir = os.path.join(self._root_dir, "dist")
+        else:
+            self._static_dir = static_dir
 
     def _init_app(self):
         "Initialize the :class:`Flask` app"
@@ -267,7 +176,7 @@ sys.path.append("{self.data_dir}")
         self._sessions = {}
         self._devices = {}
         self._modules = {}
-        self._datasets = {}
+        self._datasets: Dict[str, Dict] = {}
         self._init_context()
         self._task_id = 0
         self.__task_ids = []
@@ -324,7 +233,7 @@ sys.path.append("{self.data_dir}")
             self._fwd_ports_thread = mp.Process(target=self.fwd_ports_func)
             self.fwd_ports_thread.start()
         else:
-            print(f"Not registering with trackers")
+            print("Not registering with trackers", file=sys.stderr)
 
     @property
     def root_dir(self) -> Path:
@@ -332,6 +241,10 @@ sys.path.append("{self.data_dir}")
 
         Used only by :meth:`_create_trainer`"""
         return self._root_dir
+
+    @property
+    def datasets(self) -> Dict[str, Dict]:
+        return self._datasets
 
     @property
     def hostname(self) -> str:
@@ -735,6 +648,7 @@ sys.path.append("{self.data_dir}")
                             "\n" + traceback.format_exc()
         self._already_scanned = True
 
+    # FIXME: data should be pydantic type
     def create_session(self, task_id, data):
         """Creates a new training session from given data
 
@@ -787,6 +701,7 @@ sys.path.append("{self.data_dir}")
             shutil.rmtree(data_dir)
 
     # NOTE: Only load_session sends load=True to _create_trainer
+    # FIXME: config is a pydantic type already
     def _create_trainer(self, task_id: int, name: str, time_str: str,
                         data_dir: Path, config: dict, overrides=None, load=False):
         """Create a trainer.
@@ -850,7 +765,7 @@ sys.path.append("{self.data_dir}")
                 if p.poll() is None:
                     self._task_q.put((task_id, True))
                 else:
-                    self._task_q.put((task_id, False, f"Trainer crashed"))
+                    self._task_q.put((task_id, False, "Trainer crashed"))
             except Exception as e:
                 self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
         else:
@@ -921,6 +836,7 @@ sys.path.append("{self.data_dir}")
             timestemp: Session Timestamp
 
         """
+        # FIXME: Fix this to enum
         status = self._check_session_valid(session_name, timestamp)
         if not status[0]:
             return status
@@ -946,9 +862,9 @@ sys.path.append("{self.data_dir}")
         pass
 
     @property
-    def _sessions_list(self) -> List[Dict[str, dict]]:
+    def sessions_list(self) -> Dict[str, Dict[str, Union[None, bool, int, Dict]]]:
         # return _dump(self._sessions)
-        retval = {}
+        retval: Dict[str, Dict[str, Union[None, bool, int, Dict]]] = {}
         for k, v in self._sessions.items():
             session_stamps = v["sessions"].keys()
             for ts in session_stamps:
@@ -1030,6 +946,15 @@ sys.path.append("{self.data_dir}")
 
     @session_method
     def _load_session_helper(self, task_id, name, time_str, data=None):
+        """Load a session with given key `name`/`time_str`
+
+        Args:
+            task_id: The `task_id` for the task
+            name: `name` of the session
+            time_str: The time stamp of the session
+            data: Any additional data passed from the request
+
+        """
         key = name + "/" + time_str
         data_dir = os.path.join(self.data_dir, name, time_str)
         config_candidates = [x for x in os.listdir(data_dir)
@@ -1053,6 +978,15 @@ sys.path.append("{self.data_dir}")
 
     @session_method
     def _unload_session_helper(self, task_id, name, time_str=None, data=None):
+        """Unload a session with given key `name`/`time_str`
+
+        Args:
+            task_id: The `task_id` for the task
+            name: `name` of the session
+            time_str: The time stamp of the session
+            data: Any additional data passed from the request
+
+        """
         def _unload(name, time_str):
             self._logd(f"Unloading {name}/{time_str}")
             if "process" in self._sessions[name]["sessions"][time_str]:
@@ -1082,6 +1016,15 @@ sys.path.append("{self.data_dir}")
 
     @session_method
     def _purge_session_helper(self, task_id, name, time_str, data=None):
+        """Purge a session with given key `name`/`time_str`
+
+        Args:
+            task_id: The `task_id` for the task
+            name: `name` of the session
+            time_str: The time stamp of the session
+            data: Any additional data passed from the request
+
+        """
         self._logd(f"Purging {name}/{time_str}")
         try:
             sub_task_id = self._create_id()
@@ -1101,7 +1044,23 @@ sys.path.append("{self.data_dir}")
             self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
 
     @session_method
-    def _archive_session_helper(self, task_id, name, time_str, data=None):
+    def _archive_session_helper(self, task_id: int, name: str,
+                                time_str: str, data: Any = None):
+        """Archive a session with given key `name`/`time_str`
+
+        Args:
+            task_id: The `task_id` for the task
+            name: `name` of the session
+            time_str: The time stamp of the session
+            data: Any additional data passed from the request
+
+        Schemas:
+            class ArchiveSessionModel(BaseModel):
+                saves: List[pathlib.Path]
+                keep_checkpoint: bool
+                notes: str
+
+        """
         # How do I mark a session as archived?
         if "saves" in data:
             # keep those files in save
@@ -1116,7 +1075,22 @@ sys.path.append("{self.data_dir}")
 
     @session_method
     def _clone_to_helper(self, task_id, name, time_str, data=None):
-        """Clones the session to a given server"""
+        """Load a session with given key `name`/`time_str` to a given server
+
+        Args:
+            task_id: The `task_id` for the task
+            name: `name` of the session
+            time_str: The time stamp of the session
+            data: CloneToServerModel
+
+        Schemas:
+            class CloneToServerModel(BaseModel):
+                server: ipaddress.IPv4Address
+                config: Dict
+                saves: Optional[List[pathlib.Path]]
+                modules: Optional[List[str]]
+
+        """
         self._logd(f"Trying to clone session {name}/{time_str} with data {data}")
         # NOTE: no need to read file, name is enough
 
@@ -1192,8 +1166,21 @@ sys.path.append("{self.data_dir}")
 
     @session_method
     def _clone_session_helper(self, task_id, name, time_str, data=None):
-        """Clones the session with optional given config differences.
+        """Clone the session with `name`/`time_str` and optional given config differences
+
+        Args:
+            task_id: The `task_id` for the task
+            name: `name` of the session
+            time_str: The time stamp of the session
+            data: Any additional data passed from the request
+
+        Schemas:
+            class CloneSessionModel(BaseModel):
+                config: trainer.config.Config
+                saves: Optional[List[pathlib.Path]]
+
         """
+
         self._logd(f"Trying to clone session {name}/{time_str} with data {data}")
         config_file = self._get_config_file(name, time_str)
         with open(config_file, "rb") as f:
@@ -1224,6 +1211,19 @@ sys.path.append("{self.data_dir}")
 
     @session_method
     def _reinit_session_helper(self, task_id, name, time_str, data=None):
+        """Reinitialize a session with given key `name`/`time_str`
+
+        Args:
+            task_id: The `task_id` for the task
+            name: `name` of the session
+            time_str: The time stamp of the session
+            data: ReinitSessionModel
+
+        Schemas:
+            class ReinitSessionModel(BaseModel):
+                config: trainer.config.Config
+
+        """
         config_file = self._get_config_file(name, time_str)
         with open(config_file, "rb") as f:
             config = f.read()
@@ -1281,16 +1281,50 @@ sys.path.append("{self.data_dir}")
         return _dump(func())
 
     def _session_check_post(self, func_name):
+        """Handle a POST request for a `session_method`
+
+        Args:
+            func_name: The name of the helper method
+
+        Schema:
+            class Task(BaseModel):
+                task_id: int
+                message: str
+
+        Request:
+            content-type: MimeTypes.json
+            body:
+                session_key: str
+                data: Union[:meth:`daemon.Daemon._archive_session_helper`: ArchiveSessionModel,
+                            :meth:`_reinit_session_helper`: ReinitSessionModel,
+                            :meth:`_clone_session_helper`: CloneSessionModel,
+                            :meth:`_clone_to_helper`: CloneToServerModel,
+                            Dict]
+
+        Responses:
+            Invalid data: ResponseSchema(405, "Invalid Data", MimeTypes.text,
+                                        "Invalid data {some: json}")
+            bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
+                                       "Session key not in params")
+            Success: ResponseSchema(200, "Initiated Task", MimeTypes.json, "Task")
+
+        """
+        # session_key: str
+        # data: Union[ReinitSessionModel, CloneSessionModel,
+        #             CloneToServerModel, ArchiveSessionModel]
         if not flask_login.current_user.is_authenticated:
             return self.login_manager.unauthorized()
-        if isinstance(request.json, dict):
-            data = request.json
-        elif isinstance(request.json, str):
-            data = json.loads(request.json)
-        else:
-            return _dump([False, f"Invalid data {request.json}"])
+        try:
+            if isinstance(request.json, dict):
+                data = request.json
+            elif isinstance(request.json, str):
+                data = json.loads(request.json)
+            else:
+                return _dump([False, f"Invalid data {request.json}"])
+        except Exception as e:
+            return f"Invalid data {request.json}, {e}"
         if "session_key" not in data:
-            return _dump([False, f"Invalid data {data}"])
+            return f"'session_key' must be in data.\nInvalid data {data}"
         else:
             task_id = self._get_task_id_launch_func(self._session_method_check, func_name, data)
             return _dump([True, {"task_id": task_id,
@@ -1335,11 +1369,23 @@ sys.path.append("{self.data_dir}")
 
         @self.app.route("/", methods=["GET"])
         def __index():
+            """
+
+            Responses:
+                success: ResponseSchema(200, "Index page", MimeTypes.text, "")
+
+            """
             return render_template("index.html")
 
         if self._template_dir:
             @self.app.route("/<filename>", methods=["GET"])
             def __files(filename: Union[Path, None] = None):
+                """
+
+                Responses:
+                    success: ResponseSchema(200, "Index page", MimeTypes.text, "")
+
+                """
                 def read_file(mode):
                     with open(os.path.join(self._template_dir, filename), mode) as f:
                         content = f.read()
@@ -1378,100 +1424,110 @@ sys.path.append("{self.data_dir}")
         # NOTE: Simplest way would be to proxy it
         #       Although a better way would be to get the function
         #       for the url rule and return value from it
-        @self.app.route("/trainer/<int:port>/<endpoint>", methods=["GET", "POST"])
-        @flask_login.login_required
-        def __trainer(port=None, endpoint=None):
-            sess_list = self._sessions_list
-            if port not in [x["port"] for x in sess_list.values()]:
-                return Response(_dump([False, f"Unloaded or invalid trainer {port}"]))
-            session = [*filter(lambda x: x["port"] == port, sess_list.values())][0]
-            if not session["loaded"]:
-                return _dump([False, "Trainer is not loaded"])
-            try:
-                print(f"{request.json}, {request.data}, {request.form}")
-                _json = _data = _files = None
-                if request.json:
-                    _json = request.json if isinstance(request.json, dict)\
-                        else json.loads(request.json)
-                if request.form:
-                    _data = dict(request.form)
-                if request.files:
-                    _files = request.files
-                response = requests.request(request.method, f"http://localhost:{port}/{endpoint}",
-                                            files=_files, json=_json, data=_data)
-                excluded_headers = ["content-encoding", "content-length",
-                                    "transfer-encoding", "connection"]
-                headers = [(name, value) for (name, value) in response.raw.headers.items()
-                           if name.lower() not in excluded_headers]
-                response = Response(response.content, response.status_code, headers)
-                return response
-            except Exception as e:
-                return Response(_dump([False, f"Error occured {e}"]))
+        # @self.app.route("/trainer/<int:port>/<endpoint>", methods=["GET", "POST"])
+        # @flask_login.login_required
+        # def __trainer(port=None, endpoint=None):
+        #     sess_list = self.sessions_list
+        #     if port not in [x["port"] for x in sess_list.values()]:
+        #         return Response(_dump([False, f"Unloaded or invalid trainer {port}"]))
+        #     session = [*filter(lambda x: x["port"] == port, sess_list.values())][0]
+        #     if not session["loaded"]:
+        #         return _dump([False, "Trainer is not loaded"])
+        #     try:
+        #         print(f"{request.json}, {request.data}, {request.form}")
+        #         _json = _data = _files = None
+        #         if request.json:
+        #             _json = request.json if isinstance(request.json, dict)\
+        #                 else json.loads(request.json)
+        #         if request.form:
+        #             _data = dict(request.form)
+        #         if request.files:
+        #             _files = request.files
+        #         response = requests.request(request.method, f"http://localhost:{port}/{endpoint}",
+        #                                     files=_files, json=_json, data=_data)
+        #         excluded_headers = ["content-encoding", "content-length",
+        #                             "transfer-encoding", "connection"]
+        #         headers = [(name, value) for (name, value) in response.raw.headers.items()
+        #                    if name.lower() not in excluded_headers]
+        #         response = Response(response.content, response.status_code, headers)
+        #         return response
+        #     except Exception as e:
+        #         return Response(_dump([False, f"Error occured {e}"]))
 
-        @self.app.route("/trainer/<int:port>/<category>/<endpoint>", methods=["GET", "POST"])
-        @flask_login.login_required
-        def __trainer_one(port=None, category=None, endpoint=None):
-            sess_list = self._sessions_list
-            if port not in [x["port"] for x in sess_list.values()]:
-                return Response(_dump([False, f"Unloaded or invalid trainer {port}"]))
-            session = [*filter(lambda x: x["port"] == port, sess_list.values())][0]
-            if not session["loaded"]:
-                return _dump([False, "Trainer is not loaded"])
-            try:
-                _json = _data = _files = None
-                if request.json:
-                    _json = request.json if isinstance(request.json, dict)\
-                        else json.loads(request.json)
-                if request.form:
-                    _data = dict(request.form)
-                if request.files:
-                    _files = request.files
-                response = requests.request(request.method,
-                                            f"http://localhost:{port}/{category}/{endpoint}",
-                                            files=_files, json=_json, data=_data)
-                excluded_headers = ["content-encoding", "content-length",
-                                    "transfer-encoding", "connection"]
-                headers = [(name, value) for (name, value) in response.raw.headers.items()
-                           if name.lower() not in excluded_headers]
-                response = Response(response.content, response.status_code, headers)
-                return response
-            except Exception as e:
-                return Response(_dump([False, f"Error occured {e}"]))
+        # @self.app.route("/trainer/<int:port>/<category>/<endpoint>", methods=["GET", "POST"])
+        # @flask_login.login_required
+        # def __trainer_one(port=None, category=None, endpoint=None):
+        #     sess_list = self.sessions_list
+        #     if port not in [x["port"] for x in sess_list.values()]:
+        #         return Response(_dump([False, f"Unloaded or invalid trainer {port}"]))
+        #     session = [*filter(lambda x: x["port"] == port, sess_list.values())][0]
+        #     if not session["loaded"]:
+        #         return _dump([False, "Trainer is not loaded"])
+        #     try:
+        #         _json = _data = _files = None
+        #         if request.json:
+        #             _json = request.json if isinstance(request.json, dict)\
+        #                 else json.loads(request.json)
+        #         if request.form:
+        #             _data = dict(request.form)
+        #         if request.files:
+        #             _files = request.files
+        #         response = requests.request(request.method,
+        #                                     f"http://localhost:{port}/{category}/{endpoint}",
+        #                                     files=_files, json=_json, data=_data)
+        #         excluded_headers = ["content-encoding", "content-length",
+        #                             "transfer-encoding", "connection"]
+        #         headers = [(name, value) for (name, value) in response.raw.headers.items()
+        #                    if name.lower() not in excluded_headers]
+        #         response = Response(response.content, response.status_code, headers)
+        #         return response
+        #     except Exception as e:
+        #         return Response(_dump([False, f"Error occured {e}"]))
 
+        # @self.app.route("/sessions", methods=["GET"])
+        # @flask_login.login_required
+        # def __list_sessions():
+        #     """Returns a dictionary of sessions, their ports if they're alive and the
+        #     state. Rest of the communication can be done with session
 
-        @self.app.route("/sessions", methods=["GET"])
-        @flask_login.login_required
-        def __list_sessions():
-            """Returns a dictionary of sessions, their ports if they're alive and the
-            state. Rest of the communication can be done with session
+        #     With optional argument {name}, if the session name starts with
+        #     {name} then all those sessions are returned.
 
-            With optional argument {name}, if the session name starts with
-            {name} then all those sessions are returned.
-
-            """
-            try:
-                name = request.args.get("name")
-            except Exception:
-                name = None
-            sess_list = self._sessions_list
-            if name:
-                name = name.strip()
-            if name:
-                sessions = {k: v for k, v in sess_list.items()
-                            if k.startswith(name)}
-                if sessions:
-                    return _dump([True, sessions])
-                else:
-                    return _dump([False, "No session found"])
-            else:
-                return _dump([True, self._sessions_list])
+        #     """
+        #     try:
+        #         name = request.args.get("name")
+        #     except Exception:
+        #         name = None
+        #     sess_list = self.sessions_list
+        #     if name:
+        #         name = name.strip()
+        #     if name:
+        #         sessions = {k: v for k, v in sess_list.items()
+        #                     if k.startswith(name)}
+        #         if sessions:
+        #             return _dump([True, sessions])
+        #         else:
+        #             return _dump([False, "No session found"])
+        #     else:
+        #         return _dump([True, self.sessions_list])
 
         @self.app.route("/current_user", methods=["GET"])
         @flask_login.login_required
         def __current_user():
-            """Returns the name of the current user, in case we're logged in and username is
-            not known to the client as they have refreshed and the store state
-            is gone (LOL, FIXME)
+            """Return the name of the current user.
+
+            Tags:
+                daemon, user
+
+            This is in case we're logged in and username is not known to the
+            client as they have refreshed and the store state is gone (LOL,
+            FIXME)
+
+            Schemas:
+                class Success(BaseModel): user: str
+
+            Responses:
+                Success: ResponseSchema(200, "Current logged in user", MimeTypes.json, "Success")
 
             """
             return _dump([True, {"user": flask_login.current_user.name}])
@@ -1480,10 +1536,23 @@ sys.path.append("{self.data_dir}")
         @self.app.route("/update_given_name", methods=["POST"])
         @flask_login.login_required
         def __update_given_name():
-            # print("JSON?", request.json)
-            # if hasattr(request, "data"):
-            #     print("DATA", request.data)
-            # print("FORM", [*request.form.keys()])
+            """Update the name of a given trainer.
+
+            Tags:
+                daemon, maintenance
+
+            Requests:
+                content-type: MimeTypes.multipart
+                body:
+                    given_name: str
+                    trainer_url: str
+                    session_key: str
+
+            Responses:
+                bad params: ResponseSchema(400, "Bad params", MimeTypes.text, "given_name not in params")
+                Success: ResponseSchema(200, "Current logged in user", MimeTypes.text, "Successfully assigned name")
+
+            """
             if isinstance(request.json, dict):
                 data = request.json
             else:
@@ -1517,13 +1586,32 @@ sys.path.append("{self.data_dir}")
                     else:
                         return _dump([True, f"{resp_str[1]}"])
                 else:
-                    return _dump([False, f"Could not assign name"])
+                    return _dump([False, "Could not assign name"])
 
         # FIXME: no provision to load config as JSON? Everything can't be bytes
         #        can it?
         @self.app.route("/create_session", methods=["POST"])
         @flask_login.login_required
         def __new_session():
+            """Create a new session.
+
+            Tags:
+                daemon, session
+
+            Requests:
+                content-type: MimeTypes.json
+                body:
+                    data: daemon.models.CreateSessionModel
+
+            Schemas:
+                class Task(BaseModel):
+                    task_id: int
+                    message: str
+
+            Responses:
+                Success: ResponseSchema(200, "Current logged in user", MimeTypes.json, "Task")
+
+            """
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
                 return _dump([False, "Name not in request or empty name"])
@@ -1533,6 +1621,7 @@ sys.path.append("{self.data_dir}")
                     file_bytes = request.files["file"].read()
                 except Exception as e:
                     return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
+            # FIXME: saves and stuff in self.create_session here are not parsed here at all
             data = {"name": data, "config": file_bytes}
             task_id = self._get_task_id_launch_func(self.create_session, data)
             return _dump([True, {"task_id": task_id,
@@ -1541,6 +1630,24 @@ sys.path.append("{self.data_dir}")
         @self.app.route("/upload_session", methods=["POST"])
         @flask_login.login_required
         def __upload_session():
+            """Upload a config a session and create it.
+
+            Tags:
+                daemon, session
+
+            Requests:
+                params:
+                    name: str
+
+            Schemas:
+                class Task(BaseModel):
+                    task_id: int
+                    message: str
+
+            Responses:
+                Success: ResponseSchema(200, "Current logged in user", MimeTypes.json, "Task")
+
+            """
             form = request.form
             if form is None:
                 return _dump([False, "Bad data in request"])
@@ -1574,8 +1681,19 @@ sys.path.append("{self.data_dir}")
         @self.app.route("/docs", methods=["GET"])
         @flask_login.login_required
         def __docs():
-            """Returns all the docs for all the endpoints in the server. The trainer docs
-            can be fetched from the trainer itself.
+            """Returns all the docs for all the endpoints in the server.
+
+            The trainer docs can be fetched from the trainer itself.
+
+            Tags:
+                daemon, docs
+
+            Schemas:
+                class Docs(BaseModel):
+                    docs: Dict[str, str]
+
+            Responses:
+                Success: ResponseSchema(200, "Docs for the server", MimeTypes.json, "Docs")
 
             """
             endpoints = {x.rule: x.endpoint for x in self.app.url_map.iter_rules()
@@ -1585,54 +1703,52 @@ sys.path.append("{self.data_dir}")
             preamble = """Some docs are missing for some endpoints and will be added soon.  Example
             calls and return values can also be added. In that sense the
             functions should become self documenting soon.
-
-            :methods: GET
-            :args: []
-            :retval: json(list[status[bool], dict[{multi[docs]}]])
             """
-            return _dump([preamble, docs])
+            return _dump({"preamble": preamble, **docs})
 
-        @self.app.route("/check_task", methods=["GET"])
-        @flask_login.login_required
-        def __check_task():
-            """Check and return the status of a task submitted earlier.
+        # @self.app.route("/check_task", methods=["GET"])
+        # @flask_login.login_required
+        # def __check_task():
+        #     """Check and return the status of a task submitted earlier.
 
-            :methods: GET
-            :args: [task_id]
-            :retval: list[bool, dict[task_id, result, message]]
-            """
-            try:
-                task_id = int(request.args.get("task_id").strip())
-            except Exception as e:
-                return _dump([False, f"Bad params {e}" + "\n" + traceback.format_exc()])
-            if task_id not in self.__task_ids:
-                return _dump([False, f"No such task: {task_id}"])
-            else:
-                result = self._check_result(task_id)
-            if result is None:
-                return _dump([True, {"task_id": task_id, "result": 0,
-                                     "message": "Not yet processed"}])
-            else:
-                if len(result) == 2:
-                    self._logw(f"Result of length 2 for check_task {result}")
-                    return _dump([True, {"task_id": result[0], "result": True,
-                                         "message": "Successful"}])
-                elif len(result) == 3 and result[1]:
-                    return _dump([True, {"task_id": result[0], "result": True,
-                                         "message": result[2]}])
-                elif len(result) == 3 and not result[1]:
-                    return _dump([True, {"task_id": result[0], "result": False,
-                                         "message": result[2]}])
-                else:
-                    return _dump([True, result])
+        #     :methods: GET
+        #     :args: [task_id]
+        #     :retval: list[bool, dict[task_id, result, message]]
+        #     """
+        #     try:
+        #         task_id = int(request.args.get("task_id").strip())
+        #     except Exception as e:
+        #         return _dump([False, f"Bad params {e}" + "\n" + traceback.format_exc()])
+        #     if task_id not in self.__task_ids:
+        #         return _dump([False, f"No such task: {task_id}"])
+        #     else:
+        #         result = self._check_result(task_id)
+        #     if result is None:
+        #         return _dump([True, {"task_id": task_id, "result": 0,
+        #                              "message": "Not yet processed"}])
+        #     else:
+        #         if len(result) == 2:
+        #             self._logw(f"Result of length 2 for check_task {result}")
+        #             return _dump([True, {"task_id": result[0], "result": True,
+        #                                  "message": "Successful"}])
+        #         elif len(result) == 3 and result[1]:
+        #             return _dump([True, {"task_id": result[0], "result": True,
+        #                                  "message": result[2]}])
+        #         elif len(result) == 3 and not result[1]:
+        #             return _dump([True, {"task_id": result[0], "result": False,
+        #                                  "message": result[2]}])
+        #         else:
+        #             return _dump([True, result])
 
         @self.app.route("/_version", methods=["GET"])
         def __version():
             """Return version of the current server.
 
-            :methods: GET
-            :args: []
-            :retval: str
+            Tags:
+                daemon, status
+
+            Responses:
+                success: ResponseSchema(200, "Server Version", MimeTypes.text, "0.3.0")
             """
             return self.__version__
 
@@ -1669,11 +1785,20 @@ sys.path.append("{self.data_dir}")
         # I think I have to update the user.id on each login
         @self.app.route("/login", methods=["POST"])
         def __login():
-            """Return version of the current server.
+            """Login to the server
 
-            :methods: POST
-            :args: dict[]
-            :retval: str
+            Tags:
+                daemon, user
+
+            Requests:
+                body:
+                    username: str
+                    password: str
+
+            Responses:
+                logged_in: ResponseSchema(200, "Logged in", MimeTypes.text, "Logged in")
+                not logged in: ResponseSchema(400, "not logged in", MimeTypes.text, "Could not log in")
+
             """
             if "username" not in request.form or "password" not in request.form:
                 return _dump([False, "Username or Password not provided"])
@@ -1688,28 +1813,50 @@ sys.path.append("{self.data_dir}")
         # I think I have to update the user.id on each login
         @self.app.route("/logged_in", methods=["GET"])
         def __logged_in():
-            """Check if the user is logged in"""
+            """Check if the user is logged in
+
+            Tags:
+                daemon, user
+
+            Responses:
+                logged_in: ResponseSchema(200, "Logged in", MimeTypes.text, "Logged in")
+                not logged in: ResponseSchema(400, "not logged in", MimeTypes.text, "Could not log in")
+
+            """
             if flask_login.current_user.is_authenticated:
-                return _dump([True, "Logged in"])
+                return "Logged in"
             else:
-                return _dump([False, "Could not Login"])
+                return "Could not Login"
 
         @self.app.route("/logout", methods=["GET"])
         @flask_login.login_required
         def __logout():
-            """Logout from the Server."""
+            """Logout from the server.
+
+            Tags:
+                daemon, user
+
+            Responses:
+                logged out: ResponseSchema(400, "Logged out", MimeTypes.text, "Logged out")
+            """
             flask_login.logout_user()
-            return _dump([True, "Logged Out"])
+            return "Logged Out"
 
         @self.app.route("/list_session_modules", methods=["GET"])
         @flask_login.login_required
         def __list_session_modules():
-            """Returns the list of module available with a given session.
+            """NOT IMPLEMENTED: This feature isn't implemented yet and should not be called.
 
-            Requres param {session_key}
+            Returns the list of modules available with a given session.
+
+            Tags:
+                daemon, session
+
+            Responses:
+                not implemented: ResponseSchema(400, "Not Implemented", MimeTypes.text, "Not Implemented")
 
             """
-            return _dump([False, "Not Implemented yet"])
+            return "Not Implemented yet"
 
         @self.app.route("/add_session_module", methods=["POST"])
         @flask_login.login_required
@@ -1720,9 +1867,11 @@ sys.path.append("{self.data_dir}")
             methods are similar to `add_global_module`. Additional param
             {session_key} has to be provided.
 
+            Responses:
+                not implemented: ResponseSchema(400, "Not Implemented", MimeTypes.text, "Not Implemented")
+
             """
-            return _dump([False, "Not implemented yet"])
-            import ipdb; ipdb.set_trace()
+            return "Not implemented yet"
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
                 return _dump([False, "Name not in request or empty name"])
@@ -1746,9 +1895,14 @@ sys.path.append("{self.data_dir}")
 
             NOTE: Make sure that the imports are reloaded if there's an update
 
+            Tags:
+                daemon, session
+
+            Responses:
+                not implemented: ResponseSchema(400, "Not Implemented", MimeTypes.text, "Not Implemented")
+
             """
-            return _dump([False, "Not implemented yet"])
-            import ipdb; ipdb.set_trace()
+            return "Not implemented yet"
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
                 return _dump([False, "Name not in request or empty name"])
@@ -1767,17 +1921,45 @@ sys.path.append("{self.data_dir}")
         @flask_login.login_required
         def __list_global_modules():
             """Returns the list of global modules available.
+
+            Tags:
+                daemon, modules
+
+            Schemas:
+                class Success(BaseModel): default: Dict[str, Any]
+
+            Responses:
+                Success: ResponseSchema(200, "Sucess", MimeTypes.json, "Success")
+
             """
             return _dump([True, self._modules])
 
         @self.app.route("/add_global_module", methods=["POST"])
         @flask_login.login_required
         def __add_global_module():
-            """Can be python or zip file. Shows up in global modules and is immediately
+            """Add a module to the global modules.
+
+            Can be python or zip file. Shows up in global modules and is immediately
             available for loading to all sessions. Will overwrite if a module
             with the same name already exists.
 
             NOTE: Make sure that the imports are reloaded if there's an update
+
+            Tags:
+                daemon, modules
+
+            Requests:
+                params:
+                    name: str
+
+            Schemas:
+                class Task(BaseModel):
+                    task_id: int
+                    message: str
+
+            Responses:
+                Success: ResponseSchema(200, "Current logged in user", MimeTypes.json, "Task")
+
             """
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
@@ -1796,14 +1978,28 @@ sys.path.append("{self.data_dir}")
         @self.app.route("/delete_global_module", methods=["POST"])
         @flask_login.login_required
         def __delete_global_module():
-            """Deletes the given module from the list of global modules. The module is
-            immediately unavailable for all future running functions.
+            """Delete the given module from the list of global modules.
+
+            The module is immediately unavailable for all future running functions.
 
             NOTE: Make sure that the imports are reloaded if there's an update
             NOTE: What if a function relied on some deleted module? It should
                   no longer work. Not sure how to handle that.
             NOTE: Module names start with _module_ internally and the module name
                   itself shouldn't start with _
+
+            Tags:
+                daemon, modules
+
+            Requests:
+                params:
+                    name: str
+
+            Responses:
+                not such module: ResponseSchema(404, "No such module", MimeTypes.text, "No such module mode_name")
+                bad params: ResponseSchema(400, "Name not in params", MimeTypes.text, "Name of module required")
+                Success: ResponseSchema(200, "Deleted Dataset", MimeTypes.text, "Deleted module caption")
+
             """
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
@@ -1835,14 +2031,27 @@ sys.path.append("{self.data_dir}")
         @self.app.route("/list_datasets", methods=["GET"])
         @flask_login.login_required
         def __list_datasets():
-            """Returns the list of global modules available.
+            """Return the list of global datasets available.
+
+            Tags:
+                daemon, datasets
+
+            Schemas:
+                class Dataset(BaseModel):
+                    default: :attr:`datasets`.returns
+
+            Responses:
+                Success: ResponseSchema(200, "Datasets", MimeTypes.json, "Dataset")
+
             """
-            return _dump([True, self._datasets])
+            return make_json(self.datasets)
 
         @self.app.route("/upload_dataset", methods=["POST"])
         @flask_login.login_required
         def __upload_dataset():
-            """Must be zip file. An __init__.py should be at the top of the zip file and
+            """Upload a dataset which would be globally available to the server.
+
+            Must be zip file. An __init__.py should be at the top of the zip file and
             should access the data with relative paths or through the
             network. No assumptions about absolute paths should be made.
 
@@ -1850,6 +2059,27 @@ sys.path.append("{self.data_dir}")
             the dataset must implement __len__ and __getitem__.
 
             Type of data should also be mentioned.
+
+            Tags:
+                daemon, datasets
+
+            Schemas:
+                class Dataset(BaseModel):
+                    default: :attr:`datasets`.returns
+
+            Requests
+                params:
+                    name: str
+                    description: str
+                    type: str
+
+            Responses:
+                bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
+                            "name not in request")
+                Error: ResponseSchema(405, "Error Occurred", MimeTypes.text,
+                            "Some error occured: error while parsing file")
+                Success: ResponseSchema(200, "Uploaded Successfully", MimeTypes.text,
+                            "Uploaded Dataset MNIST successfully")
 
             """
             if "name" not in request.form or ("name" in request.form
@@ -1876,6 +2106,23 @@ sys.path.append("{self.data_dir}")
         @self.app.route("/delete_dataset", methods=["POST"])
         @flask_login.login_required
         def __delete_dataset():
+            """Delete a given dataset
+
+            Tags:
+                daemon, datasets
+
+            Requests:
+                params:
+                    name: str
+
+            Responses:
+                not such dataset: ResponseSchema(404, "No such dataset", MimeTypes.text,
+                                           "No such dataset mode_name")
+                bad params: ResponseSchema(400, "Name not in params", MimeTypes.text,
+                                           "Name of dataset required")
+                Success: ResponseSchema(200, "Deleted Dataset", MimeTypes.text, "Deleted dataset caption")
+
+            """
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
                 return _dump([False, "Name not in request or empty name"])
@@ -1928,12 +2175,32 @@ sys.path.append("{self.data_dir}")
 
         @self.app.route("/_ping", methods=["GET"])
         def __ping():
+            """Return Pong.
+
+            Tags:
+                daemon, status
+
+            Schemas:
+                class Pong(BaseModel):
+                    pong: str = "pong"
+
+            Responses:
+                success: ResponseSchema(200, "Pong", MimeTypes.text, "Pong")
+
+            """
             return "pong"
 
         @self.app.route("/_name", methods=["GET"])
         def __name():
-            # only views the progress and parameters. No trainer is started
-            print("DAEMON NAME", self.daemon_name)
+            """Return Daemon Name.
+
+            Tags:
+                daemon, status
+
+            Responses:
+                success: ResponseSchema(200, "Daemon Name", MimeTypes.text, "SomeDaemon")
+
+            """
             if self.daemon_name is not None:
                 return self.daemon_name
             else:
@@ -1955,12 +2222,23 @@ sys.path.append("{self.data_dir}")
 
         # NOTE: Add session_methods.  Routes are added by removing "_" prefix
         #       and "_helper" suffix from self._session_methods
-        #
-        # NOTE: Login is actually required here even though I didn't explicitly
-        #       ask for it. Strange
         for x in self._session_methods:
             self.app.add_url_rule("/" + x, x, partial(self._session_check_post, x),
                                   methods=["POST"])
+
+        trainer_view = Trainer.as_view("trainer", self)
+        self.app.add_url_rule("/trainer/<int:port>/<endpoint>",
+                              view_func=trainer_view)
+        self.app.add_url_rule("/trainer/<int:port>/<category>/<endpoint>",
+                              view_func=trainer_view)
+
+        check_task = CheckTask.as_view("check_task", self)
+        self.app.add_url_rule("/check_task",
+                              view_func=check_task)
+
+        sessions = Sessions.as_view("sessions", self)
+        self.app.add_url_rule("/sessions",
+                              view_func=sessions)
 
         @atexit.register
         def cleanup():
@@ -1969,6 +2247,15 @@ sys.path.append("{self.data_dir}")
         @self.app.route("/_shutdown", methods=["GET"])
         @flask_login.login_required
         def __shutdown_server():
+            """Shutdown the machine
+
+            Tags:
+                daemon, maintenance
+
+            Responses:
+                Success: ResponseSchema(200, "Shutting Down", MimeTypes.text, "Shutting Down")
+
+            """
             self._logd("Shutdown called via HTTP. Shutting down.")
             Thread(target=cleanup).start()
             func = request.environ.get('werkzeug.server.shutdown')

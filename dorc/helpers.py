@@ -1,4 +1,4 @@
-from typing import List, Dict, Callable, Iterable
+from typing import List, Dict, Callable, Iterable, Union, Any
 import torch
 from torch.utils.data import Dataset
 import numpy as np
@@ -57,7 +57,22 @@ class HookDict:
         return self._items.__repr__()
 
 
-class HookList:
+class Hook:
+    """A list of functions.
+
+    A :class:`Hook` is a list of :class:`Callable` usually which take no
+    arguments and return nothing.
+
+    They can be executed at arbitrary points in a codebase with separate concerns.
+
+    An instance of a :class:`Hook` must be called with :func:`run_hook` and if the
+    functions in the hook require args, then :func:`run_hook_with_args`
+
+    Args:
+        permanent_items: List of functions which will never be removed from the hook
+
+    """
+
     def __init__(self, permanent_items: List[Callable]):
         self._list = []
         self._permanent_items = permanent_items
@@ -109,11 +124,11 @@ class Tag:
         self._members = {}
 
     @property
-    def names(self):
+    def names(self) -> List[str]:
         return [*self._members.keys()]
 
     @property
-    def members(self):
+    def members(self) -> Dict[str, Any]:
         return self._members
 
     def __call__(self, f):

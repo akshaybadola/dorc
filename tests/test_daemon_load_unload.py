@@ -6,7 +6,7 @@ import requests
 import time
 import json
 sys.path.append("../")
-from trainer.daemon import _start_daemon
+from dorc.daemon import _start_daemon
 
 
 class DaemonHTTPTestLoadUnload(unittest.TestCase):

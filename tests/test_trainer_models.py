@@ -7,8 +7,8 @@ import unittest
 import sys
 from _setup_local import config
 sys.path.append("../")
-from trainer.device import all_devices, useable_devices
-from trainer.trainer import Trainer
+from dorc.device import all_devices, useable_devices
+from dorc.trainer import Trainer
 
 
 class SubTrainer(Trainer):
@@ -21,7 +21,7 @@ class SubTrainer(Trainer):
         return self._cuda
 
 
-@pytest.mark.ci
+@pytest.mark.quick
 class TrainerTestModels(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -74,7 +74,7 @@ class TrainerTestModels(unittest.TestCase):
         self.trainer = SubTrainer(False, **self.params)
         self.trainer.reserved_gpus = []
         self.trainer.reserve_gpus = lambda x: [True, None]
-        self.trainer._trainer_params["cuda"] = True
+        self.trainer.trainer_params.cuda = True
         self.trainer._init_device()
         self.trainer._init_models()
         self.assertIn("net", self.trainer._models)
@@ -94,7 +94,7 @@ class TrainerTestModels(unittest.TestCase):
         self.trainer = SubTrainer(False, **self.params)
         self.trainer.reserved_gpus = []
         self.trainer.reserve_gpus = lambda x: [True, None]
-        self.trainer._trainer_params["cuda"] = True
+        self.trainer.trainer_params.cuda = True
         self.trainer._init_device()
         self.trainer._init_models()
         self.assertIn("net_1", self.trainer._models)
@@ -116,7 +116,7 @@ class TrainerTestModels(unittest.TestCase):
         self.trainer = SubTrainer(False, **self.params)
         self.trainer.reserved_gpus = []
         self.trainer.reserve_gpus = lambda x: [True, None]
-        self.trainer._trainer_params["cuda"] = True
+        self.trainer.trainer_params.cuda = True
         self.trainer._init_device()
         self.trainer._init_models()
         self.assertIn("net_1", self.trainer._models)
@@ -138,7 +138,7 @@ class TrainerTestModels(unittest.TestCase):
         self.trainer = SubTrainer(False, **self.params)
         self.trainer.reserved_gpus = []
         self.trainer.reserve_gpus = lambda x: [True, None]
-        self.trainer._trainer_params["cuda"] = True
+        self.trainer.trainer_params.cuda = True
         self.trainer._init_device()
         self.trainer._init_models()
         self.assertIn("net_1", self.trainer._models)
@@ -173,13 +173,16 @@ class TrainerTestModels(unittest.TestCase):
         self.trainer = SubTrainer(False, **self.params)
         self.trainer.reserved_gpus = []
         self.trainer.reserve_gpus = lambda x: [True, None]
-        self.trainer._trainer_params["cuda"] = True
+        self.trainer.trainer_params.cuda = True
         self.trainer._init_device()
         self.trainer._init_models()
         self.assertIn("net_1", self.trainer._models)
         self.assertIn("net_2", self.trainer._models)
         self.assertEqual(self.trainer._models["net_1"].gpus, [1])
         self.assertEqual(self.trainer._models["net_2"].gpus, [0])
+
+    def test_trainer_load_models_state(self):
+        pass
 
     def test_trainer_get_new_models(self):
         pass

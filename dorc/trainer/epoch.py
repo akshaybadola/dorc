@@ -1,4 +1,4 @@
-from typing import Callable, Iterable, List, Dict, Any, Tuple, Union, Set
+from typing import Callable, Iterable, List, Dict, Any, Tuple, Union, Set, Type, Optional
 import time
 import numpy as np
 import queue
@@ -7,8 +7,8 @@ from threading import Thread, Event
 import traceback
 # import multiprocessing as mp
 
-from .task import LoopTaskWithHooks, Signals
-from .device import DeviceMonitor
+from ..task import LoopTaskWithHooks, Signals
+from ..device import DeviceMonitor
 
 
 class BatchVars:
@@ -79,12 +79,11 @@ def _log_post_batch_hook(epoch: "Epoch", **kwargs):
                 em_inputs = epoch.extra_metrics[step][m]["inputs"]
                 f_inputs = dict((x, kwargs[x]) for x in em_inputs)
                 epoch.batch_vars.append((step, epoch.batch_num[step], m, em_func(**f_inputs)))
-        # NOTE: Deprecated, commented
-        # if hasattr(epoch, "keep_time") and epoch.keep_time[step]:
-        #     epoch.batch_vars.append((step, epoch.batch_num[step], "time", kwargs["time"]))
+        # if "device_mon" not in kwargs:
+        #     print("NO DEVICE MON in kwargs")
         if "device_mon" in kwargs:
             dm = kwargs["device_mon"]
-            # print("LOGGING device_mon in kwargs", dm.__dict__)
+            print("LOGGING device_mon in kwargs", dm.__dict__)
             gpu_util = dm.gpu_util
             gpu_mem_util = dm.gpu_mem_util
             gpu_temp = dm.gpu_temp
@@ -109,10 +108,11 @@ def _log_post_batch_hook(epoch: "Epoch", **kwargs):
         epoch.total_samples[step] += kwargs["total"]  # always there
         return True, None
     except Exception as e:
+        print("BUT WE GET A WEIRD EXCEPTION")
         return False, f"{e}" + "\n" + traceback.format_exc()
 
 
-def _wait_for_gpu_cooldown_post_batch_hook(epoch: "Epoch", **kwargs):
+def _wait_for_gpu_cooldown_post_batch_hook(epoch: Type["Epoch"], **kwargs):
     if hasattr(epoch, "device_mon"):
         dm = epoch.device_mon
         if hasattr(epoch, "_logd"):
@@ -139,10 +139,25 @@ def _wait_for_gpu_cooldown_post_batch_hook(epoch: "Epoch", **kwargs):
 
 
 class EpochLoop(LoopTaskWithHooks):
+    """An instance of :class:`~trainer.task.LoopTaskWithHooks`.
+
+    Contains additional functionality over a
+    :class:`~trainer.task.LoopTaskWithHooks` to fetch data, gather results and
+    use a :class:`~trainer.device.DeviceMonitor`.
+
+    Args:
+        device_mon: An instance of :class:`DeviceMonitor`
+        max_iters: The max number of iterations to run
+
+    See :class:`~trainer.task.LoopTaskWithHooks` for description of arguments
+    which are passed directly to it.
+
+    """
     def __init__(self, func: Callable, signals: Signals,
                  data_iterator: Iterable, hooks: Iterable[Callable[[], None]],
+                 hooks_with_args: Iterable[Callable[..., None]],
                  device_mon: DeviceMonitor, max_iters: Union[int, None] = None):
-        super().__init__(func, signals, data_iterator, hooks)
+        super().__init__(func, signals, data_iterator, hooks, hooks_with_args)
         self.device_mon = device_mon
         self._max_iters = max_iters
         self._iter_num = 0
@@ -152,15 +167,10 @@ class EpochLoop(LoopTaskWithHooks):
         self._iter_finished = False
         self._data_thread = Thread(target=self._fetch_data)
         self._data_thread.start()
-        self._hooks = hooks
 
     def finish(self):
         super().finish()
         self._iter_finished = True
-
-    def _run_hooks(self, **kwargs):
-        for hook in self._hooks:
-            hook(**kwargs)
 
     # NOTE: What if we're waiting to either:
     #       a. put data on to a full queue
@@ -211,8 +221,8 @@ class EpochLoop(LoopTaskWithHooks):
         self._toggle_waiting()
         try:
             while not self._iter_finished:  # or not self._data_q.empty():
-                # print("RUNNING", self.running, self.waiting,
-                #       self.signals.paused.is_set(), self.finished)
+                print("RUNNING", self.running, self.waiting,
+                      self.signals.paused.is_set(), self.finished)
                 # start = time.time()
                 # x = self.data_iterator.__iter__().__next__()
                 # batch_time = time.time() - start
@@ -221,24 +231,24 @@ class EpochLoop(LoopTaskWithHooks):
                 # CHECK: How to break out of here?
                 try:
                     batch_time, x = self._data_q.get(False)
-                    # print("GOT BATCH")
+                    print("GOT BATCH")
                 except queue.Empty:
                     if self._iter_finished:
                         print("ITER FINISHED?")
                         x = None
                     else:
                         while self._data_q.empty():
-                            # print("HERE!", self._iter_finished)
+                            # print("IN LOOP DataQ empty, iter_finished: ", self._iter_finished)
                             time.sleep(.001)
                             if self._iter_finished:
                                 break
                         continue
                 if not x:
-                    print("NOT X")
+                    # print("NOT X")
                     break
                 else:
                     with self.device_mon.monitor():
-                        # print("MONITORING result")
+                        print("MONITORING result")
                         # try:
                         result = self.func(x, **kwargs)
                         # except Exception as e:
@@ -247,9 +257,10 @@ class EpochLoop(LoopTaskWithHooks):
                     result["batch_time"] = batch_time
                     # NOTE: Hooks are passed as callables with no positional
                     #       args from epoch and only take kwargs
-                    # print("BEFORE Running hooks in train_loop")
-                    self._run_hooks(**{"device_mon": self.device_mon, **result})
-                    # print("DO WE GET HERE?")
+                    print("BEFORE Running hooks in train_loop")
+                    self._run_hooks()
+                    self._run_hooks_with_args(**{"device_mon": self.device_mon, **result})
+                    print("DO WE GET HERE?")
                 if hasattr(self.signals, "aborted") and self.signals.aborted:
                     if self.running:
                         self._toggle_running()
@@ -269,7 +280,9 @@ class EpochLoop(LoopTaskWithHooks):
 
 class Epoch:
     """Epoch is a class which manages the loop (train, val etc.) spawning, runs
-    hooks and gathers the results
+    hooks and gathers the results.
+
+    Each loop is an instance of :class:`EpochLoop` and thus supports
 
     """
     def __init__(self, metrics: Dict[str, Dict], signals: Signals,
@@ -292,11 +305,20 @@ class Epoch:
             partial(_log_post_batch_hook, self, **{"step": "val"})
         self._log_test_post_batch_hook: Callable[[], None] =\
             partial(_log_post_batch_hook, self, **{"step": "test"})
-        self._post_batch_hooks = {"train": {"log": self._log_train_post_batch_hook},
-                                  "val": {"log": self._log_val_post_batch_hook},
-                                  "test": {"log": self._log_test_post_batch_hook}}
-        for x in ["logi", "logd", "loge", "logw"]:
-            setattr(self, "_" + x, kwargs[x])
+        self._post_batch_hooks: Dict[str, Dict[str, Callable[[], None]]] = {"train": {},
+                                                                            "val": {},
+                                                                            "test": {}}
+        self._post_batch_hooks_with_args: Dict[str, Dict[str, Callable[..., None]]] =\
+            {"train": {"log": self._log_train_post_batch_hook},
+             "val": {"log": self._log_val_post_batch_hook},
+             "test": {"log": self._log_test_post_batch_hook}}
+        self._logi = kwargs["logi"]
+        self._logd = kwargs["logd"]
+        self._loge = kwargs["loge"]
+        self._logw = kwargs["loge"]
+        self.train_loop: Optional[EpochLoop] = None
+        self.val_loop: Optional[EpochLoop] = None
+        self.test_loop: Optional[EpochLoop] = None
 
     @property
     def init_or_finished(self) -> bool:
@@ -364,28 +386,104 @@ class Epoch:
             self._current_loop._toggle_waiting()
 
     @property
-    def post_batch_hooks(self) -> Set[Dict[str, Iterable[str]]]:
-        return {{k: v.keys()} for k, v in self._post_batch_hooks.items()}
+    def post_batch_hooks(self) -> Dict[str, List[str]]:
+        return {k: [*v.keys()] for k, v in self._post_batch_hooks.items()}
 
-    def add_post_batch_hook(self, step: str, name: str, hook: Callable):
+    @property
+    def post_batch_hooks_with_args(self) -> Dict[str, List[str]]:
+        return {k: [*v.keys()] for k, v in self._post_batch_hooks_with_args.items()}
+
+    def _update_hooks(self, step: str = ""):
+        if step:
+            steps = [step]
+        else:
+            steps = ["train", "val", "test"]
+        for x in steps:
+            loop = getattr(self, f"{x}_loop")
+            if loop is not None:
+                loop._hooks = [*self._post_batch_hooks[x].values()]
+                loop._hooks_with_args = [*self._post_batch_hooks_with_args[x].values()]
+
+    def add_post_batch_hook(self, step: str, name: str, hook: Callable[[], None]) ->\
+            Tuple[bool, str]:
         """Add a post batch hook to Epoch to run for a given \"step\"
-        Hook is a callable which accepts only an instance of Epoch and kwargs
+
+        Hook in this case is a callable which accepts NO arguments
+
+        Args:
+            step: Usually one of `train`, `val` or `test`
+            name: Name of the hook
+            hook: The hook function itself
+
         """
         if step in {"train", "val", "test"} and callable(hook):
+            if name in self._post_batch_hooks:
+                self._logw(f"Trying to overwrite hook {name}")
             try:
-                self._all_post_batch_hooks[step][name] = partial(hook, self)
-                return True
+                self._post_batch_hooks[step][name] = hook
+                self._update_hooks()
+                return True, f"Added hook {name}"
             except Exception as e:
                 return False, f"Error occurred {e}\n" + traceback.format_exc()
         else:
             return False, "Wrong step or not callable hook"
 
-    def remove_post_batch_hook(self, step: str, name: str, hook: Callable) ->\
-            Union[bool, Tuple[bool, str]]:
-        assert step in {"train", "val", "test"}
-        if name in self._all_post_batch_hooks[step]:
-            self._all_post_batch_hooks[step].pop(name)
-            return True
+    def add_post_batch_hook_with_args(self, step: str, name: str, hook: Callable[..., None]) ->\
+            Tuple[bool, str]:
+        """Add a post batch hook to Epoch to run for a given \"step\"
+
+        Hook is an arbitrary callable which can take any args or kwargs
+
+        Args:
+            step: Usually one of `train`, `val` or `test`
+            name: Name of the hook
+            hook: The hook function itself
+        """
+        if step in {"train", "val", "test"} and callable(hook):
+            if name in self._post_batch_hooks_with_args:
+                self._logw(f"Trying to overwrite hook {name}")
+            try:
+                self._post_batch_hooks_with_args[step][name] = hook
+                self._update_hooks()
+                return True, f"Added {name}"
+            except Exception as e:
+                return False, f"Error occurred {e}\n" + traceback.format_exc()
+        else:
+            return False, "Wrong step or not callable hook"
+
+    def remove_post_batch_hook(self, step: str, name: str) ->\
+            Tuple[bool, str]:
+        """Remove a post batch hook for a given `step`
+
+        Args:
+            step: Usually one of `train`, `val` or `test`
+            name: Name of the hook
+        """
+        if step in {"train", "val", "test"}:
+            if name in self._post_batch_hooks[step]:
+                self._post_batch_hooks[step].pop(name)
+                self._update_hooks()
+                return True, self._logd(f"Removed hook {name}")
+            else:
+                return False, self._loge(f"Unknown step {step}")
+        else:
+            return False, self._loge(f"Hook {name} not in {step} hooks")
+
+    def remove_post_batch_hook_with_args(self, step: str, name: str) ->\
+            Tuple[bool, str]:
+        """Remove a post batch hook for a given `step`
+
+        Args:
+            step: Usually one of `train`, `val` or `test`
+            name: Name of the hook
+        """
+        if step in {"train", "val", "test"}:
+            if name in self._post_batch_hooks_with_args[step]:
+                self._post_batch_hooks_with_args[step].pop(name)
+                self._update_hooks()
+                return True, self._logd(f"Removed hook {name}")
+            else:
+                return False, self._loge(f"Unknown step {step}")
         else:
             return False, self._loge(f"Hook {name} not in {step} hooks")
 
@@ -414,7 +512,9 @@ class Epoch:
         if loop_type != "iterations":
             num_iterations = len(train_loader)
         hooks = [*self._post_batch_hooks["train"].values()]
-        self.train_loop = EpochLoop(train_one_batch, self.signals, train_loader, hooks,
+        hooks_with_args = [*self._post_batch_hooks_with_args["train"].values()]
+        self.train_loop = EpochLoop(train_one_batch, self.signals,
+                                    train_loader, hooks, hooks_with_args,
                                     self.device_mon, max_iters=num_iterations)
         self.train_loop.name = "train"
         self._current_loop = self.train_loop
@@ -434,8 +534,10 @@ class Epoch:
         self._logd("Starting run_val")
         self._logd(f"Val Loader properties: {len(val_loader)}")
         hooks = [*self._post_batch_hooks["val"].values()]
+        hooks_with_args = [*self._post_batch_hooks_with_args["val"].values()]
         num_iterations = len(val_loader)
-        self.val_loop = EpochLoop(val_one_batch, self.signals, val_loader, hooks,
+        self.val_loop = EpochLoop(val_one_batch, self.signals, val_loader,
+                                  hooks, hooks_with_args,
                                   self.device_mon, max_iters=num_iterations)
         self.val_loop.name = "val"
         self._current_loop = self.val_loop
@@ -456,8 +558,10 @@ class Epoch:
         self._logd("Starting run_test")
         self._logd(f"Test Loader properties: {len(test_loader)}")
         hooks = [*self._post_batch_hooks["test"].values()]
+        hooks_with_args = [*self._post_batch_hooks_with_args["test"].values()]
         num_iterations = len(test_loader)
-        self.test_loop = EpochLoop(test_one_batch, self.signals, test_loader, hooks,
+        self.test_loop = EpochLoop(test_one_batch, self.signals, test_loader,
+                                   hooks, hooks_with_args,
                                    self.device_mon, max_iters=num_iterations)
         self.test_loop.name = "test"
         self._current_loop = self.test_loop

@@ -332,21 +332,40 @@ class CallableModel(TCallable):
 
 
 class Return(BaseModel):
+    """Config for a return value from a remote `method`.
+
+    Args:
+        status: The status of the request
+        message: The associated message
+
+    """
     status: bool
     message: str
 
 
-class ReturnImage(BaseModel):
-    status: bool
-    image: bytes
+class ReturnBinary(BaseModel):
+    """Config for a return value with Image data from a remote `method`.
 
+    Args:
+        status: The status of the request
+        image: The requested image
+        mimetype: The mimetype for the image
 
-class ReturnBin(BaseModel):
+    """
     status: bool
     data: bytes
+    mimetype: str
 
 
 class ReturnExtraInfo(BaseModel):
+    """Config for a return value with extra information data from a remote `method`.
+
+    Args:
+        status: The status of the request
+        message: The associated message
+        data: The data object
+
+    """
     status: bool
     message: str
     data: Dict

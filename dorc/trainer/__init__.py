@@ -31,7 +31,7 @@ from ..version import __trainer__version__
 
 from .epoch import Epoch
 from .model import Model, ModelStep
-from .models import Return, ReturnImage, ReturnExtraInfo, AdhocEvalParams
+from .models import Return, ReturnBinary, ReturnExtraInfo, AdhocEvalParams
 from . import config
 from .config import Metric
 from . import hooks as hooks_module
@@ -108,8 +108,8 @@ prop_names = {"saves", "gpus", "system_info", "devices", "models", "active_model
 #         return self.ret
 
 
-def return_image(status: bool, image: str) -> ReturnImage:
-    return ReturnImage(status=status, image=image)
+def return_image(status: bool, image: str) -> ReturnBinary:
+    return ReturnBinary(status=status, image=image)
 
 
 def make_return(status: bool, message: str) -> Return:
@@ -1759,9 +1759,9 @@ class Trainer:
 
     @POST
     @extras
-    def force_run_hooks(self, data: Dict[str, Any]) -> Tuple[bool, str]:
+    def force_run_hooks(self, data: Dict[str, Any]) -> Return:
         "Run the specified post_epoch_hooks_before the epoch is completed"
-        return False, self._logi("Does nothing for now")
+        return make_return(False, self._logi("Does nothing for now"))
 
     # TODO: Functions like this should return a json like form to update to the server
     #       For each such endpoint, there should be a "endpoint_params" endpoint which
@@ -1968,7 +1968,7 @@ class Trainer:
 
     @POST
     @extras
-    def report_adhoc_run(self, data):
+    def report_adhoc_run(self, data) -> Return:
         runner = self._task_runners["adhoc"]
         batch_vars = runner.batch_vars
         if data is None:
@@ -2108,7 +2108,7 @@ class Trainer:
     @GET
     @methods
     def fetch_image(self, img_path: Union[pathlib.Path, str]) ->\
-            Union[Return, ReturnImage]:
+            Union[Return, ReturnBinary]:
         """Fetch the image from a given path.
         """
         img_path = os.path.join(self.image_root, img_path)
@@ -2125,7 +2125,7 @@ class Trainer:
 
     @POST
     @methods
-    def load_image(self, request):
+    def load_image(self, request) -> Return:
         """Load an image from the given data and call given functions on it.
         """
         try:
@@ -2190,10 +2190,9 @@ class Trainer:
             return make_return(False, self._loge(f"Error occured while loading models {e}" +
                                                  f"\n{traceback.format_exc()}"))
 
-    # FIXME: Switch to pydantic for such type checking
     @POST
     @methods
-    def hack_param(self, data: Dict[str, Dict[str, str]]):
+    def hack_param(self, data: Dict[str, Dict[str, str]]) -> Return:
         """Update a param as a hack.
 
         Data is assumed to be a pair of `{key, [type, value]}` dictionary. Only
@@ -2238,7 +2237,7 @@ class Trainer:
 
     @POST
     @methods
-    def add_user_funcs(self, request: flask.Request):
+    def add_user_funcs(self, request: flask.Request) -> Return:
         """Adds user given functions.
         Delegates to :meth:`~trainer.mods.Modules.add_user_funcs`
 
@@ -2389,8 +2388,8 @@ class Trainer:
 
     @POST
     @methods
-    def add_module(self, request: flask.Request, checks):
-        return self._mods.add_module(request, checks)
+    def add_module(self, request: flask.Request, checks) -> Return:
+        return make_return(*self._mods.add_module(request, checks))
     # END: Methods
 
     # START: Objects
@@ -2685,7 +2684,7 @@ class Trainer:
     # TODO: For any worker loop which returns an error, the next
     #       one should pause or halt or something.
     @control
-    def reset_session(self) -> Tuple[bool, str]:
+    def reset_session(self) -> Return:
         """Reset should dump all the variables and data to a backup state with the
         option to save, restore or delete later and reset all the state of the
         session to init_state.
@@ -2696,8 +2695,8 @@ class Trainer:
             message = self._logi("Resetting the current session")
             self._init_all()
         except Exception as e:
-            return False, f"{e}"
-        return True, message
+            return make_return(False, f"{e}")
+        return make_return(True, message)
 
     @control
     def pause(self) -> str:
@@ -2728,7 +2727,7 @@ class Trainer:
     #     # listen for commands
 
     @control
-    def save(self) -> Tuple[bool, str]:
+    def save(self) -> Return:
         self._logi("Saving")
         self._pause_if_running()
         self._logd("Trying force save")
@@ -2741,13 +2740,13 @@ class Trainer:
             message = f"Could not save to {self._save_path_with_epoch}" + "_force" +\
                 f" error {e}" + f"\n{traceback.format_exc()}"
         self._run_if_paused()
-        return status, message
+        return make_return(status, message)
 
     @control
-    def force_eval(self) -> Tuple[bool, str]:
+    def force_eval(self) -> Return:
         """Do a full evaluation run on the adhoc loop"""
         if not self.val_loader:
-            return False, "No val loader"
+            return make_return(False, "No val loader")
         self._pause_if_running()
         if self._task_runners["adhoc"] is None:
             device_monitor, signals = self._task_runner_helper("adhoc")
@@ -2759,9 +2758,9 @@ class Trainer:
         # self._prev_paused_state = None
 
     @control
-    def force_test(self) -> Tuple[bool, str]:
+    def force_test(self) -> Return:
         if not self.test_loader:
-            return False, "No test loader"
+            return make_return(False, "No test loader")
         self._pause_if_running()
         if self._task_runners["adhoc"] is None:
             device_monitor, signals = self._task_runner_helper("adhoc")
@@ -2773,7 +2772,7 @@ class Trainer:
         # self._prev_paused_state = None
 
     @control
-    def abort_session(self) -> Tuple[bool, str]:
+    def abort_session(self) -> Return:
         """`abort_session` finishes the session and switches to "finished" state with
         aborted flag set to true. Saves the current session with aborted suffix.
 
@@ -2786,12 +2785,14 @@ class Trainer:
             self.save()
             self._abort_session("user")
         except Exception as e:
-            return False, self._logi(f"Could not abort {self.current_state}. Error {e}" +
-                                     f"\n{traceback.format_exc()}")
-        return True, self._logi(f"Aborted state {self.current_state} and current session")
+            return make_return(False,
+                               self._logi(f"Could not abort {self.current_state}. Error {e}" +
+                                          f"\n{traceback.format_exc()}"))
+        return make_return(True,
+                           self._logi(f"Aborted state {self.current_state} and current session"))
 
     @control
-    def abort_loop(self) -> Tuple[bool, str]:
+    def abort_loop(self) -> Return:
         """`abort_loop` aborts only the current loop stops with the aborted flag. Useful
         for changing the parameters and starting again. Saves the current
         metrics gathered.
@@ -2800,12 +2801,13 @@ class Trainer:
         try:
             self._abort_current("user")
         except Exception as e:
-            return False, self._logi(f"Could not abort {self.current_state}. Error {e}" +
-                                     f"\n{traceback.format_exc()}")
-        return True, self._logi(f"Aborted {self.current_state}")
+            return make_return(False,
+                               self._logi(f"Could not abort {self.current_state}. Error {e}" +
+                                          f"\n{traceback.format_exc()}"))
+        return make_return(True, self._logi(f"Aborted {self.current_state}"))
 
     @control
-    def abort_loop_with_callback(self) -> Tuple[bool, str]:
+    def abort_loop_with_callback(self) -> Return:
         """`abort_loop` aborts only the current loop stops with the aborted flag. Useful
         for changing the parameters and starting again. Saves the current
         metrics gathered.
@@ -2817,9 +2819,11 @@ class Trainer:
         try:
             self._abort_current_run_cb("user")
         except Exception as e:
-            return False, self._logi(f"Could not abort {self.current_state}. Error {e}" +
-                                     f"\n{traceback.format_exc()}")
-        return True, self._logi(f"Aborted {self.current_state}")
+            return make_return(False,
+                               self._logi(f"Could not abort {self.current_state}. Error {e}" +
+                                          f"\n{traceback.format_exc()}"))
+        return make_return(True,
+                           self._logi(f"Aborted {self.current_state}"))
     # END: Controls
 
     # START: Flags

@@ -1,5 +1,5 @@
 import typing
-from typing import Union, List, Callable, Dict, Tuple, Optional, Any, Type
+from typing import Union, List, Callable, Dict, Tuple, Optional, Any, Type, Iterable
 import pathlib
 import werkzeug
 import functools
@@ -7,6 +7,8 @@ import flask
 import re
 import sys
 import pydantic
+from pydantic import BaseConfig
+from pydantic.fields import ModelField
 import ipaddress
 
 from .. import daemon
@@ -18,6 +20,7 @@ from . import docstring
 from .schemas import ResponseSchema, MimeTypes, MimeTypes as mt,\
     FlaskTypes as ft, SwaggerTypes as st
 from .models import BaseModel, ParamsModel, DefaultModel
+from ..trainer.models import Return, ReturnBinary, ReturnExtraInfo
 
 
 try:
@@ -205,7 +208,33 @@ def check_indirection(response_str: str) -> Optional[Tuple[int, str]]:
     return retval
 
 
-def infer_from_annotations(func: Callable) ->\
+def infer_request_from_annotations(func: Callable) -> Optional[Type[BaseModel]]:
+    """Infer an OpenAPI request body from function annotations.
+
+    The annotations are converted to a `BaseModel` and schema is extracted from
+    it.
+
+    Args:
+        func: The function whose annotations are to be inferred.
+
+    Returns:
+        A `BaseModel` generated from the annotation's return value
+
+    """
+    annot = {x: y for x, y in func.__annotations__.items() if x != "return"}
+    if annot:
+        class Annot(BaseModel):
+            pass
+        for x, y in annot.items():
+            Annot.__fields__[x] = ModelField(name=x, type_=y, class_validators={},
+                                             model_config=BaseConfig,
+                                             required=True)
+        return Annot
+    else:
+        return None
+
+
+def infer_response_from_annotations(func: Callable) ->\
         Tuple[MimeTypes, Union[str, BaseModel, Dict[str, str]]]:
     """Infer an OpenAPI response schema from function annotations.
 
@@ -220,7 +249,7 @@ def infer_from_annotations(func: Callable) ->\
     """
     annot = func.__annotations__
     if 'return' not in annot:
-        raise AttributeError(f"return not in annotations for {func}")
+        raise AttributeError(f"'return' not in annotations for {func}")
     ldict: Dict[str, Any] = {}
     # TODO: Parse and add example
     if annot["return"] == str:
@@ -263,18 +292,18 @@ def get_schema_var(schemas: List[str], var: str,
             indent = [*filter(None, re.split(r'(\W+)', s))][0]
             typename = s.strip().split(":", 1)[0]
             target, trailing = ref_repl(s).rsplit(".", 1)
-            try:
-                if func is not None:
-                    tfunc = get_func_for_redirect(target, func)
-                    if isinstance(tfunc, property):
-                        tfunc = tfunc.fget
-                    if trailing.strip(" ").startswith("return") and\
-                       "return" in tfunc.__annotations__:
-                        schemas[i] = indent + typename + ": " +\
-                            str(tfunc.__annotations__["return"])
-            except Exception as e:
-                print(f"Error {e} for {func} in get_schema_var")
-                schemas[i] = indent + typename + ": " + "Optional[Any]"
+            # try:
+            if func is not None:
+                tfunc = get_func_for_redirect(target, func)
+                if isinstance(tfunc, property):
+                    tfunc = tfunc.fget
+                if trailing.strip(" ").startswith("return") and\
+                   "return" in tfunc.__annotations__:
+                    schemas[i] = indent + typename + ": " +\
+                        str(tfunc.__annotations__["return"])
+            # except Exception as e:
+            #     print(f"Error {e} for {func} in get_schema_var")
+            #     schemas[i] = indent + typename + ": " + "Optional[Any]"
     exec("\n".join(schemas), globals(), ldict)
     if var not in ldict:
         raise AttributeError(f"{var} not in docstring Schemas for {(tfunc or func)}")
@@ -319,7 +348,7 @@ def generate_responses(func: Callable, rulename: str, redirect: str) -> Dict[int
             redir_func = get_func_for_redirect(redirect.lstrip("~"), func)
             if isinstance(redir_func, property):
                 redir_func = redir_func.fget
-            mtt, ret = infer_from_annotations(redir_func)
+            mtt, ret = infer_response_from_annotations(redir_func)
             if mtt == mt.text:
                 if ret:
                     response = ResponseSchema(*inner_two, mtt, spec=ret)
@@ -347,7 +376,7 @@ def generate_responses(func: Callable, rulename: str, redirect: str) -> Dict[int
                     elif attr == "return":
                         if isinstance(redir_func, property):
                             redir_func = redir_func.fget
-                        mtt, ret = infer_from_annotations(redir_func)
+                        mtt, ret = infer_response_from_annotations(redir_func)
                         if mtt == mt.text:
                             response = ResponseSchema(*inner_two, mtt, ret)
                         elif inner_two:
@@ -397,6 +426,29 @@ def generate_responses(func: Callable, rulename: str, redirect: str) -> Dict[int
 #                    "content": {mimetype: {"schema": content}}}}
 
 
+def schema_to_query_params(schema: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Convert schema to `query` parameters list compatible with OpenAPI.
+
+    Args:
+        schema: A schema dictionary
+
+    Returns:
+        A List of parameter dictionaries.
+
+    """
+    retval = []
+    for k, w in schema["properties"].items():
+        temp = {}
+        w.pop("title")
+        if "required" in w:
+            temp["required"] = w.pop("required")
+        temp["name"] = k
+        temp["in"] = "query"
+        temp["schema"] = w
+        retval.append(temp)
+    return retval
+
+
 def get_request_params(lines: List[str]) -> List[Dict[str, Any]]:
     """Return the paramters of an HTTP request if they exist.
 
@@ -412,16 +464,7 @@ def get_request_params(lines: List[str]) -> List[Dict[str, Any]]:
     exec("\n".join(["class Params(ParamsModel):", *lines]), globals(), ldict)
     params = ldict["Params"]
     schema = params.schema()
-    retval = []
-    for k, w in schema["properties"].items():
-        temp = {}
-        w.pop("title")
-        temp["required"] = w.pop("required")
-        temp["name"] = k
-        temp["in"] = "query"
-        temp["schema"] = w
-        retval.append(temp)
-    return retval
+    return schema_to_query_params(schema)
 
 
 def join_subsection(lines: List[str]) -> List[str]:
@@ -483,9 +526,9 @@ def get_request_body(lines: List[str],
                     redir_func, attr = check_for_redirects(attr_str, current_func)
                     if redir_func:
                         if attr == "return":
-                            mtt, ret = infer_from_annotations(redir_func)
+                            mtt, ret = infer_response_from_annotations(redir_func)
                             # Although mypy gives a type error here, because of
-                            # attr_regex match infer_from_annotations should
+                            # attr_regex match infer_response_from_annotations should
                             # always return some annotation or raise error
                             attr_name = line.split(":")[0].strip() + "_" + ret.__name__
                             exec(f"{attr_name} = ret")
@@ -566,7 +609,9 @@ def get_tags(func: Callable) -> List[str]:
         return []
 
 
-def get_opId(name: str, func: Callable, params: List[str], method: str) -> str:
+def get_opId(name: str, func: Callable,
+             redir_func: Optional[Callable],
+             params: List[str], method: str) -> str:
     """Generate a unique OpenAPI `operationId` for the function
 
     Args:
@@ -577,8 +622,10 @@ def get_opId(name: str, func: Callable, params: List[str], method: str) -> str:
         An operation id
     """
     mod = func.__qualname__.split(".")[0]
+    redir = redir_func.__qualname__.split(".")[-1] if redir_func else ""
     name = name.split("/")[1]
-    return mod + "__" + name + "__" + "_".join(params) + method.upper()
+    components: Iterable[str] = filter(None, [mod, redir, name])
+    return "__".join(components) + "_".join(params) + method.upper()
 
 
 def get_params_in_path(name: str) -> List[Dict[str, Any]]:
@@ -620,7 +667,8 @@ def check_function_redirect(docstr: Optional[str], rulename: str) -> Tuple[str, 
 
 def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
                        method_func: Callable, method: str) ->\
-                       Tuple[Dict[str, Any], Tuple[str, str]]: # NOQA
+                       Tuple[Dict[str, Any], Tuple]: # NOQA
+    errors: List[str] = []
     retval: Dict[str, Any] = {}
     # FIXME: Find a better way to generate operationId
     var, redirect = check_function_redirect(method_func.__doc__, name)
@@ -628,8 +676,9 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
     tags = get_tags(method_func)
     # if name == "/props/controls":
     #     import ipdb; ipdb.set_trace()
-    if "load_saves" in name:
-        import ipdb; ipdb.set_trace()
+    # if "load_saves" in name:
+    #     import ipdb; ipdb.set_trace()
+    parameters: List[Dict[str, Any]] = get_params_in_path(name)
     if redirect:
         redir_func = get_func_for_redirect(redirect, method_func)
         if redir_func is None:
@@ -638,30 +687,50 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
             try:
                 doc = docstring.GoogleDocstring(redir_func.__doc__ or "")
             except Exception as e:
+                errors.append(f"e")
                 raise ValueError(f"Error parsing docstring for {redir_func}, {e}")
             description = getattr(doc, "description", "")
             tags.extend(get_tags(redir_func))
+            if isinstance(redir_func, property):
+                redir_func = redir_func.fget
+            if "request" in redir_func.__annotations__ and\
+               issubclass(redir_func.__annotations__['request'], flask.Request):
+                errors.append(f"Flask request cannot be inferred {name}, {redir_func}")
+                annot = None
+            else:
+                annot = infer_request_from_annotations(redir_func)
+            if annot:
+                redir_schema: Optional[Dict[str, Any]] = annot.schema()
+            else:
+                redir_schema = None
     else:
         redir_func = None
         try:
             doc = docstring.GoogleDocstring(method_func.__doc__ or "")
         except Exception as e:
+            errors.append(f"e")
             raise ValueError(f"Error parsing docstring for {method_func}, {e}")
         description = getattr(doc, "description", "")
     retval["description"] = description
     if tags:
         retval["tags"] = tags
-    parameters: List[Dict[str, Any]] = get_params_in_path(name)
     # TODO: Fix opId in case there's indirection
     #       /props/devices has currently FlaskInterface__props__GET
     #       instead of FlaskInterface__props_device__GET or something
     #       It can also be getTrainerPropsDevice based on some rules
     retval["operationId"] = get_opId(name,
                                      method_func,
+                                     redir_func,
                                      [x["name"] for x in parameters],
                                      method)
     if "params" in request:
         parameters.extend(get_request_params(request["params"]))
+    if redirect and redir_schema and method.lower() == "get":
+        parameters.extend(schema_to_query_params(redir_schema))
+    if redirect and redir_schema and method.lower() == "post":
+        # FIXME: form
+        request_body = {"content": {"application/json": {"schema": redir_schema}}}
+        retval["requestBody"] = request_body
     if parameters:
         retval["parameters"] = parameters
     if "body" in request:
@@ -680,7 +749,10 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
                     try:
                         content_type = mt(request["content-type"]).value
                     except Exception as ex:
-                        return {}, (rule.rule, f"{e, ex}")
+                        errors.append(f"{e, ex}")
+                        raise ValueError(f"Could not parse request body for {name}, {method}. " +
+                                         f"Error {e, ex}")
+                        # return {}, (rule.rule, f"{e, ex}")
             else:
                 content_type = mt.json.value
             request_body = {"content": {content_type: {"schema": body}}}
@@ -694,9 +766,9 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
         error = ()
     except Exception as e:
         retval = {}
-        # if "local variable" in f"{e}":
-        #     import ipdb; ipdb.set_trace()
-        error = (str(rule.rule), f"{e}")
+        # raise ValueError(f"Could not parse response for {name}, {method}. " +
+        #                  f"Error {e}")
+        error = (str(rule.rule), f"{e}" + "\n".join(errors))  # type: ignore
     return retval, error
 
 
@@ -762,23 +834,20 @@ def make_paths(app: flask.Flask, excludes: List[str]) ->\
     return paths, errors, excluded
 
 
-def openapi_spec(app: flask.Flask, excludes: List[str] = []) ->\
-        Tuple[Dict[str, Union[str, Dict]], List[Tuple[str, str]], List[str]]:
-    """Generate openAPI spec for a :mod:`flask` app.
+def extract_definitions(paths: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract `definitions` from generated openAPI spec for :mod:`flask` app endpoints.
 
     Args:
-        app: The flask app for which the paths should be generated.
-                The app should be live and running.
-        exclude: A list of regexps to exlucde from spec generation
-                Useful paths like /static/ etc.
+        paths: The paths extracted from the docstrings.
 
     Returns:
-        A 3-tuple of `api_spec`, `errors` which occurred during the spec
-        generation and a :class:`list` of rules that were excluded.
+        A dictionary of `$ref`s which are stored under key `definitions`.
+
+    :mod:`pydantic` on generating schema stores the `$ref`s as `definitions`
+    which OpenAPI somehow doesn't like. We simply replace that with
+    `components/schema`
 
     """
-    paths, errors, excluded = make_paths(app, excludes)
-
     def pred(a, b):
         if a == "$ref" and b.startswith("#/definitions/"):
             return True
@@ -797,8 +866,31 @@ def openapi_spec(app: flask.Flask, excludes: List[str] = []) ->\
 
     def pop_pred(x, y):
         return x == "definitions" and isinstance(y, dict)
-
     definitions = pop_if(paths, pop_pred)
+    missing = [Return, ReturnBinary, ReturnExtraInfo]
+    for x in missing:
+        if x.__name__ not in definitions:
+            definitions[x.__name__] = x.schema()
+    return definitions
+
+
+def openapi_spec(app: flask.Flask, excludes: List[str] = []) ->\
+        Tuple[Dict[str, Union[str, Dict]], List[Tuple[str, str]], List[str]]:
+    """Generate openAPI spec for a :mod:`flask` app.
+
+    Args:
+        app: The flask app for which the paths should be generated.
+                The app should be live and running.
+        exclude: A list of regexps to exlucde from spec generation
+                Useful paths like /static/ etc.
+
+    Returns:
+        A 3-tuple of `api_spec`, `errors` which occurred during the spec
+        generation and a :class:`list` of rules that were excluded.
+
+    """
+    paths, errors, excluded = make_paths(app, excludes)
+    definitions = extract_definitions(paths)
     return {'openapi': '3.0.1',
             'info': {'title': 'DORC Server',
                      'description': 'API specification for Deep Learning ORChestrator',

@@ -52,16 +52,13 @@ def add_nullable(schema: Dict[str, Any], model: PydanticBaseModel) -> None:
             elif "items" in value:
                 add_nullable_subroutine(field.sub_fields[0], value["items"],
                                         process_all)
+        # No args, i.e., []
         if field.args_field and isinstance(field.args_field.sub_fields, tuple) and\
            not field.args_field.sub_fields:  # empty args list
-            value["properties"]["args"] = {"type": "array"}
-        elif field.args_field and field.args_field.sub_fields is None:  # empty args list
+            value["properties"].pop("args")
+        # Ellipses or [Any]
+        elif field.args_field and field.args_field.sub_fields is None:
             value["properties"]["args"] = {"type": "object"}
-        # FIXME: WTF does this do?
-        # elif field.args_field and field.args_field == list:
-        #     for a in field.args_field.sub_fields:
-        #         add_nullable_subroutine(a, value["additionalProperties"]["args"],
-        #                                 process_all)
         elif field.args_field is not None:
             add_nullable_subroutine(field.args_field, value["properties"]["args"],
                                     process_all)

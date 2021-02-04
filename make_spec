@@ -1,0 +1,14 @@
+#! /bin/bash
+
+python -W ignore -m dorc.spec --no-interface --excludes '/trainer/.*'
+python -W ignore -m dorc.spec --no-daemon
+openapi-spec-validator daemon.yml
+if [ $? -eq 0 ]
+then echo "Validated daemon spec"
+else echo "Failed for daemon"
+fi
+openapi-spec-validator iface.yml
+if [ $? -eq 0 ]
+then echo "Validated interface spec"
+else echo "Failed for daemon"
+fi

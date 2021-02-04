@@ -1,0 +1,37 @@
+name: Test and Validate OpenAPI Spec
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.7, 3.8]
+    steps:
+    - uses: actions/checkout@v2
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Cache pip
+      uses: actions/cache@v2
+      env:
+          cache-file-name: requirements-${{ matrix.python-version }}.txt
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles(env.cache-file-name) }}
+        restore-keys: |
+          ${{ runner.os }}-pip-${{ hashFiles(env.cache-file-name) }}
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        export SKIP_CYTHON=1
+        if [ -f requirements-${{ matrix.python-version }}.txt ]; then python -m pip install -r requirements-${{ matrix.python-version }}.txt; fi
+        python -m pip install pytest==6.2.1
+        python -m pip install openapi-spec-validator==0.2.9
+    - name: Test spec generation
+      run: |
+        cd tests && pytest -m spec && cd ..
+    - name: Validate OpenAPI spec generation
+      run: |
+        bash make_spec

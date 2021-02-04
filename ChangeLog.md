@@ -21,7 +21,13 @@
 
 ## [2021-02-03 Wed 22:54]
 - Added more docs to interfaces.
-- Consolidated methods and extras in the FlaskInterface
+- Consolidated methods and extras in the `dorc.interfaces.FlaskInterface`
 - Added `spec` to pytest markers and separated spec tests.
 - Fixed some tests in `test_spec_schema`.
 - Added `test_spec_docstring.py`
+
+## [2021-02-04 Thu 12:23]
+- Added spec generation and validation and fixes for same.
+- Github workflow for spec generation and validation.
+- Fixed return values of functions.
+  - Removed Tuple and added where there was no return annotation.

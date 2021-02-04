@@ -1,5 +1,5 @@
 import pytest
-from typing import Union, List, Callable, Dict, Tuple, Optional, Any
+from typing import Union, List, Callable, Dict, Optional
 from dorc.spec.models import BaseModel
 
 
@@ -67,7 +67,7 @@ def test_callable_with_nullable_empty_args():
     class EmptyArgs(BaseModel):
         func: Callable[[], None]
     schema = EmptyArgs.schema()
-    assert dget(schema, "properties", "func", "properties", "args", "type") == "array"
+    assert "args" not in dget(schema, "properties", "func", "properties")
     assert dget(schema, "properties", "func", "properties", "retval", "nullable")
 
 

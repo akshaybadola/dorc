@@ -609,23 +609,123 @@ def get_tags(func: Callable) -> List[str]:
         return []
 
 
+def capitalize(x):
+    return x[0].upper() + x[1:]
+
+
+def capital_case(x):
+    return x.title().replace("_", "")
+
+
+def camel_case(x):
+    x = capital_case(x)
+    return x[0].lower() + x[1:]
+
+
+def template_subroutine(x, components, prefix):
+    if isinstance(x, str):
+        x = [*filter(None, re.split(r'(%[a-zA-Z])', x))]
+    for c, v in components.items():
+        try:
+            i = [_.lower() for _ in x].index(c)
+            if x[i] == "%p":
+                x[i] = x[i].replace(x[i], prefix.join(v))
+                return x[i]
+            elif x[i] == "%P":
+                x[i] = x[i].replace(x[i], prefix.join([_ and capitalize(_) for _ in v]))
+                return x[i]
+            elif x[i] == "%h":
+                x[i] = x[i].replace(x[i], v.lower())
+            elif x[i] == "%H":
+                x[i] = x[i].replace(x[i], v.upper())
+            elif x[i] == c.upper():
+                x[i] = v and x[i].replace(x[i], capitalize(v))
+            else:
+                x[i] = x[i].replace(x[i], v)
+        except ValueError:
+            pass
+    return prefix.join(filter(None, x))
+
+
 def get_opId(name: str, func: Callable,
              redir_func: Optional[Callable],
-             params: List[str], method: str) -> str:
+             params: List[str], method: str,
+             template: str = "[__%C%f%r%n]_[_%p]_%H",
+             aliases: Dict[str, str] = {}) -> str:
     """Generate a unique OpenAPI `operationId` for the function
 
     Args:
         name: name of an HTTP (flask usually) endpoint
         func: The function whose docstring will be processed.
+        opid_template: Template for generation of OpenAPI operationId
+                       Default template is [__%C%f%r%n]_[_%p]_%H, where:
+                       - [_%x] represents "_".join(x) and [__%x] == "__".join(x) etc.
+                       - %M is the (capitalized) module name
+                       - %C is the (capitalized) class name
+                       - %f is the function name
+                       - %r is the redirected function name
+                       - %n is the endpoint's basename
+                       - %p are the parameters to the endpoint
+                       - %H is the (uppercase) name of the method (GET,POST)
+
+                      See https://swagger.io/docs/specification/paths-and-operations/
+                      For details on operationId
+        aliases: A list of aliases for module names
+
+    The capitalized version of these (e.g, %R) indicates to capitalize that
+    token.  %H will upcase the entire word (GET).  [%r] means to join the list
+    with empty string "".  If only %p is given, the params will be joined with
+    an empty string.  Nested braces [] are not allowed.  The final opId is
+    converted to camelCase or CapitalCase depending on whether to capitalize the
+    first token or not.
+
+    If some attribute is not available for generation of opId, it's value is not
+    considered.
+
+    Examples::
+        get_opId(name, some_func, None, ["task_id"], "GET", "[__%M,%r,%n]_[_%p]_%H")
+        get_opId(name, some_func, None, ["task_id"], "GET", "[%M,%r,%n][%P]_%H")
+        get_opId(name, some_func, None, ["task_id"], "GET", "[%M,%r][%P]_%H")
+        get_opId(name, some_func, None, ["task_id"], "GET", "%M%R%p%H")
 
     Returns:
         An operation id
+
     """
-    mod = func.__qualname__.split(".")[0]
-    redir = redir_func.__qualname__.split(".")[-1] if redir_func else ""
-    name = name.split("/")[1]
-    components: Iterable[str] = filter(None, [mod, redir, name])
-    return "__".join(components) + "_".join(params) + method.upper()
+    if not template:
+        raise ValueError("Template cannot be empty")
+    mod = func.__module__
+    fname = func.__name__
+    if len(func.__qualname__.split(".")) > 1:
+        clsname = func.__qualname__.split(".")[0]
+    else:
+        clsname = ""
+    if clsname == fname and "%f" in template:
+        clsname = ""
+    redir: str = redir_func.__qualname__.split(".")[-1] if redir_func else ""
+    if redir == fname and "%f" in template:
+        redir = ""
+    name = name.split("/")[-1]
+    if fname == name and "%n" in template:
+        fname = ""
+    reg = re.compile(r'\[.+?\]')
+    if "[[" in "".join([x for x in template if x in {"[", "]"}]):
+        raise ValueError(f"Nested braces are not allowed for template: {template}")
+    matches = reg.findall(template)
+    components = {"%m": camel_case(mod), "%c": clsname, "%f": fname,
+                  "%r": redir, "%n": name, "%p": params,
+                  "%h": method}
+    if matches:
+        for x in matches:
+            x = x.strip('[]')
+            prefix_match = re.match(r'^(.*?)%', x)
+            if prefix_match:
+                prefix = prefix_match.groups()[0]
+                x = x.lstrip(prefix)
+                x = template_subroutine(x, components, prefix)
+                template = re.sub(reg, x, template, 1)
+    template = template_subroutine(template, components, "")
+    return template
 
 
 def get_params_in_path(name: str) -> List[Dict[str, Any]]:
@@ -666,7 +766,9 @@ def check_function_redirect(docstr: Optional[str], rulename: str) -> Tuple[str, 
 
 
 def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
-                       method_func: Callable, method: str) ->\
+                       method_func: Callable, method: str,
+                       gen_opid: bool,
+                       opid_template: str, aliases: Dict[str, str]) ->\
                        Tuple[Dict[str, Any], Tuple]: # NOQA
     errors: List[str] = []
     retval: Dict[str, Any] = {}
@@ -712,17 +814,20 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
             raise ValueError(f"Error parsing docstring for {method_func}, {e}")
         description = getattr(doc, "description", "")
     retval["description"] = description
+    if gen_opid:
+        retval["operationId"] = get_opId(name,
+                                         method_func,
+                                         redir_func,
+                                         [x["name"] for x in parameters],
+                                         method,
+                                         opid_template,
+                                         aliases)
     if tags:
         retval["tags"] = tags
     # TODO: Fix opId in case there's indirection
     #       /props/devices has currently FlaskInterface__props__GET
     #       instead of FlaskInterface__props_device__GET or something
     #       It can also be getTrainerPropsDevice based on some rules
-    retval["operationId"] = get_opId(name,
-                                     method_func,
-                                     redir_func,
-                                     [x["name"] for x in parameters],
-                                     method)
     if "params" in request:
         parameters.extend(get_request_params(request["params"]))
     if redirect and redir_schema and method.lower() == "get":
@@ -772,7 +877,8 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
     return retval, error
 
 
-def make_paths(app: flask.Flask, excludes: List[str]) ->\
+def make_paths(app: flask.Flask, excludes: List[str],
+               gen_opid: bool, opid_template: str, aliases: Dict[str, str]) ->\
         Tuple[Dict, List[Tuple[str, str]], List[str]]:
     """Generate OpenAPI `paths` component for a :class:`~flask.Flask` app
 
@@ -823,7 +929,10 @@ def make_paths(app: flask.Flask, excludes: List[str]) ->\
                         method_func = resolve_partials(endpoint)
                 spec, error = get_specs_for_path(name, rule,
                                                  method_func,
-                                                 method.lower())
+                                                 method.lower(),
+                                                 gen_opid,
+                                                 opid_template,
+                                                 aliases)
                 if error:
                     paths[newname][method.lower()] = default_response
                     errors.append(error)
@@ -874,7 +983,10 @@ def extract_definitions(paths: Dict[str, Any]) -> Dict[str, Any]:
     return definitions
 
 
-def openapi_spec(app: flask.Flask, excludes: List[str] = []) ->\
+def openapi_spec(app: flask.Flask, excludes: List[str] = [],
+                 gen_opid: bool = False,
+                 opid_template: str = "",
+                 aliases: Dict[str, str] = {}) ->\
         Tuple[Dict[str, Union[str, Dict]], List[Tuple[str, str]], List[str]]:
     """Generate openAPI spec for a :mod:`flask` app.
 
@@ -883,13 +995,16 @@ def openapi_spec(app: flask.Flask, excludes: List[str] = []) ->\
                 The app should be live and running.
         exclude: A list of regexps to exlucde from spec generation
                 Useful paths like /static/ etc.
+        opid_template: Template for generation of OpenAPI operationID.
+                       See :func:`get_opId` for details on its meaning.
+        aliases: A list of aliases for module names
 
     Returns:
         A 3-tuple of `api_spec`, `errors` which occurred during the spec
         generation and a :class:`list` of rules that were excluded.
 
     """
-    paths, errors, excluded = make_paths(app, excludes)
+    paths, errors, excluded = make_paths(app, excludes, gen_opid, opid_template, aliases)
     definitions = extract_definitions(paths)
     return {'openapi': '3.0.1',
             'info': {'title': 'DORC Server',

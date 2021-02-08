@@ -160,6 +160,64 @@ def bleh_annot():
 
 
 @pytest.mark.spec
+def test_get_opId():
+    assert spec.get_opId("/path/get_stuff", bleh_annot, None,
+                         ["task_id", "op_id"], "GET",
+                         "[__%M%r%n]__[_%p]__%H", {}) == 'TestSpec__get_stuff__task_id_op_id__GET'
+    assert spec.get_opId("/path/get_stuff", bleh_annot, None,
+                         ["task_id", "op_id"], "GET",
+                         "[__%m%r%n]__[_%p]__%H", {}) == 'testSpec__get_stuff__task_id_op_id__GET'
+    assert spec.get_opId("/path/get_stuff", bleh_annot, None,
+                         ["task_id", "op_id"], "GET",
+                         "[__%C%r%n]__[_%p]__%H", {}) == 'get_stuff__task_id_op_id__GET'
+    assert spec.get_opId("/path/get_stuff", bleh_annot, None,
+                         ["task_id", "op_id"], "GET",
+                         "[__%C%f%r%n]__[_%p]__%H", {}) ==\
+                         'bleh_annot__get_stuff__task_id_op_id__GET'
+    assert spec.get_opId("/path/get_stuff", bleh_annot, None,
+                         ["task_id", "op_id"], "GET",
+                         "[__%C%F%r%n]__[_%p]__%H", {}) ==\
+                         'Bleh_annot__get_stuff__task_id_op_id__GET'
+    assert spec.get_opId("/path/create_session", daemon.Daemon.create_session, None,
+                         [], "GET", "[__%M%C%f%r%n]__[_%p]__%H", {}) ==\
+                         'Dorc.Daemon__Daemon__create_session____GET'
+    assert spec.get_opId("/path/create_session", daemon.Daemon.create_session, None,
+                         [], "GET", "[_%C%f%r]%H", {}) ==\
+                         'Daemon_create_sessionGET'
+
+
+@pytest.mark.spec
+def test_types():
+    class AnyModel(BaseModel):
+        any: Any
+        list_any: List[Any]
+        object_str_any: Dict[str, Any]
+        object_any_any: Dict[Any, Any]
+        union_any: Union[str, Any]
+        object: Dict
+        optional_object: Optional[Dict]
+        list_object: List[Dict]
+
+    schema = AnyModel.schema()
+    assert schema["properties"]["any"]["type"] == "object"
+    assert schema["properties"]["any"]["nullable"]
+    assert schema["properties"]["list_any"]["type"] == "array"
+    assert schema["properties"]["list_any"]["items"]["type"] == "object"
+    assert schema["properties"]["list_any"]["items"]["nullable"]
+    assert schema["properties"]["object_str_any"]["type"] == "object"
+    assert "nullable" not in schema["properties"]["object_str_any"]
+    assert schema["properties"]["object_any_any"]["type"] == "object"
+    assert "nullable" not in schema["properties"]["object_any_any"]
+    assert schema["properties"]["object"]["type"] == "object"
+    assert "nullable" not in schema["properties"]["object"]
+    assert schema["properties"]["optional_object"]["type"] == "object"
+    assert schema["properties"]["optional_object"]["nullable"]
+    assert schema["properties"]["list_object"]["type"] == "array"
+    assert schema["properties"]["list_object"]["items"]["type"] == "object"
+    assert "nullable" not in schema["properties"]["list_object"]["items"]
+
+
+@pytest.mark.spec
 def test_get_requests():
     doc = docstring.GoogleDocstring(bleh.__doc__)
     assert not hasattr(doc, "params")

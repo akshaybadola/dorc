@@ -1,3 +1,4 @@
+from typing import List
 import os
 import sys
 import yaml
@@ -7,17 +8,43 @@ from .. import util
 from . import openapi_spec
 
 
-parser = argparse.ArgumentParser("OpenAPI Spec Generator")
+parser = argparse.ArgumentParser("OpenAPI Spec Generator",
+                                 formatter_class=argparse.RawTextHelpFormatter)
 parser.add_argument("--no-daemon", action="store_false", dest="daemon",
                     help="Do not generate spec for daemon")
 parser.add_argument("--no-interface", action="store_false", dest="interface",
                     help="Do not generate spec for trainer/interface")
-parser.add_argument("--daemon-spec", type=str, default="daemon.yml",
+parser.add_argument("-df", "--daemon-spec-file", dest="daemon_spec",
+                    type=str, default="daemon.yml",
                     help="Filename for daemon spec")
-parser.add_argument("--interface-spec", type=str, default="iface.yml",
+parser.add_argument("-if", "--interface-spec-file", type=str, dest="interface_spec",
+                    default="iface.yml",
                     help="Filename for interface spec")
-parser.add_argument("--excludes", type=str, default="",
+parser.add_argument("-e", "--excludes", type=str, default="",
                     help="Comma separated list of regexps to exclude")
+parser.add_argument("--gen-opid", dest="gen_opid", action="store_true",
+                    help="Generate operationId also.")
+parser.add_argument("-t", "--opid-template", type=str, dest="opid_template",
+                    default="[__%M%r%n]_[_%p]_%h",
+                    help="Template for generation of OpenAPI operationID if --gen-opid is given.\n" +
+                    """
+Default template is [__%%M%%R%%N]_[_%%p]_%%m, where:
+- [_%%x] represents "_".join(x) and [__%%x] == "__".join(x) etc.
+- %%M is the module name
+- %%r is the redirected function name
+- %%n is the endpoint's basename
+- %%p are the parameters to the endpoint
+- %%h is the name of the HTTP method (GET,POST)
+
+The capitalized version of these %%R indicates to capitalize that token.
+
+See https://swagger.io/docs/specification/paths-and-operations/
+For details on operationId""")
+parser.add_argument("--aliases", type=str, default="",
+                    help="Comma separated list of aliases for modules, " +
+                    "for substituting while generating operationID.\n" +
+                    "Aliases themselves are pairs of 'a:b'.\n" +
+                    "Example:\n    'SomeLongModuleName:ModName,OtherModName:Other'")
 args = parser.parse_args()
 excludes = [r"^/_devices", r"/.*\<.*?filename\>", r"/static/.*", r"^/$"]
 if args.excludes:
@@ -60,7 +87,16 @@ if args.daemon:
     print(f"Exclude patterns are: {excludes}")
     print(f"\n\nWill Output to: {fname}")
     dmn = util.make_test_daemon()
-    out, err, ex = openapi_spec(dmn.app, excludes)
+    if args.gen_opid:
+        try:
+            aliases: Dict[str, str] = dict([*x.split(":")]
+                                           for x in filter(None, args.aliases.split(",")))
+        except Exception as e:
+            AttributeError(f"Failed to parse aliases {args.aliases}. Error {e}")
+    else:
+        aliases = {}
+    out, err, ex = openapi_spec(dmn.app, excludes, args.gen_opid,
+                                args.opid_template, aliases)
     out_str = fix_references(yaml.safe_dump(out))
     with open(fname, "w") as f:
         f.write(out_str)
@@ -74,7 +110,16 @@ if args.interface:
     autoloads_path = os.path.join(os.path.dirname(
         os.path.abspath(__file__)), "../autoloads.py")
     trainer = util.make_test_interface(setup_path, autoloads_path)
-    out, err, ex = openapi_spec(trainer.app, excludes)
+    if args.gen_opid:
+        try:
+            aliases = dict([*x.split(":")]
+                           for x in filter(None, args.aliases.split(",")))
+        except Exception as e:
+            AttributeError(f"Failed to parse aliases {args.aliases}. Error {e}")
+    else:
+        aliases = {}
+    out, err, ex = openapi_spec(trainer.app, excludes, args.gen_opid,
+                                args.opid_template, aliases)
     out_str = fix_references(yaml.safe_dump(out))
     with open(fname, "w") as f:
         f.write(out_str)

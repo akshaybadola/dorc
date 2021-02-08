@@ -1,14 +1,28 @@
 #! /bin/bash
 
-python -W ignore -m dorc.spec --no-interface --excludes '/trainer/.*'
-python -W ignore -m dorc.spec --no-daemon
-openapi-spec-validator daemon.yml
-if [ $? -eq 0 ]
-then echo "Validated daemon spec"
-else echo "Failed for daemon"
+if [ ! -d openapi ]
+then mkdir openapi
 fi
-openapi-spec-validator iface.yml
+
+python -W ignore -m dorc.spec -t [_%C%r%n]_%h --gen-opid --no-interface --excludes '/trainer/.*' -df openapi/daemon.yml
+python -W ignore -m dorc.spec  -t [_%C%r%n]_%h --gen-opid --no-daemon -if openapi/iface.yml
+
+openapi-spec-validator openapi/daemon.yml
 if [ $? -eq 0 ]
 then echo "Validated interface spec"
+     # java -jar swagger-codegen-cli.jar generate --lang javascript -o openapi/iface -i openapi/iface.yml
+     java -jar openapi-generator-cli-5.0.0.jar generate -g javascript-flowtyped -o openapi/iface -i openapi/iface.yml
+     echo "Generated interface client API"
+else echo "Failed for interface"
+     return 1
+fi
+
+openapi-spec-validator openapi/iface.yml
+if [ $? -eq 0 ]
+then echo "Validated daemon spec"
+     # java -jar swagger-codegen-cli.jar generate --lang javascript -o openapi/daemon -i openapi/daemon.yml
+     java -jar openapi-generator-cli-5.0.0.jar generate -g javascript-flowtyped -o openapi/daemon -i openapi/daemon.yml
+     echo "Generating daemon client API"
 else echo "Failed for daemon"
+     return 1
 fi

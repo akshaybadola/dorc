@@ -31,3 +31,6 @@
 - Github workflow for spec generation and validation.
 - Fixed return values of functions.
   - Removed Tuple and added where there was no return annotation.
+
+## [2021-02-04 Thu 12:23]
+- Added templated operationId generation in spec and js spec generation.

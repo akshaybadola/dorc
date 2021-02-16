@@ -1,3 +1,4 @@
+import pytest
 import os
 import shutil
 import time
@@ -20,6 +21,8 @@ class SubTrainer(Trainer):
         return self._cuda
 
 
+# TODO
+@pytest.mark.todo
 class TrainerTestProps(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

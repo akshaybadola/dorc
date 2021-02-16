@@ -8,7 +8,7 @@ import json
 import requests
 import zipfile
 sys.path.append("../")
-from dorc.daemon import _start_daemon
+from dorc.util import make_test_daemon
 
 
 class CloneHTTPTest(unittest.TestCase):
@@ -21,11 +21,10 @@ class CloneHTTPTest(unittest.TestCase):
             os.mkdir(cls.data_dir)
         cls.port = 23232
         cls.hostname = "127.0.0.1"
-        cls.daemon = _start_daemon(cls.hostname, cls.port, ".test_dir")
+        cls.daemon, cls.cookies = make_test_daemon(cls.hostname, cls.port, ".test_dir",
+                                                   get_cookies=True)
         cls.host = "http://" + ":".join([cls.hostname, str(cls.port) + "/"])
         time.sleep(.5)
-        cls.cookies = requests.request("POST", cls.host + "login",
-                                       data={"username": "joe", "password": "Monkey$20"}).cookies
 
     # NOTE: Now tests for cloning zip file also
     def test_clone(self):
@@ -109,7 +108,9 @@ class CloneHTTPTest(unittest.TestCase):
     def test_clone_to(self):
         new_port = 23234
         new_hostname = "127.0.44.1"
-        new_daemon = _start_daemon(new_hostname, new_port, ".new_test_dir")
+        new_daemon, new_cookies = make_test_daemon(new_hostname,
+                                                   new_port, ".new_test_dir",
+                                                   "new_test_daemon", True)
         new_host = "http://" + ":".join([new_hostname, str(new_port) + "/"])
         time.sleep(.5)
         new_cookies = requests.request("POST", new_host + "login",

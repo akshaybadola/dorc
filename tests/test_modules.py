@@ -67,6 +67,7 @@ module_exports = {"A": A, "B": B, "f": f, "g": g}
         cls._modules = Modules(os.path.join(cls.mods_dir, "meh_modules"),
                                print_func, print_func, print_func, print_func)
 
+    @pytest.mark.todo
     def test_load_py_file(self):
         # TODO: check file loading and errors
         # 1. file not python file
@@ -81,6 +82,7 @@ module_exports = {"A": A, "B": B, "f": f, "g": g}
         self.assertTrue("f" in result)
         os.remove("_meh_a.py")
 
+    @pytest.mark.todo
     def test_load_zip_file(self):
         # TODO: check zip file loading and errors
         # 1. non zip file given
@@ -106,6 +108,7 @@ module_exports = {"A": A, "B": B, "f": f, "g": g}
         self.assertTrue("optimizers" in result)
         self.assertTrue("criteria" in result)
 
+    @pytest.mark.todo
     def test_add_module(self):
         # add_py_file, zip_file, check for failures
         pass

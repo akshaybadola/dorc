@@ -12,13 +12,15 @@
 #
 import os
 import sys
+from sphinx.ext.napoleon.docstring import GoogleDocstring
+from functools import partial
 sys.path.insert(0, os.path.abspath('..'))
 
 
 # -- Project information -----------------------------------------------------
 
-project = 'trainer'
-copyright = '2020, Akshay Badola'
+project = 'dorc'
+copyright = '2020,2021 Akshay Badola'
 author = 'Akshay Badola'
 
 
@@ -40,6 +42,42 @@ extensions = [
     'sphinx.ext.napoleon'
 ]
 
+
+# first, we define new methods for any new sections and add them to the class
+def parse_codelike_section(self, header, section):
+    header = [f':{header}:', '']
+    block = ['.. code-block:: python', '']
+    lines = self._consume_usage_section()
+    lines = self._indent(lines, 3)
+    return header + block + lines + ['']
+
+
+def parse_fieldlike_section(self, header, section):
+    return self._format_fields(header, self._consume_fields())
+
+
+# we now patch the parse method to guarantee that the the above methods are
+# assigned to the _section dict
+def patched_parse(self):
+    self._sections['schemas'] = partial(parse_codelike_section, self, "Schemas")
+    self._sections['examples'] = partial(parse_codelike_section, self, "Examples")
+    self._sections['example'] = partial(parse_codelike_section, self, "Example")
+    self._sections['map'] = partial(parse_fieldlike_section, self, "Map")
+    self._sections['tags'] = partial(parse_codelike_section, self, "Tags")
+    self._sections['request'] = partial(parse_codelike_section, self, "Request")
+    self._sections['requests'] = partial(parse_codelike_section, self, "Requests")
+    self._sections['response'] = partial(parse_fieldlike_section, self, "Response")
+    self._sections['responses'] = partial(parse_fieldlike_section, self, "Responses")
+    self._sections['keys'] = partial(parse_fieldlike_section, self, "Keys")
+    self._sections['attributes'] = partial(parse_fieldlike_section, self, "Attributes")
+    self._sections['class attributes'] = partial(parse_fieldlike_section, self, "Class Attributes")
+    self._unpatched_parse()
+
+
+GoogleDocstring._unpatched_parse = GoogleDocstring._parse
+GoogleDocstring._parse = patched_parse
+
+
 # Napoleon settings
 napoleon_google_docstring = True
 napoleon_numpy_docstring = False
@@ -51,8 +89,10 @@ napoleon_use_admonition_for_notes = False
 napoleon_use_admonition_for_references = False
 napoleon_use_ivar = False
 napoleon_use_param = True
+napoleon_use_keyword = False
 napoleon_use_rtype = True
 napoleon_type_aliases = None
+
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -67,14 +107,16 @@ autosectionlabel_prefix_document = True
 # intersphinx_mapping
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3', None),
-    'torch': ('https://pytorch.org/docs/master', None)}
+    'torch': ('https://pytorch.org/docs/master', None),
+    'flask': ('https://click.palletsprojects.com/', None)
+}
 
 # -- Options for HTML output -------------------------------------------------
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = 'pyramid'
+html_theme = 'divio_docs_theme'
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,

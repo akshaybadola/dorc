@@ -1,13 +1,7 @@
 import pytest
 from typing import Union, List, Callable, Dict, Optional
 from dorc.spec.models import BaseModel
-
-
-def dget(obj, *args):
-    if args:
-        return dget(obj.get(args[0]), *args[1:])
-    else:
-        return obj
+from dorc.util import dget
 
 
 @pytest.mark.spec

@@ -22,8 +22,10 @@ class Signals:
 
 class Task(ABC):
     """An abstraction for a generic task which runs either:
+
         1. Over an iterator
         2. A discrete function
+
     and has properties :attr:`running` and :attr:`finished`
 
     Args:

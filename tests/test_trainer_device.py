@@ -64,6 +64,7 @@ class TrainerTestDevice(unittest.TestCase):
                 self.assertEqual(self.trainer.gpus,
                                  case if isinstance(case, list) else [case])
 
+    @pytest.mark.todo
     def test_allocate_devices(self):
         # 1. explicitly mentioned gpus are given preference
         # 2. after that auto
@@ -135,14 +136,17 @@ class TrainerTestDevice(unittest.TestCase):
             self.assertEqual(self.trainer._models["net"].to(bleh).device,
                              torch.device(self.trainer._models["net"].gpus[0]))
 
+    @pytest.mark.todo
     def test_check_trainer_set_device_one_gpu_many_models(self):
         pass
 
+    @pytest.mark.todo
     def test_check_trainer_set_device_many_gpus_many_models(self):
         pass
 
     # NOTE: This should test correct allocation of devices across many gpus and
     #       perhaps DDP
+    @pytest.mark.todo
     def test_check_trainer_set_device_load_unload_auto_adjust(self):
         pass
 

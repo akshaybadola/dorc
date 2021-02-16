@@ -195,6 +195,22 @@ class Model:
         except Exception as e:
             return False, f"{e}" + f"\n{traceback.format_exc()}"
 
+    def dict(self) -> Dict[str, Any]:
+        """Dump the current state.
+
+        Returns a dictionary with keys ``[name, params, optimizer, gpus,
+        state_dict]``
+
+        If the model is backed up to :attr:`backup_path` then that state is
+        returned.
+
+        """
+        return {"name": self._name,
+                "params": self._model_params,
+                "optimizer": {"name": self._optimizer_name,
+                              "params": self._optimizer_params},
+                "gpus": self._gpus}
+
     def dump(self) -> Dict[str, Any]:
         """Dump the current state.
 

@@ -427,7 +427,7 @@ class Config(PydanticBaseModel):
         dataloader_params: Instance of :class:`DataLoaderParams`
         extra_metrics: Dictionary mapping metric names to instances of :class:`Metric`
         data_dir: Path where all the trainer state will be stored
-        production: (deprecated) Whether to run in production mode.
+
     """
     model_params: Dict[str, ModelParams]
     trainer_params: TrainerParams
@@ -438,9 +438,8 @@ class Config(PydanticBaseModel):
     data_params: DataParams
     extra_metrics: Dict[str, Metric]
     dataloader_params: DataLoaderParams
-    # NOTE: rest are supplied by interface
+    # NOTE: data_dir is given by interface
     data_dir: Path
-    production: bool
 
     @validator("model_params")
     def model_params_must_not_be_empty(cls, v):

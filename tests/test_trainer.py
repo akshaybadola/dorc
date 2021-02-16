@@ -1,3 +1,4 @@
+import pytest
 import os
 import shutil
 import time
@@ -9,7 +10,8 @@ sys.path.append("../")
 from dorc.trainer import Trainer
 
 
-class TrainerTestDevice(unittest.TestCase):
+@pytest.mark.todo
+class TrainerTestStuff(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Setup a simple trainer with MNIST dataset."""
@@ -50,17 +52,14 @@ class TrainerTestDevice(unittest.TestCase):
     # 16. Fixes and tests for broken funcs
 
 
-
-    # def test_trainer_init(self):
-    #     self.assertFalse(self.trainer._have_resumed)
-    #     self.assertTrue(self.trainer.paused)
-
+    # TODO
     # def test_trainer_log(self):
     #     self.trainer._init_all()
     #     self.trainer.start()
     #     time.sleep(5)
     #     import ipdb; ipdb.set_trace()
 
+    # TODO
     # def test_trainer_resume_force(self):
     #     pass
 
@@ -68,28 +67,30 @@ class TrainerTestDevice(unittest.TestCase):
     # def test_trainer_save(self):
     #     pass
 
-    # with single gpu do a bunch of things
-    # def test_single_gpu(self):
-    #     pass
-
+    # TODO
     # def test_dataparallel(self):
     #     pass
 
+    # TODO
     # def test_iterations_only(self):
     #     pass
 
+    # TODO
     # Check with various data params and configs
     # def test_post_epoch_hooks(self):
     #     pass
 
+    # TODO
     # What if they don't have certain keys?
     # def test_update_funcs(self):
     #     pass
 
+    # TODO
     # update module also
     # def test_add_module(self):
     #     pass
 
+    # TODO
     # def test_device_logging(self):
     #     pass
 

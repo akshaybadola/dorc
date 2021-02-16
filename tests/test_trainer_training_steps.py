@@ -68,10 +68,12 @@ def test_dataparallel(setup_and_net, get_step):
     assert retval["outputs"].device == torch.device(0)
 
 
+@pytest.mark.todo
 def test_distributed_data_parallel():
     pass
 
 
+@pytest.mark.todo
 @pytest.mark.skipif(not all_devices(), reason=f"Cannot run without GPUs.")
 def test_model_parallel():
     pass

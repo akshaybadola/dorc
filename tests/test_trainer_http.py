@@ -1,3 +1,4 @@
+import pytest
 import os
 import sys
 import time
@@ -64,12 +65,15 @@ class TrainerMethodsTest(unittest.TestCase):
         response = requests.get(self.host + "props/active_model")
         self.assertEqual(json.loads(response.content), model_name)
 
+    @pytest.mark.todo
     def test_fetch_preds(self):
         pass
 
+    @pytest.mark.todo
     def test_fetch_image(self):
         pass
 
+    @pytest.mark.todo
     def test_load_image(self):
         pass
 
@@ -94,17 +98,20 @@ class TrainerMethodsTest(unittest.TestCase):
                                  files={"file": open("modules/test_funcs.py")})
         print(response.content)
 
+    @pytest.mark.todo
     def test_add_module(self):
         # This is actually the same as add_model as that calls add_module internally
         pass
 
+    @pytest.mark.todo
     def test_hack_param(self):
         response = requests.post("http://localhost:20202/methods/hack_param",
                                  json={"_hooks_run_iter_frequency":
                                        {"type": "int", "value": "1000"}})
-        import ipdb; ipdb.set_trace()
+        # import ipdb; ipdb.set_trace()
 
     # START: extras
+    @pytest.mark.todo
     def test_adhoc_eval(self):
         response = requests.post(f"{self.host}" + "extras/adhoc_eval",
                                  json={"val": {"data": "val",
@@ -119,13 +126,15 @@ class TrainerMethodsTest(unittest.TestCase):
         print(response.content)
 
     # FIXME: This is a custom callback infact
+    @pytest.mark.todo
     def test_report_adhoc_run():
         response = requests.request("POST", "http://localhost:20202/extras/report_adhoc_run",
                                     json={"report_function": "ruotianlou_report_func_2"})
-        import ipdb; ipdb.set_trace()
+        # import ipdb; ipdb.set_trace()
 
-
-    # def check_image(self):
+    @pytest.mark.todo
+    def check_image(self):
+        pass
     #     img_dir = "/home/joe/lib/docprocess/images_pdfs/"
     #     img_dir = "/datacache/coco/test2014/"
     #     f = os.path.join(img_dir,

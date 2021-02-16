@@ -8,6 +8,7 @@ import shutil
 import warnings
 import numpy
 import torch
+from threading import Thread
 import requests
 from flask import Response
 
@@ -17,6 +18,13 @@ BasicType = Union[str, int, bool]
 
 def identity(x: Any):
     return x
+
+
+def dget(obj, *args):
+    if args:
+        return dget(obj.get(args[0]), *args[1:])
+    else:
+        return obj
 
 
 def diff_as_sets(a: Iterable, b: Iterable) -> set:
@@ -137,8 +145,7 @@ def create_module(module_dir: str, module_files: List = []):
         shutil.copy(fl, module_dir)
 
 
-def stop_test_daemon():
-    port = 23232
+def stop_test_daemon(port=23232):
     hostname = "127.0.0.1"
     host = "http://" + ":".join([hostname, str(port) + "/"])
     try:
@@ -153,12 +160,12 @@ def stop_test_daemon():
         pass
 
 
-def make_test_daemon(get_cookies=False):
+def make_test_daemon(hostname="127.0.0.1", port=23232,
+                     root_dir=".test_dir", name="test_daemon",
+                     get_cookies=False):
     import requests
-    from .daemon import _start_daemon
+    from .daemon import Daemon
 
-    port = 23232
-    hostname = "127.0.0.1"
     host = "http://" + ":".join([hostname, str(port) + "/"])
     try:
         response = requests.get(host + "_ping", timeout=.5)
@@ -170,12 +177,13 @@ def make_test_daemon(get_cookies=False):
             time.sleep(1)
     except requests.ConnectionError:
         pass
-    data_dir = ".test_dir"
-    if os.path.exists(data_dir):
-        shutil.rmtree(data_dir)
-    if not os.path.exists(data_dir):
-        os.mkdir(data_dir)
-    daemon = _start_daemon(hostname, port, ".test_dir")
+    if os.path.exists(root_dir):
+        shutil.rmtree(root_dir)
+    if not os.path.exists(root_dir):
+        os.mkdir(root_dir)
+    daemon = Daemon(hostname, port, root_dir, name)
+    thread = Thread(target=daemon.start)
+    thread.start()
     time.sleep(.5)
     if get_cookies:
         cookies = requests.request("POST", host + "login",

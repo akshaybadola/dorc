@@ -11,17 +11,12 @@ from pydantic import BaseConfig
 from pydantic.fields import ModelField
 import ipaddress
 
-from .. import daemon
-from .. import trainer
-from .. import interfaces
 from ..util import exec_and_return, recurse_dict, pop_if
 
 from . import docstring
 from .schemas import ResponseSchema, MimeTypes, MimeTypes as mt,\
     FlaskTypes as ft, SwaggerTypes as st
 from .models import BaseModel, ParamsModel, DefaultModel
-from ..trainer.models import Return, ReturnBinary, ReturnExtraInfo
-
 
 try:
     from types import NoneType
@@ -43,6 +38,12 @@ file_content = {'content': {'multipart/form-data':
 ref_regex = re.compile(r'(.*)(:[a-zA-Z0-9]+[\-_+:.])`(.+?)`')
 param_regex = re.compile(r' *([a-zA-Z]+[a-zA-Z0-9_]+?)( *: *)(.+)')
 attr_regex = re.compile(r'(:[a-zA-Z0-9]+[\-_+:.])(`.+?`)( *: *)?([a-zA-Z]+[a-zA-Z0-9_]+?)?')
+global_modules = {}
+
+
+def _init(modules):
+    global global_modules
+    global_modules.update(modules)
 
 
 def ref_repl(x: str) -> str:
@@ -88,13 +89,15 @@ def get_func_for_redirect(func_name: str, redirect_from: Callable) -> Optional[C
         The function with `func_name` if found else None.
 
     """
+    global global_modules
     try:
-        func = exec_and_return(func_name, globals())
+        func = exec_and_return(func_name, {**global_modules, **globals()})
         return func
     except Exception:
         pass
     try:
-        func = exec_and_return(".".join([redirect_from.__module__, func_name]), globals())
+        func = exec_and_return(".".join([redirect_from.__module__, func_name]),
+                               {**global_modules, **globals()})
         return func
     except Exception:
         pass
@@ -103,7 +106,7 @@ def get_func_for_redirect(func_name: str, redirect_from: Callable) -> Optional[C
         exec(f"import {modname}")
         if modname in sys.modules:
             func = exec_and_return(".".join([redirect_from.__module__, func_name]),
-                                   {modname: sys.modules[modname], **globals()})
+                                   {modname: sys.modules[modname], **global_modules, **globals()})
             return func
     except Exception:
         pass
@@ -118,15 +121,16 @@ def get_func_for_redirect(func_name: str, redirect_from: Callable) -> Optional[C
 
 def check_for_redirects(var: str, redirect_from: Callable) ->\
         Tuple[Optional[Callable], str]:
-    """Check for indirections in the given `var`.
+    """Check for indirections in the given :code:`var`.
 
     This function checks for indirections in cases:
+
         a. the docstring doesn't have a schemas section
         b. The indirection is to another function, either a view function
            or a regular function
 
-    The `var` would be part of the `Responses` section of the docstring, usually
-    the part which specfies a schema variable.
+    The :code:`var` would be part of the :code:`Responses` section of the
+    docstring, usually the part which specfies a schema variable.
 
     In case the indirection is to another view function, the schema variable
     must be specified as there can be multiple schemas present in any given
@@ -152,10 +156,11 @@ def check_for_redirects(var: str, redirect_from: Callable) ->\
 
 def get_redirects(func_name: str, attr: str,
                   redirect_from: Callable) -> Optional[BaseModel]:
-    """Get an attribute `attr` from function `func_name` from context of `redirect_from`
+    """Get an attribute :code:`attr` from function :code:`func_name` from context of
+    :code:`redirect_from`
 
     Like :func:`check_for_redirects` but instead of checking whether current
-    function's docstring contains `schema` or not we check for attribute `attr`.
+    function's docstring contains :code:`schema` or not we check for attribute :code:`attr`.
     CHECK: How are the two different and where are they used
 
     Args:
@@ -179,12 +184,13 @@ def get_redirects(func_name: str, attr: str,
 
 
 def check_indirection(response_str: str) -> Optional[Tuple[int, str]]:
-    """Check for indirections in `response_str`.
+    """Check for indirections in :code:`response_str`.
 
-    This function checks for indirections in case the response_str is of type:
-        ResponseSchema(200, "Some description", <indirection>, <indirection>)
+    This function checks for indirections in case the response_str is of the form:
 
-    <indirection> in this case is a directive of type `:func:mod.some_func`
+        `ResponseSchema(200, "Some description", <indirection>, <indirection>)`
+
+    `<indirection>` in this case is a directive of type `:func:mod.some_func`
 
     In this case, both the return type and the schema are given by the latter
     function (or property) and are unkonwn to the view function. The response
@@ -194,7 +200,8 @@ def check_indirection(response_str: str) -> Optional[Tuple[int, str]]:
         response_str: A string which possibly evaluates to :class:`ResponseSchema`
 
     Returns:
-        A schema variable or None if none found after redirects.
+        A tuple of schema variable and status code or None if nothing
+        found after redirects.
 
     """
     match = re.match(r'.*\((.+)\).*', response_str)
@@ -269,7 +276,7 @@ def infer_response_from_annotations(func: Callable) ->\
         #       it as: {"object": {"properties": {}}}
         annot_ret = re.sub(r'([ \[\],]+?.*?)(property)(.*?[ \[\],]+?)', r"\1Callable\3", annot_ret)
         lines = ["    " + "default: " + annot_ret]
-        exec("\n".join(["class Annot(BaseModel):", *lines]), globals(), ldict)
+        exec("\n".join(["class Annot(BaseModel):", *lines]), {**global_modules, **globals()}, ldict)
         return mt.json, ldict["Annot"]
 
 
@@ -304,7 +311,7 @@ def get_schema_var(schemas: List[str], var: str,
             # except Exception as e:
             #     print(f"Error {e} for {func} in get_schema_var")
             #     schemas[i] = indent + typename + ": " + "Optional[Any]"
-    exec("\n".join(schemas), globals(), ldict)
+    exec("\n".join(schemas), {**global_modules, **globals()}, ldict)
     if var not in ldict:
         raise AttributeError(f"{var} not in docstring Schemas for {(tfunc or func)}")
     else:
@@ -323,6 +330,8 @@ def generate_responses(func: Callable, rulename: str, redirect: str) -> Dict[int
 
     Args:
         func: The function for which to generate responses
+        rulename: Name of the :class:`~werkzeug.routing.Rule`
+        redirect: If there's a `redirect` to another function present.
 
     Returns:
         A dictionary containing the responses extracted from the docstring.
@@ -359,7 +368,7 @@ def generate_responses(func: Callable, rulename: str, redirect: str) -> Dict[int
                 response = ResponseSchema(*inner_two, mtt, spec=schema)
             content = response.schema()
         else:
-            response = exec_and_return(response_str, globals())
+            response = exec_and_return(response_str, {**global_modules, **globals()})
             if response.mimetype == mt.text:
                 content = response.schema()
             elif response.mimetype in {mt.json, mt.binary}:
@@ -406,7 +415,7 @@ def generate_responses(func: Callable, rulename: str, redirect: str) -> Dict[int
                     response_subroutine(name, response_str)
         elif name == "returns":
             # print(name, func.__qualname__)
-            response_str = exec_and_return(response_str, globals())
+            response_str = exec_and_return(response_str, {**global_modules, **globals()})
             response_subroutine(name, response_str)
         else:
             # print(name, func.__qualname__)
@@ -415,15 +424,6 @@ def generate_responses(func: Callable, rulename: str, redirect: str) -> Dict[int
     for x in responses.values():
         retval.update(x)
     return retval
-
-
-# def gen_response(name: str, code: int, desc: str, mimetype: mt,
-#                  content, **kwargs) -> Dict[int, Dict[str, Any]]:
-#     import ipdb; ipdb.set_trace()
-#     if mimetype == mt.text:
-#         content = {"properties": {"type": "string"}}
-#     return {code: {"description": desc,
-#                    "content": {mimetype: {"schema": content}}}}
 
 
 def schema_to_query_params(schema: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -461,7 +461,7 @@ def get_request_params(lines: List[str]) -> List[Dict[str, Any]]:
     """
     ldict: Dict[str, Any] = {}
     lines = ["    " + x for x in lines]
-    exec("\n".join(["class Params(ParamsModel):", *lines]), globals(), ldict)
+    exec("\n".join(["class Params(ParamsModel):", *lines]), {**global_modules, **globals()}, ldict)
     params = ldict["Params"]
     schema = params.schema()
     return schema_to_query_params(schema)
@@ -658,7 +658,8 @@ def get_opId(name: str, func: Callable,
         name: name of an HTTP (flask usually) endpoint
         func: The function whose docstring will be processed.
         opid_template: Template for generation of OpenAPI operationId
-                       Default template is [__%C%f%r%n]_[_%p]_%H, where:
+                       Default template is `[__%C%f%r%n]_[_%p]_%H`, where:
+
                        - [_%x] represents "_".join(x) and [__%x] == "__".join(x) etc.
                        - %M is the (capitalized) module name
                        - %C is the (capitalized) class name
@@ -682,11 +683,11 @@ def get_opId(name: str, func: Callable,
     If some attribute is not available for generation of opId, it's value is not
     considered.
 
-    Examples::
-        get_opId(name, some_func, None, ["task_id"], "GET", "[__%M,%r,%n]_[_%p]_%H")
-        get_opId(name, some_func, None, ["task_id"], "GET", "[%M,%r,%n][%P]_%H")
-        get_opId(name, some_func, None, ["task_id"], "GET", "[%M,%r][%P]_%H")
-        get_opId(name, some_func, None, ["task_id"], "GET", "%M%R%p%H")
+    Examples:
+        >>> get_opId(name, some_func, None, ["task_id"], "GET", "[__%M,%r,%n]_[_%p]_%H")
+        >>> get_opId(name, some_func, None, ["task_id"], "GET", "[%M,%r,%n][%P]_%H")
+        >>> get_opId(name, some_func, None, ["task_id"], "GET", "[%M,%r][%P]_%H")
+        >>> get_opId(name, some_func, None, ["task_id"], "GET", "%M%R%p%H")
 
     Returns:
         An operation id
@@ -849,7 +850,8 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
             body.pop("description", None)
             if "content-type" in request:
                 try:
-                    content_type = exec_and_return(request["content-type"], globals()).value
+                    content_type = exec_and_return(request["content-type"],
+                                                   {**global_modules, **globals()}).value
                 except Exception as e:
                     try:
                         content_type = mt(request["content-type"]).value
@@ -878,7 +880,8 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
 
 
 def make_paths(app: flask.Flask, excludes: List[str],
-               gen_opid: bool, opid_template: str, aliases: Dict[str, str]) ->\
+               gen_opid: bool, opid_template: str,
+               aliases: Dict[str, str]) ->\
         Tuple[Dict, List[Tuple[str, str]], List[str]]:
     """Generate OpenAPI `paths` component for a :class:`~flask.Flask` app
 
@@ -886,6 +889,9 @@ def make_paths(app: flask.Flask, excludes: List[str],
         app: :class:`~flask.Flask` app
         excludes: List of regexps to exclude.
                   The regexp is matched against the rule name
+        gen_opid: Whether to generate operationId or not
+        opid_template: See :func:`openapi_spec`
+        aliases: See :func:`openapi_spec`
 
     Return:
         A tuple of generated paths, errors and excluded rules.
@@ -943,16 +949,18 @@ def make_paths(app: flask.Flask, excludes: List[str],
     return paths, errors, excluded
 
 
-def extract_definitions(paths: Dict[str, Any]) -> Dict[str, Any]:
+def extract_definitions(paths: Dict[str, Any], missing: List[type]) -> Dict[str, Any]:
     """Extract `definitions` from generated openAPI spec for :mod:`flask` app endpoints.
 
     Args:
         paths: The paths extracted from the docstrings.
+        missing: Additional :class:`BaseModel` which are not converted to
+                 :code:`/definitions` by :mod:`pydantic`.
 
     Returns:
-        A dictionary of `$ref`s which are stored under key `definitions`.
+        A dictionary of :code:`$ref`s which are stored under key `definitions`.
 
-    :mod:`pydantic` on generating schema stores the `$ref`s as `definitions`
+    :mod:`pydantic` on generating schema stores the :code:`$ref`s as `definitions`
     which OpenAPI somehow doesn't like. We simply replace that with
     `components/schema`
 
@@ -976,19 +984,50 @@ def extract_definitions(paths: Dict[str, Any]) -> Dict[str, Any]:
     def pop_pred(x, y):
         return x == "definitions" and isinstance(y, dict)
     definitions = pop_if(paths, pop_pred)
-    missing = [Return, ReturnBinary, ReturnExtraInfo]
     for x in missing:
         if x.__name__ not in definitions:
             definitions[x.__name__] = x.schema()
     return definitions
 
 
+def fix_yaml_references(spec: str) -> str:
+    """Fix yaml generated references.
+
+    Args:
+        spec: Yaml dump of OpenAPI spec generated from pydantic
+
+    For some reason, some refs aren't included by default by pydantic and yaml
+    then inserts :code:`&id001` etc references in there. This replaces those with
+    :code:`$ref`.
+
+    Return:
+        Fixed spec dump.
+
+    """
+    splits = spec.split("\n")
+    refs = {}
+    for i, x in enumerate(splits):
+        if "&id" in x:
+            ref, _id = [_.strip() for _ in x.split(": ")]
+            refs[_id[1:]] = ref.rstrip(":")
+            splits[i] = x.split(": ")[0] + ":"
+    for i, x in enumerate(splits):
+        if "*id" in x:
+            name, _id = [_.strip() for _ in x.split(": ")]
+            ref = refs[_id[1:]]
+            splits[i] = x.split(":")[0] + ":\n" + x.split(":")[0].replace(name, "  ") +\
+                f"$ref: '#/components/schemas/{ref}'"
+    return "\n".join(splits)
+
+
 def openapi_spec(app: flask.Flask, excludes: List[str] = [],
                  gen_opid: bool = False,
                  opid_template: str = "",
+                 modules: Dict[str, Any] = {},
+                 missing: List[type] = [],
                  aliases: Dict[str, str] = {}) ->\
         Tuple[Dict[str, Union[str, Dict]], List[Tuple[str, str]], List[str]]:
-    """Generate openAPI spec for a :mod:`flask` app.
+    """Generate openAPI spec for a :class:`flask.app.Flask` app.
 
     Args:
         app: The flask app for which the paths should be generated.
@@ -997,15 +1036,26 @@ def openapi_spec(app: flask.Flask, excludes: List[str] = [],
                 Useful paths like /static/ etc.
         opid_template: Template for generation of OpenAPI operationID.
                        See :func:`get_opId` for details on its meaning.
+        modules: A list of modules to for :func:`exec` commands.
+                 `exec` will be run with :func:`globals` and those extra modules
+                 which are given.
+        missing: A list of missing :class:`BaseModel` types
+                 For some reason, some types aren't extracted correctly.
+                 In such cases such types can be passed as additional arguments.
         aliases: A list of aliases for module names
 
     Returns:
         A 3-tuple of `api_spec`, `errors` which occurred during the spec
         generation and a :class:`list` of rules that were excluded.
 
+    See Also:
+        :func:`fix_yaml_references`
+
     """
+    global global_modules
+    global_modules.update(modules)
     paths, errors, excluded = make_paths(app, excludes, gen_opid, opid_template, aliases)
-    definitions = extract_definitions(paths)
+    definitions = extract_definitions(paths, missing)
     return {'openapi': '3.0.1',
             'info': {'title': 'DORC Server',
                      'description': 'API specification for Deep Learning ORChestrator',

@@ -54,6 +54,7 @@ class BaseModel(PydanticBaseModel):
 
         @staticmethod
         def schema_extra(schema: Dict[str, Any], model: PydanticBaseModel) -> None:
+            add_nullable(schema, model)
             remove_prop_titles(schema, model)
 
 
@@ -329,6 +330,23 @@ class CallableModel(TCallable):
             type="function",
             default="Some function"
         )
+
+
+# class TrainerState(BaseModel):
+#     """Config for the state returned by :meth:`Trainer._get_state`
+
+#     Args:
+#         epoch: current epoch
+#         given_name: If a name has been assigned to the trainer(session)
+#         iterations: Current iterations
+#         models: Names or full model dictionary
+#         metrics: Metrics
+#     """
+#     epoch: int
+#     given_name: str
+#     iterations: int
+#     models: Union[List[str], Dict[str, Any]]
+#     metrics: Dict[str, Dict[str, Any]]
 
 
 class Return(BaseModel):

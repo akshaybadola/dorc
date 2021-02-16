@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Union, Callable, Optional
+from typing import List, Dict, Any, Union, Callable, Optional, Tuple
 import os
 import sys
 import ssl
@@ -10,12 +10,10 @@ import shutil
 import shlex
 import atexit
 import requests
-import argparse
 import datetime
 import logging
 import hashlib
 import traceback
-import configparser
 import zipfile
 import pathlib
 from queue import Queue
@@ -30,7 +28,7 @@ from flask import Flask, render_template, request, Response, make_response
 from flask_cors import CORS
 from werkzeug import serving
 
-from ..version import __daemon__version__
+from ..version import __version__
 from ..mods import Modules
 from ..helpers import Tag
 from ..interfaces import FlaskInterface
@@ -38,7 +36,7 @@ from ..util import _dump, diff_as_sets, make_json
 from .._log import Log
 
 from .auth import __unti__, __inti__, User
-from .util import get_hostname, have_internet, create_module, check_ssh_port, register_with_tracker
+from .util import load_json, create_module
 
 from . import views
 from . import models
@@ -52,31 +50,25 @@ Path = Union[str, pathlib.Path]
 
 
 class Daemon:
-    __version__ = __daemon__version__
+    __version__ = __version__
 
-    def __init__(self, hostname: str, port: int, data_dir: Path,
-                 production: bool = False, template_dir: Union[Path, None] = None,
-                 static_dir: Union[Path, None] = None, root_dir: Union[Path, None] = None,
-                 trackers: List[str] = [], daemon_name: Union[str, None] = None,
-                 register: bool = True):
+    def __init__(self, hostname: str, port: int, root_dir: Path,
+                 daemon_name: str):
         self.ctx = mp.get_context("spawn")
         self._hostname = hostname
         self._port = port
-        self._trackers = trackers
+        # self._trackers = trackers
         self.daemon_name = daemon_name
-        self.register = register
+        # self.register = register
         # FIXME: have_internet shouldn't be here
         # NOTE: fwd_hosts and fwd_ports are hard coded
-        self.fwd_port_start = 8181    # starts with 8181
-        if "droid" not in get_hostname().lower():
-            self._have_internet = mp.Process(target=have_internet)
-            self._have_internet.start()
-        else:
-            self._have_internet = None
-        self._lib_dir = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+        # self.fwd_port_start = 8181    # starts with 8181
+        # if "droid" not in get_hostname().lower():
+        #     self._have_internet = mp.Process(target=have_internet)
+        #     self._have_internet.start()
+        # else:
+        #     self._have_internet = None
         self._init_root_dir(root_dir)
-        self._init_data_dirs(data_dir, production)
-        self._init_flask_dirs(template_dir, static_dir)
         self._init_app()
         self._init_resources()
         self._init_logger()
@@ -84,30 +76,30 @@ class Daemon:
         self._init_auth()
         self._init_flags()
         self._logi("Initialized Daemon")
-        self._maybe_fwd_ports()
+        # self._maybe_fwd_ports()
 
-    def _init_data_dirs(self, data_dir, production):
+    def _init_root_dir(self, root_dir):
         """Initialize the directory structure.
 
         :attr:`data_dir` is the root directory where all the modules and
         training sessions are stored.
 
         """
-        self.data_dir = os.path.abspath(data_dir)
+        self._lib_dir = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+        self._root_dir = os.path.abspath(root_dir)
         # NOTE: init data_dir
-        if not os.path.exists(self.data_dir):
-            os.mkdir(self.data_dir)
-        self.tmp_dir = os.path.join(self.data_dir, ".tmp")
+        if not os.path.exists(self._root_dir):
+            os.mkdir(self._root_dir)
+        self.tmp_dir = os.path.join(self._root_dir, ".tmp")
         if os.path.exists(self.tmp_dir):
             shutil.rmtree(self.tmp_dir)
         os.mkdir(self.tmp_dir)
-        self.production = production
         # FIXME: Code duplication here
         # NOTE: Append data_dir path
         self.env_str = f"""
 import sys
-if "{self.data_dir}" not in sys.path:
-    sys.path.append("{self.data_dir}")
+if "{self._root_dir}" not in sys.path:
+    sys.path.append("{self._root_dir}")
 """
         self.root_env_str = f"""
 import sys
@@ -115,55 +107,32 @@ if "{self.root_dir}" not in sys.path:
     sys.path.append("{self.root_dir}")
 """
         # NOTE: init modules_dir
-        self.modules_dir = os.path.join(self.data_dir, "global_modules")
+        self.modules_dir = os.path.join(self._root_dir, "global_modules")
         create_module(self.modules_dir,
                       [os.path.join(self._lib_dir, x)
                        for x in ["autoloads.py"]],
                       env_str=self.root_env_str)
         # NOTE: init datasets_dir
-        self.datasets_dir = os.path.join(self.data_dir, "global_datasets")
+        self.datasets_dir = os.path.join(self._root_dir, "global_datasets")
         create_module(self.datasets_dir)
         # NOTE: Set exclude_dirs, dirs not to scan for sessions
         self._exclude_dirs = [*map(os.path.basename,
                                    [self.modules_dir, self.datasets_dir,
                                     self.tmp_dir])]
         self._session_exclude_dirs = ["modules", "datasets"]
-
-    # FIXME: These paths should be better
-    def _init_root_dir(self, root_dir):
-        # NOTE: root_dir is relative (CHECK why?)
-        if root_dir is None:
-            self._root_dir = os.path.dirname(self._lib_dir)
-        else:
-            self._root_dir = root_dir
         if not os.path.exists(self._root_dir):
             raise FileExistsError(f"FATAL ERROR! root dir {self._root_dir} doesn't exist")
-        if_run_file = os.path.join(self.root_dir, "if_run.py")
-        if not os.path.exists(if_run_file):
-            raise FileNotFoundError(f"FATAL ERROR! {if_run_file} doesn't exist")
-
-    def _init_flask_dirs(self, template_dir, static_dir):
-        "Initialize flask template and static dirs"
-        if template_dir is None:
-            self._template_dir = os.path.join(self._root_dir, "dist")
-        else:
-            self._template_dir = template_dir
-        if static_dir is None:
-            self._static_dir = os.path.join(self._root_dir, "dist")
-        else:
-            self._static_dir = static_dir
+        self.if_run_file = os.path.join(self._lib_dir, "if_run.py")
+        if not os.path.exists(self.if_run_file):
+            raise FileNotFoundError(f"FATAL ERROR! {self.if_run_file} doesn't exist")
 
     def _init_app(self):
         "Initialize the :class:`Flask` app"
-        if not os.path.exists(self._template_dir) and not os.path.exists(self._static_dir):
-            self.app = Flask(__name__)
-        else:
-            self.app = Flask(__name__, static_folder=self._static_dir,
-                             template_folder=self._template_dir)
+        self.app = Flask(__name__)
         # NOTE: FIXME Fix for CSRF etc.
         #       see https://flask-cors.corydolphin.com/en/latest/api.html#using-cors-with-cookies
         CORS(self.app, supports_credentials=True)
-        self.app.config['TEMPLATES_AUTO_RELOAD'] = True
+        # self.app.config['TEMPLATES_AUTO_RELOAD'] = True
         # NOTE: Not sure if this is really useful
         self.app.secret_key = __unti__("_sxde#@_")
         self.use_https = False
@@ -184,14 +153,14 @@ if "{self.root_dir}" not in sys.path:
 
     def _init_logger(self):
         self._logger = logging.getLogger("daemon_logger")
-        log_file = os.path.join(self.data_dir, "logs")
+        log_file = os.path.join(self._root_dir, "logs")
         formatter = logging.Formatter(datefmt='%Y/%m/%d %I:%M:%S %p', fmt='%(asctime)s %(message)s')
         file_handler = logging.FileHandler(log_file)
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)
         self._logger.addHandler(file_handler)
         self._logger.setLevel(logging.DEBUG)
-        log = Log(self._logger, self.production)
+        log = Log(self._logger)
         self._logd = log._logd
         self._loge = log._loge
         self._logi = log._logi
@@ -199,7 +168,7 @@ if "{self.root_dir}" not in sys.path:
 
     def _init_modules(self):
         "Initialize Module Loader, modules and datasets"
-        self._module_loader = Modules(self.data_dir, self._logd, self._loge,
+        self._module_loader = Modules(self._root_dir, self._logd, self._loge,
                                       self._logi, self._logw)
         self._load_available_global_modules()
         self._load_available_global_datasets()
@@ -220,20 +189,6 @@ if "{self.root_dir}" not in sys.path:
     def _init_flags(self):
         self._already_scanned = False
         self._testing = False
-
-    def _maybe_fwd_ports(self):
-        self._fwd_ports_event = None
-        self._fwd_ports_thread = None
-        self._fwd_procs = None
-        if self.register:
-            self._fwd_ports = {}
-            self._fwd_procs = {}
-            self._fwd_ports_event = mp.Event()
-            self.fwd_ports_event.set()
-            self._fwd_ports_thread = mp.Process(target=self.fwd_ports_func)
-            self.fwd_ports_thread.start()
-        else:
-            print("Not registering with trackers", file=sys.stderr)
 
     @property
     def root_dir(self) -> Path:
@@ -257,41 +212,6 @@ if "{self.root_dir}" not in sys.path:
         return self._port
 
     @property
-    def fwd_ports(self) -> Dict:
-        "A :class:`dict` mapping trackers and ports forwarded to them"
-        return self._fwd_ports
-
-    @property
-    def fwd_procs(self) -> Dict:
-        "A :class:`dict` mapping trackers and SSH :class:`~subprocess.Popen` processes"
-        return self._fwd_procs
-
-    @property
-    def fwd_ports_event(self) -> mp.Event:
-        """Event :class:`~multiprocessing.Event` which controls `self.fwd_port_thread`"""
-        return self._fwd_ports_event
-
-    @property
-    def fwd_ports_thread(self) -> mp.Process:
-        """Process :class:`multiprocessing.Process` which checks if the ports are
-        correctly forwarded to the trackers.
-
-        """
-        return self._fwd_ports_thread
-
-    @property
-    def trackers(self) -> List[str]:
-        """List of `user@host` strings where a tracker is present.
-
-        Trackers are http servers which map the hostnames to forwarded ports on
-        that machine. Each `daemon` when started, can register with a list of
-        trackers and forward its ports. The trackers can then be used to forward
-        those ports back to user machine. Convoluted I know.
-
-        """
-        return self._trackers
-
-    @property
     def reserved_devices(self) -> List[int]:
         """A :class:`dict` mapping trainers to devices allocated to them.
 
@@ -302,104 +222,6 @@ if "{self.root_dir}" not in sys.path:
         for x in self._devices.values():
             devices.extend(x)
         return devices
-
-    def fwd_ports_func(self) -> None:
-        """Forward ports at one minute interval to `self.trackers`
-
-        This function runs in a separate process and checks the SSH forwarded
-        ports and forwards any stale/dead ports if required.
-
-        """
-        while self.fwd_ports_event.is_set():
-            self._logi("Checking port forwards")
-            self.check_and_register_with_trackers()
-            if not self.fwd_ports_event.is_set():
-                self._logi("Exiting from fwd_ports_func")
-                return
-            else:
-                time.sleep(60)
-
-    # FIXME: This thing will start in a thread and if this is available to call
-    #        from an endpoint then there could be race conditions
-    def check_and_register_with_trackers(self):
-        """Checks if the all the ports are correctly forwarded.
-
-        It checks all the ports with internal functions which use various shell
-        commands. If any port is not correctly forwarded it forwards that port
-        and registers that port correctly with the tracker.
-
-        """
-        if not self.trackers:
-            self._logd(f"Empty tracker list. Will not do do anything")
-            return
-        if self.daemon_name is None:
-            try:
-                with open("daemon_name", "r") as f:
-                    daemon_name = f.read().split("\n")[0].strip()
-            except Exception:
-                daemon_name = "No Nmae"
-        else:
-            daemon_name = self.daemon_name
-
-        def _check_fwd_port(host, port):
-            if port == "UNREACHABLE":
-                return False
-            try:
-                self._logd(f"Checking {host}:{port}")
-                p = Popen(shlex.split(f"ssh {host} \"curl http://localhost:{port}/_name\""),
-                          stdout=PIPE, stderr=PIPE)
-                out, err = p.communicate(timeout=3)
-                if daemon_name == out.decode("utf-8"):
-                    return True
-                else:
-                    self._logd(f"Incorrect port registerd with tracker {host}")
-                    return False
-            except TimeoutExpired:
-                p.kill()
-                return False
-
-        def _fwd_port(host):
-            if host in self.fwd_procs:
-                self.fwd_procs[host].kill()
-            self.fwd_ports[host] = port = check_ssh_port(host, self.fwd_port_start)
-            if port != "UNREACHABLE":
-                self.fwd_procs[host] = Popen(shlex.split(f"ssh -N -R {port}:localhost:20202 {host}"),
-                                             stdout=PIPE, stderr=PIPE)
-            return port
-
-        def _register(host, daemon_name, port):
-            resp = register_with_tracker(tracker, daemon_name, port)
-            if resp is not None:
-                self._logi(f"Forwarded port {port}, with name {daemon_name} to {tracker}." +
-                           f"Response is {resp}")
-            else:
-                self._loge(f"Connection error from {daemon_name}. Could not forward port")
-
-        _check = self.fwd_ports_event.is_set()
-        print(f"Checking ports and Registering with {self.trackers}")
-        if _check:
-            for tracker in self.trackers:
-                if tracker in self.fwd_ports:
-                    port = self.fwd_ports[tracker]
-                    if port == "UNREACHABLE":
-                        # NOTE: Skip if unreachable
-                        continue
-                    elif _check_fwd_port(tracker, port):
-                        _register(tracker, daemon_name, port)
-                    else:
-                        self._logi(f"Bad port {port}, with {daemon_name} to {tracker}.")
-                        new_port = _fwd_port(tracker)
-                        if new_port == "UNREACHABLE":
-                            continue
-                        else:
-                            _register(tracker, daemon_name, new_port)
-                else:
-                    print(f"Finding new port for {tracker}")
-                    port = _fwd_port(tracker)
-                    if port == "UNREACHABLE":
-                        continue
-                    else:
-                        _register(tracker, daemon_name, port)
 
     def _init_context(self):
         """Initialize the flask SSL context."""
@@ -423,10 +245,21 @@ if "{self.root_dir}" not in sys.path:
         while not self._task_q.empty():
             self._results.append(self._task_q.get())
 
-    def _check_config(self, config) -> bool:
-        self._logw(f"This is a placeholder function")
-        # Need python file or module, that's it
-        return True
+    def _check_config(self, data_dir: Path, config: Dict[str, Any],
+                      overrides: Dict[str, Any] = {}) -> Tuple[bool, str]:
+        if os.path.exists(os.path.join(data_dir, "config.json")):
+            status, result = True, "Config exists"
+        else:
+            try:
+                self._logd(f"Checking config")
+                iface = FlaskInterface(None, None, data_dir,
+                                       config_overrides=overrides,
+                                       no_start=True)
+                status, result = iface.create_trainer(config)
+                del iface
+            except Exception as e:
+                status, result = False, f"{e}" + "\n" + traceback.format_exc()
+        return status, result
 
     def _find_open_port(self):
         if not self._last_free_port:
@@ -576,9 +409,9 @@ if "{self.root_dir}" not in sys.path:
                 self._datasets[name]["type"] = dtype
                 with open(os.path.join(data_dir, name + ".json"), "w") as f:
                     json.dump({name: self._datasets[name]}, f)
-                self._task_q.put((task_id, True, check_duplicate + message))
+                self._debug_and_put(task_id, True, check_duplicate + message)
             else:
-                self._task_q.put((task_id, status, message))
+                self._error_and_put(task_id, status, message)
         else:
             self._error_and_put(task_id, False, f"Could not add dataset. {result}")
 
@@ -604,7 +437,7 @@ if "{self.root_dir}" not in sys.path:
         status, result = self._module_loader.add_named_module(mods_dir, mod_file, mod_name)
         if status:
             self._modules.update(result)
-            self._task_q.put((task_id, True, check_duplicate + f"Added module {mod_name}"))
+            self._debug_and_put(task_id, True, check_duplicate + f"Added module {mod_name}")
         else:
             self._error_and_put(task_id, False, f"Could not load module. {result}")
 
@@ -627,12 +460,12 @@ if "{self.root_dir}" not in sys.path:
         if self._already_scanned and not self._testing:
             self._logw("Scanning sessions again!")
         self._logd("Scanning Sessions")
-        session_names = [x for x in os.listdir(self.data_dir) if
-                         os.path.isdir(os.path.join(self.data_dir, x))
+        session_names = [x for x in os.listdir(self._root_dir) if
+                         os.path.isdir(os.path.join(self._root_dir, x))
                          and x not in self._exclude_dirs]
         for s in session_names:
             self._sessions[s] = {}
-            self._sessions[s]["path"] = os.path.join(self.data_dir, s)
+            self._sessions[s]["path"] = os.path.join(self._root_dir, s)
             self._sessions[s]["sessions"] = {}
             for d in os.listdir(self._sessions[s]["path"]):
                 if d not in self._session_exclude_dirs:
@@ -649,20 +482,37 @@ if "{self.root_dir}" not in sys.path:
         self._already_scanned = True
 
     # FIXME: data should be pydantic type
-    def create_session(self, task_id, data):
+    def create_session(self, task_id: int, data: dict):
         """Creates a new training session from given data
 
-        A session has a structure `session[key]` where `key` in `{"path", "sessions",
-        "modules"}` Modules are loaded from the module path which is appended to
-        sys.path for that particular session. Each module has a separate
-        namespace as such and since each trainer instance is separate, it should
-        be easy to separate. The modules are shared among all the subsessions.
+        Args:
+            task_id: id for the task
+            data: session properties and config
+
+        Schemas:
+            data:
+                name: str
+                config: trainer.config.Config
+                overrides: Optional[dict]
+                load: Optional[bool]
+                saves: Optional[Dict[str, bytes]]
+
+        A session has a structure `session[key]` where `key` in `{"path",
+        "sessions", "modules"}` Modules are loaded from the module path which is
+        appended to `sys.path` for that particular session. Each module has a
+        separate namespace as such and since each trainer instance is separate,
+        it should be easy to separate. The modules are shared among all the
+        subsessions.
+
+        For example, if the sessions directory is `sessions` then a session with
+        the name of `funky_session` can have a directory structure like
+        `/sessions/funky_session/2020-02-17T10:53:06.458827`.
 
         """
         session_name = data["name"]
         if session_name not in self._sessions:
             self._sessions[session_name] = {}
-            self._sessions[session_name]["path"] = os.path.join(self.data_dir, session_name)
+            self._sessions[session_name]["path"] = os.path.join(self._root_dir, session_name)
             self._sessions[session_name]["sessions"] = {}
             self._sessions[session_name]["modules"] = {}
             if not os.path.exists(self._sessions[session_name]["path"]):
@@ -679,9 +529,14 @@ if "{self.root_dir}" not in sys.path:
         overrides = None
         if "overrides" in data:
             overrides = data["overrides"]
+        if "load" in data:
+            load = data["load"]
+        else:
+            load = False
+        # FIXME: Why does wait_for_task succeed and then session_state is dead?
         if self._wait_for_task(self._create_trainer, task_id,
                                args=[session_name, time_str, data_dir,
-                                     data["config"], overrides]):
+                                     data["config"], overrides, load]):
             with open(os.path.join(self._sessions[session_name]["path"], time_str,
                                    "session_state")) as f:
                 self._logd(f"Loading sessions state")
@@ -703,7 +558,8 @@ if "{self.root_dir}" not in sys.path:
     # NOTE: Only load_session sends load=True to _create_trainer
     # FIXME: config is a pydantic type already
     def _create_trainer(self, task_id: int, name: str, time_str: str,
-                        data_dir: Path, config: dict, overrides=None, load=False):
+                        data_dir: Path, config: Optional[dict],
+                        overrides: Dict[str, Any] = {}, load: bool = False):
         """Create a trainer.
 
         Args:
@@ -723,53 +579,46 @@ if "{self.root_dir}" not in sys.path:
         self._logd(f"Trying to create trainer with data_dir {data_dir}")
         if not os.path.isabs(data_dir):
             data_dir = os.path.abspath(data_dir)
-        if not load and self._check_config(config):  # create but don't load
+        if config is None:
             try:
-                self._logd(f"Adding new config")
-                iface = FlaskInterface(None, None, data_dir, production=self.production,
-                                       config_overrides=overrides)
-                status, result = iface.check_config(config, env=self.env_str)
-                # print("IFACE", status, result, data_dir)
-                # print("CONFIG EXISTS", os.path.exists(os.path.join(data_dir)),
-                #       (os.path.exists(os.path.join(data_dir, "session_config"))
-                #        or os.path.exists(os.path.join(data_dir, "session_config.py"))))
-                # status, result = self._modules.add_config(data_dir, config)
-                if status:
-                    # trainer = Trainer(**{"data_dir": data_dir, **result})
-                    # trainer._init_all()
-                    status, result = iface.create_trainer()
-                    # print("URGH", status, result)
-                    del iface
-                    self._task_q.put((task_id, True))
-                else:
-                    self._error_and_put(task_id, False, f"Could not read config. {result}")
+                with open(os.path.join(data_dir, "config.json")) as f:
+                    config = json.load(f)
+                status = True
             except Exception as e:
-                self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
-        elif load and self._check_config(config):  # create and load
-            try:
-                self._logd(f"Config already existed")
-                port = self._find_open_port()
-                self._sessions[name]["sessions"][time_str]["config"] = config
-                self._sessions[name]["sessions"][time_str]["port"] = port
-                self._sessions[name]["sessions"][time_str]["data_dir"] = data_dir
-                if overrides:
-                    with open(os.path.join(data_dir, "config_overrides.json")) as f:
-                        json.dump(overrides, f)
-                cmd = f"python if_run.py {self.hostname} {port} {data_dir} {self.production} " +\
-                    "--config-overrides True"
-                cwd = self.root_dir
-                self._logd(f"Running command {cmd} in {cwd}")
-                p = Popen(shlex.split(cmd), env=os.environ, cwd=cwd)
-                self._sessions[name]["sessions"][time_str]["process"] = p
-                time.sleep(1)
-                if p.poll() is None:
-                    self._task_q.put((task_id, True))
-                else:
-                    self._task_q.put((task_id, False, "Trainer crashed"))
-            except Exception as e:
-                self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
+                self._error_and_put(task_id, False, f"Could not read config {e}" +
+                                    "\n" + traceback.format_exc())
+                return
         else:
-            self._error_and_put(task_id, False, "Check failed on config")
+            status, result = self._check_config(data_dir, config, overrides)
+        if status:
+            if load:
+                try:
+                    self._logd(f"Config valid")
+                    port = self._find_open_port()
+                    self._sessions[name]["sessions"][time_str]["config"] = config
+                    self._sessions[name]["sessions"][time_str]["port"] = port
+                    self._sessions[name]["sessions"][time_str]["data_dir"] = data_dir
+                    self._sessions[name]["sessions"][time_str]["data_dir"] = data_dir
+                    if overrides:
+                        with open(os.path.join(data_dir, "config_overrides.json")) as f:
+                            json.dump(overrides, f)
+                    cmd = f"python {self.if_run_file} {self.hostname} {port} {data_dir} " +\
+                        "--config-overrides=True"
+                    cwd = os.path.dirname(self._lib_dir)
+                    self._logd(f"Running command {cmd} in {cwd}")
+                    p = Popen(shlex.split(cmd), env=os.environ, cwd=cwd)
+                    self._sessions[name]["sessions"][time_str]["process"] = p
+                    time.sleep(1)
+                    if p.poll() is None:
+                        self._info_and_put(task_id, True, "Created Trainer")
+                    else:
+                        self._error_and_put(task_id, False, "Trainer crashed")
+                except Exception as e:
+                    self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
+            else:
+                self._info_and_put(task_id, True, result)
+        else:
+            self._error_and_put(task_id, False, result)
 
     def _refresh_state(self, session_key: str):
         """Helper function to refresh session state.
@@ -819,9 +668,9 @@ if "{self.root_dir}" not in sys.path:
 
     def _session_finished_p(self, state) -> bool:
         epoch = state["epoch"]
-        max_epochs = state["trainer_params"]["max_epochs"]
+        max_epochs = state["max_epochs"]
         iterations = state["iterations"]
-        max_iterations = state["trainer_params"]["max_iterations"]
+        max_iterations = state["max_iterations"]
         if (not iterations and not max_iterations and epoch < max_epochs) or\
            (not epoch and not max_epochs and iterations < max_iterations):
             return False
@@ -839,31 +688,33 @@ if "{self.root_dir}" not in sys.path:
         # FIXME: Fix this to enum
         status = self._check_session_valid(session_name, timestamp)
         if not status[0]:
-            return status
+            return status[0]
         else:
             retcode = self._sessions[session_name]["sessions"][timestamp]["process"].poll()
             if retcode is None:
-                return True, True
+                return True
             else:
-                return False, retcode
+                self._logd(f"Session died for {session_name}/{timestamp} with code {retcode}")
+                return False
 
-    def _check_session_valid(self, session_name, timestamp):
+    def _check_session_valid(self, session_name: str, timestamp: str) -> Tuple[bool, str]:
         if session_name not in self._sessions:
             return False, f"Unknown session, {session_name}"
         elif (session_name in self._sessions and
               timestamp not in self._sessions[session_name]["sessions"]):
             return False, f"Given session instance not in sessions"
-        elif not os.path.exists(os.path.join(self.data_dir, "/".join([session_name, timestamp]))):
+        elif not os.path.exists(os.path.join(self._root_dir, "/".join([session_name, timestamp]))):
             return False, f"Session has been deleted"
         else:
-            return True, None
+            return True, ""
 
     def compare_sessions(self):
         pass
 
+    # FIXME: merge state and config here.
+    #        What if the config changes in the middle? It should update automatically.
     @property
-    def sessions_list(self) -> Dict[str, Dict[str, Union[None, bool, int, Dict]]]:
-        # return _dump(self._sessions)
+    def sessions_list(self) -> Dict[str, models.Session]:
         retval: Dict[str, Dict[str, Union[None, bool, int, Dict]]] = {}
         for k, v in self._sessions.items():
             session_stamps = v["sessions"].keys()
@@ -901,9 +752,9 @@ if "{self.root_dir}" not in sys.path:
 
         """
         if time_str is not None:
-            data_dir = os.path.join(self.data_dir, name, time_str)
+            data_dir = os.path.join(self._root_dir, name, time_str)
         else:
-            data_dir = os.path.join(self.data_dir, name)
+            data_dir = os.path.join(self._root_dir, name)
         if os.path.exists(os.path.join(data_dir, "session_config.py")):
             config_file = os.path.join(data_dir, "session_config.py")
         elif os.path.exists(os.path.join(data_dir, "session_config", "__init__.py")):
@@ -945,7 +796,7 @@ if "{self.root_dir}" not in sys.path:
         return [x[1:].replace("_helper", "") for x in session_method.names]
 
     @session_method
-    def _load_session_helper(self, task_id, name, time_str, data=None):
+    def _load_session_helper(self, task_id, name, time_str, data={}):
         """Load a session with given key `name`/`time_str`
 
         Args:
@@ -956,18 +807,11 @@ if "{self.root_dir}" not in sys.path:
 
         """
         key = name + "/" + time_str
-        data_dir = os.path.join(self.data_dir, name, time_str)
-        config_candidates = [x for x in os.listdir(data_dir)
-                             if "session_config" in x and
-                             not x.endswith(".bak")]
-        if not len(config_candidates) == 1:
-            self._error_and_put(task_id, False, f"More than one config detected for {key}" +
-                                f"{config_candidates}")
-        else:
-            self._logd(f"Checks passed. Creating session {key}")
+        data_dir = os.path.join(self._root_dir, name, time_str)
         try:
             self._sessions[name]["sessions"][time_str] = {}
-            self._create_trainer(task_id, name, time_str, data_dir, config=None, load=True)
+            self._create_trainer(task_id, name, time_str, data_dir,
+                                 config=None, load=True, **data)
             with open(os.path.join(self._sessions[name]["path"], time_str,
                                    "session_state"), "r") as f:
                 self._sessions[name]["sessions"][time_str]["state"] = json.load(f)
@@ -1031,11 +875,11 @@ if "{self.root_dir}" not in sys.path:
             self._unload_session_helper(sub_task_id, name, time_str)
             result = self._check_result(sub_task_id)  # cannot be None
             if result[1]:
-                shutil.rmtree(os.path.join(self.data_dir, name, time_str))
-                dirlist = os.listdir(os.path.join(self.data_dir, name))
+                shutil.rmtree(os.path.join(self._root_dir, name, time_str))
+                dirlist = os.listdir(os.path.join(self._root_dir, name))
                 # Remove the full directory if only modules remain
                 if dirlist == ["modules"]:
-                    shutil.rmtree(self.data_dir, name)
+                    shutil.rmtree(self._root_dir, name)
                 self._sessions[name]["sessions"].pop(time_str)
                 self._debug_and_put(task_id, True, f"Purged session {name}/{time_str}")
             else:
@@ -1125,7 +969,7 @@ if "{self.root_dir}" not in sys.path:
                     self._logd(f"No config overrides")
                 warn_str_list = []
                 if "saves" in data:
-                    savedir = os.path.join(self.data_dir, name, time_str, "savedir")
+                    savedir = os.path.join(self._root_dir, name, time_str, "savedir")
                     savefiles = os.listdir(savedir)
                     self._logd(f"Savefiles: {savefiles}")
                     _data["saves"] = []
@@ -1234,7 +1078,7 @@ if "{self.root_dir}" not in sys.path:
             self._logd(f"Config overrides given {overrides}")
         else:
             self._logd(f"No config overrides. Will only reinitialize.")
-        data_dir = os.path.join(self.data_dir, name, time_str)
+        data_dir = os.path.join(self._root_dir, name, time_str)
         self._logd(f"Removing logs and saves")
         shutil.rmtree(os.path.join(data_dir, "logs"))
         shutil.rmtree(os.path.join(data_dir, "savedir"))
@@ -1270,6 +1114,7 @@ if "{self.root_dir}" not in sys.path:
                         func = getattr(self, "_" + func_name + "_helper")
                     else:
                         func = getattr(self, func_name + "_helper")
+                    data.pop("session_key")
                     func(task_id, session_name, timestamp, data=data)
                 except Exception as e:
                     self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
@@ -1315,11 +1160,8 @@ if "{self.root_dir}" not in sys.path:
         if not flask_login.current_user.is_authenticated:
             return self.login_manager.unauthorized()
         try:
-            if isinstance(request.json, dict):
-                data = request.json
-            elif isinstance(request.json, str):
-                data = json.loads(request.json)
-            else:
+            data = load_json(request.json)
+            if data is None:
                 return _dump([False, f"Invalid data {request.json}"])
         except Exception as e:
             return f"Invalid data {request.json}, {e}"
@@ -1332,26 +1174,26 @@ if "{self.root_dir}" not in sys.path:
 
     def stop(self):
         # NOTE: clear the fwd_ports_event
-        if self.fwd_ports_event is not None:
-            self.fwd_ports_event.clear()
-            self._logi("Waiting for the fwd_ports_thread to join. Can take upto 60 seconds")
-        if self.fwd_ports_thread is not None:
-            self.fwd_ports_thread.join()
-            self._logi("Joined fwd_ports thread")
-        # NOTE: kill the fwd ports
-        if self.fwd_procs is not None:
-            self._logi("Killing fwd_procs")
-            for p in self.fwd_procs.values():
-                p.kill()
+        # if self.fwd_ports_event is not None:
+        #     self.fwd_ports_event.clear()
+        #     self._logi("Waiting for the fwd_ports_thread to join. Can take upto 60 seconds")
+        # if self.fwd_ports_thread is not None:
+        #     self.fwd_ports_thread.join()
+        #     self._logi("Joined fwd_ports thread")
+        # # NOTE: kill the fwd ports
+        # if self.fwd_procs is not None:
+        #     self._logi("Killing fwd_procs")
+        #     for p in self.fwd_procs.values():
+        #         p.kill()
         # NOTE: Unload the sessions
         self._logi("Unloading sessions")
         for k in self._sessions:
             self._unload_session_helper(-1, k)
         # NOTE: Kill the have_internet process if it exists
-        self._logi("Killing have_internet process")
-        if self._have_internet is not None:
-            self._have_internet.kill()
-        self._logi("Killed have_internet process")
+        # self._logi("Killing have_internet process")
+        # if self._have_internet is not None:
+        #     self._have_internet.kill()
+        # self._logi("Killed have_internet process")
 
     # NOTE: Main entry point for the server
     def start(self):
@@ -1377,49 +1219,47 @@ if "{self.root_dir}" not in sys.path:
             """
             return render_template("index.html")
 
-        if self._template_dir:
-            @self.app.route("/<filename>", methods=["GET"])
-            def __files(filename: Union[Path, None] = None):
-                """
-
-                Responses:
-                    success: ResponseSchema(200, "Index page", MimeTypes.text, "")
-
-                """
-                def read_file(mode):
-                    with open(os.path.join(self._template_dir, filename), mode) as f:
-                        content = f.read()
-                    return content
-                filename = escape(filename)
-                # FIXME: Cache isn't used as of now
-                # if filename in self._cache:
-                #     content = self._cache[filename]["content"]
-                #     mimetype = self._cache[filename]["mimetype"]
-                #     return Response(content, mimetype=mimetype)
-                if filename in os.listdir(self._template_dir):
-                    if filename.endswith("css"):
-                        mode = "r"
-                        mimetype = "text/css"
-                    elif filename.endswith("js"):
-                        mode = "r"
-                        mimetype = "text/css"
-                    elif filename.endswith("png"):
-                        mode = "rb"
-                        mimetype = "image/png"
-                    elif filename.endswith("jpg") or filename.endswith("jpeg"):
-                        mode = "rb"
-                        mimetype = "image/jpeg"
-                    else:
-                        print(filename)
-                        mode = "r"
-                        mimetype = "text/html"
-                    content = read_file(mode)
-                    self._cache[filename] = {}
-                    self._cache[filename]["content"] = content
-                    self._cache[filename]["mimetype"] = mimetype
-                    return Response(content, mimetype=mimetype)
-                else:
-                    return Response("Not found", status=404)
+        # if self._template_dir:
+        #     @self.app.route("/<filename>", methods=["GET"])
+        #     def __files(filename: Union[Path, None] = None):
+        #         """
+        #         Responses:
+        #             success: ResponseSchema(200, "Index page", MimeTypes.text, "")
+        #         """
+        #         def read_file(mode):
+        #             with open(os.path.join(self._template_dir, filename), mode) as f:
+        #                 content = f.read()
+        #             return content
+        #         filename = escape(filename)
+        #         # FIXME: Cache isn't used as of now
+        #         # if filename in self._cache:
+        #         #     content = self._cache[filename]["content"]
+        #         #     mimetype = self._cache[filename]["mimetype"]
+        #         #     return Response(content, mimetype=mimetype)
+        #         if filename in os.listdir(self._template_dir):
+        #             if filename.endswith("css"):
+        #                 mode = "r"
+        #                 mimetype = "text/css"
+        #             elif filename.endswith("js"):
+        #                 mode = "r"
+        #                 mimetype = "text/css"
+        #             elif filename.endswith("png"):
+        #                 mode = "rb"
+        #                 mimetype = "image/png"
+        #             elif filename.endswith("jpg") or filename.endswith("jpeg"):
+        #                 mode = "rb"
+        #                 mimetype = "image/jpeg"
+        #             else:
+        #                 print(filename)
+        #                 mode = "r"
+        #                 mimetype = "text/html"
+        #             content = read_file(mode)
+        #             self._cache[filename] = {}
+        #             self._cache[filename]["content"] = content
+        #             self._cache[filename]["mimetype"] = mimetype
+        #             return Response(content, mimetype=mimetype)
+        #         else:
+        #             return Response("Not found", status=404)
 
         # NOTE: Simplest way would be to proxy it
         #       Although a better way would be to get the function
@@ -1553,10 +1393,9 @@ if "{self.root_dir}" not in sys.path:
                 Success: ResponseSchema(200, "Current logged in user", MimeTypes.text, "Successfully assigned name")
 
             """
-            if isinstance(request.json, dict):
-                data = request.json
-            else:
-                data = json.loads(request.json)
+            data = load_json(request.json)
+            if data is None:
+                return _dump([False, f"Invalid data {request.json}"])
             if "given_name" not in data:
                 return _dump([False, "Name not in data"])
             if "trainer_url" not in data:
@@ -1588,11 +1427,9 @@ if "{self.root_dir}" not in sys.path:
                 else:
                     return _dump([False, "Could not assign name"])
 
-        # FIXME: no provision to load config as JSON? Everything can't be bytes
-        #        can it?
         @self.app.route("/create_session", methods=["POST"])
         @flask_login.login_required
-        def __new_session():
+        def __create_session():
             """Create a new session.
 
             Tags:
@@ -1612,25 +1449,20 @@ if "{self.root_dir}" not in sys.path:
                 Success: ResponseSchema(200, "Current logged in user", MimeTypes.json, "Task")
 
             """
-            if "name" not in request.form or ("name" in request.form
-                                              and not len(request.form["name"])):
-                return _dump([False, "Name not in request or empty name"])
-            else:
-                try:
-                    data = json.loads(request.form["name"])
-                    file_bytes = request.files["file"].read()
-                except Exception as e:
-                    return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
-            # FIXME: saves and stuff in self.create_session here are not parsed here at all
-            data = {"name": data, "config": file_bytes}
+            data = load_json(request.json)
+            if data is None:
+                return _dump([False, f"Invalid data {request.json}"])
+            # except Exception as e:
+            #     return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
             task_id = self._get_task_id_launch_func(self.create_session, data)
             return _dump([True, {"task_id": task_id,
                                  "message": "Creating session with whatever data given"}])
 
+        # FIXME: How's this different from create_session?
         @self.app.route("/upload_session", methods=["POST"])
         @flask_login.login_required
         def __upload_session():
-            """Upload a config a session and create it.
+            """Upload an archived session and create it.
 
             Tags:
                 daemon, session
@@ -1998,7 +1830,7 @@ if "{self.root_dir}" not in sys.path:
             Responses:
                 not such module: ResponseSchema(404, "No such module", MimeTypes.text, "No such module mode_name")
                 bad params: ResponseSchema(400, "Name not in params", MimeTypes.text, "Name of module required")
-                Success: ResponseSchema(200, "Deleted Dataset", MimeTypes.text, "Deleted module caption")
+                Success: ResponseSchema(200, "Deleted Dataset", MimeTypes.text, "Deleted module MNIST")
 
             """
             if "name" not in request.form or ("name" in request.form
@@ -2120,7 +1952,7 @@ if "{self.root_dir}" not in sys.path:
                                            "No such dataset mode_name")
                 bad params: ResponseSchema(400, "Name not in params", MimeTypes.text,
                                            "Name of dataset required")
-                Success: ResponseSchema(200, "Deleted Dataset", MimeTypes.text, "Deleted dataset caption")
+                Success: ResponseSchema(200, "Deleted Dataset", MimeTypes.text, "Deleted dataset MNIST")
 
             """
             if "name" not in request.form or ("name" in request.form
@@ -2145,33 +1977,6 @@ if "{self.root_dir}" not in sys.path:
                     return _dump([False, f"Dataset {name} was not on disk"])
             except Exception as e:
                 return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
-
-        # @self.app.route("/fwd_ports", methods=["GET", "POST"])
-        # @flask_login.login_required
-        # def __fwd_ports():
-        #     data = []
-        #     if request.method == "POST":
-        #         if request.json and isinstance(request.json, dict):
-        #             data = request.json
-        #         else:
-        #             data = json.loads(request.json)
-        #     self._fwd_ports(data)
-        #     return _dump("Forwarded Ports again")
-
-        # @self.app.route("/register_with_trackers", methods=["POST"])
-        # @flask_login.login_required
-        # def __register_with_trackers():
-        #     data = []
-        #     if request.json and isinstance(request.json, dict):
-        #         data = request.json
-        #     else:
-        #         data = json.loads(request.json)
-        #     self._register_with_trackers(data)
-        #     return _dump("Registered with Trackers")
-
-        # @self.app.before_request
-        # def __before_request_func():
-        #     self._logd(f"FWD ports thread is alive? {self.fwd_ports_thread.is_alive()}")
 
         @self.app.route("/_ping", methods=["GET"])
         def __ping():
@@ -2264,52 +2069,3 @@ if "{self.root_dir}" not in sys.path:
 
         serving.run_simple(self.hostname, self.port, self.app, threaded=True,
                            ssl_context=self.context)
-
-
-def create_daemon(test=False, params=None):
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--port", "-p", type=int, default=23232,
-                        help="The port on which to serve")
-    parser.add_argument("--hostname", type=str, default="127.0.0.1",
-                        help="The hostname on which to serve")
-    parser.add_argument("--config-file", "-c", type=str,
-                        default=os.path.expanduser("~/.training_server_daemon"),
-                        help="The hostname on which to serve")
-    parser.add_argument("--data-dir", "-d", type=str,
-                        default=os.path.expanduser("~/.training_server_data"),
-                        help="The directory which will contain all the sessions and model" +
-                        " etc. files and directories")
-    args = parser.parse_args()
-    if not test:
-        config = configparser.ConfigParser()
-        if os.path.exists(args.config_file):
-            config.read(args.config_file)
-            for k in args.__dict__:
-                if k in config["default"].keys():
-                    args.__dict__[k] = config["default"][k]
-        else:
-            config.add_section("default")
-            for k in args.__dict__:
-                config["default"][k] = str(args.__dict__[k])
-            with open(args.config_file, "w") as f:
-                config.write(f)
-        args.port = int(args.port)
-    else:
-        for p in params:
-            args.__dict__[p] = params[p]
-    daemon = Daemon(args.hostname, args.port, args.data_dir)
-    return daemon
-
-
-def _start_daemon(hostname, port, data_dir, production=False,
-                  template_dir=None, static_dir=None, root_dir=None,
-                  daemon_name=None, trackers=None, register=False):
-    daemon = Daemon(hostname, port, data_dir, production, template_dir,
-                    static_dir, root_dir, trackers, daemon_name, register)
-    Thread(target=daemon.start).start()
-    return daemon
-
-
-if __name__ == "__main__":
-    daemon = create_daemon()
-    daemon.start()

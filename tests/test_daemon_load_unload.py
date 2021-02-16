@@ -6,7 +6,7 @@ import requests
 import time
 import json
 sys.path.append("../")
-from dorc.daemon import _start_daemon
+from dorc.util import make_test_daemon
 
 
 class DaemonHTTPTestLoadUnload(unittest.TestCase):
@@ -19,12 +19,10 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
             os.mkdir(cls.data_dir)
         cls.port = 23232
         cls.hostname = "127.0.0.1"
-        cls.daemon = _start_daemon(cls.hostname, cls.port, ".test_dir")
+        cls.cookies = requests.request("POST", cls.host + "login",
+                                       data={"username": "joe", "password": "Monkey$20"}).cookies
         cls.host = "http://" + ":".join([cls.hostname, str(cls.port) + "/"])
         time.sleep(.5)
-        cls.cookies = requests.request("POST", cls.host + "login",
-                                       data={"username": "admin",
-                                             "password": "AdminAdmin_33"}).cookies
 
     def test_load_unfinished_sessions(self):
         # """Restart daemon without removing all directories. Make sure unfinished
@@ -66,7 +64,7 @@ class DaemonHTTPTestLoadUnload(unittest.TestCase):
         with open(os.path.join(data_dir, "session_state"), "w") as f:
             json.dump(state, f)
         # start new daemon
-        daemon = _start_daemon(self.hostname, self.port + 5, ".test_dir")
+        daemon = make_test_daemon(self.hostname, self.port + 5, ".test_dir")
         if daemon._fwd_ports_thread is not None:
             daemon._fwd_ports_thread.kill()
         host = "http://" + ":".join([self.hostname, str(self.port + 5) + "/"])

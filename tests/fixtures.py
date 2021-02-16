@@ -2,6 +2,8 @@ import sys
 import shutil
 import datetime
 import os
+import time
+import requests
 from threading import Thread
 from pathlib import Path
 import pytest
@@ -39,8 +41,9 @@ def trainer(json_config):
     os.mkdir(".test_dir")
     os.mkdir(".test_dir/test_session")
     time_str = datetime.datetime.now().isoformat()
-    os.mkdir(f".test_dir/test_session/{time_str}")
-    tlayer = TranslationLayer(config)
+    data_dir = f".test_dir/test_session/{time_str}"
+    os.mkdir(data_dir)
+    tlayer = TranslationLayer(config, data_dir)
     test_config = tlayer.from_json()
     test_config.pop("model_step_params")
     return Trainer(**test_config)
@@ -77,41 +80,42 @@ def params_and_trainer(setup_and_net):
     time_str = datetime.datetime.now().isoformat()
     os.mkdir(f".test_dir/test_session/{time_str}")
     data_dir = f".test_dir/test_session/{time_str}"
-    params = {"data_dir": data_dir, "production": False, **config}
-    return params, Trainer(**params)
+    params = {"data_dir": data_dir, **config}
+    yield (params, Trainer(**params))
+    shutil.rmtree(".test_dir")
 
 
-@pytest.fixture
-def params_and_iface(json_config):
-    config = json_config
+@pytest.fixture(scope="module")
+def params_and_iface():
+    importlib.reload(_setup)
+    config = _setup.config.copy()
     hostname = "127.0.0.1"
     port = 12321
-    data_dir = ".test_dir"
+    root_dir = ".test_dir"
+    data_dir = os.path.join(".test_dir", "test_iface", datetime.datetime.now().isoformat())
     host = "http://" + ":".join([hostname, str(port)]) + "/"
     if os.path.exists(data_dir):
         shutil.rmtree(data_dir)
-    if not os.path.exists(data_dir):
-        os.mkdir(data_dir)
-    iface = FlaskInterface(hostname, port, data_dir, no_start=True)
-    with open("_setup.py", "rb") as f:
-        f_bytes = f.read()
-        status, message = iface.create_trainer(f_bytes)
-    create_module(os.path.abspath(os.path.join(data_dir, "global_modules")),
+    os.makedirs(data_dir)
+    create_module(os.path.abspath(os.path.join(root_dir, "global_modules")),
                   [os.path.abspath("../dorc/autoloads.py")])
-    sys.path.append(os.path.abspath(data_dir))
-    from global_modules import autoloads
-    status, message = iface.create_trainer()
+    sys.path.append(os.path.abspath(root_dir))
+    iface = FlaskInterface(hostname, port, data_dir, no_start=True)
+    # from global_modules import autoloads
+    status, message = iface.create_trainer(config)
     iface_thread = Thread(target=iface.start)
     iface_thread.start()
-    pytest.set_trace()
-    return {"config": config, "host": host, "data_dir": data_dir}, iface
+    time.sleep(1)
+    yield ({"config": config, "host": host, "data_dir": data_dir}, iface)
+    requests.get(host + "_shutdown")
+    shutil.rmtree(".test_dir")
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def daemon_and_cookies():
     import time
     import requests
-    from dorc.daemon import _start_daemon
+    from dorc.daemon import Daemon
     data_dir = ".test_dir"
     if os.path.exists(data_dir):
         shutil.rmtree(data_dir)
@@ -119,13 +123,16 @@ def daemon_and_cookies():
         os.mkdir(data_dir)
     port = 23232
     hostname = "127.0.0.1"
-    daemon = _start_daemon(hostname, port, ".test_dir")
+    daemon = Daemon(hostname, port, ".test_dir", "test_name")
+    thread = Thread(target=daemon.start)
+    thread.start()
     host = "http://" + ":".join([hostname, str(port) + "/"])
     time.sleep(.5)
     cookies = requests.request("POST", host + "login",
                                data={"username": "admin",
                                      "password": "AdminAdmin_33"}).cookies
-    return daemon, cookies
+    yield (daemon, cookies)
+    requests.get(host + "_shutdown", cookies=cookies)
 
 
 @pytest.fixture
@@ -156,5 +163,4 @@ def basic_config(setup_and_net):
                                  data_params=data_params,
                                  extra_metrics=extra_metrics,
                                  dataloader_params=dataloader_params,
-                                 data_dir=Path("."),
-                                 production=False)
+                                 data_dir=Path("."))

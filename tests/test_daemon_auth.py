@@ -6,7 +6,7 @@ import shutil
 import requests
 import unittest
 sys.path.append("../")
-from dorc.daemon import _start_daemon
+from dorc.util import make_test_daemon
 
 
 class DaemonHTTPTest(unittest.TestCase):
@@ -19,7 +19,7 @@ class DaemonHTTPTest(unittest.TestCase):
             os.mkdir(cls.data_dir)
         cls.port = 23232
         cls.hostname = "127.0.0.1"
-        cls.daemon = _start_daemon(cls.hostname, cls.port, ".test_dir")
+        cls.daemon = make_test_daemon(cls.hostname, cls.port, ".test_dir")
         cls.host = "http://" + ":".join([cls.hostname, str(cls.port) + "/"])
         time.sleep(.5)
 

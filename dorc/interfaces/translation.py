@@ -4,6 +4,7 @@ from typing import List, Union, Dict, Any, Optional, Callable
 from types import ModuleType
 import sys
 import json
+import copy
 from functools import partial
 
 from ..mods import load_module_exports, load_symbols
@@ -19,9 +20,9 @@ class TranslationLayer:
 
     We'll define a simple mechanism to translate such objects from/JSON.
     """
-    def __init__(self, jdict: Union[Dict, str]):
+    def __init__(self, jdict: Union[Dict, str], data_dir: str):
         if isinstance(jdict, dict):
-            self.jdict = jdict
+            self.jdict = jdict.copy()
         else:
             self.jdict = json.loads(jdict)
         if "load_modules" in self.jdict:
@@ -30,21 +31,25 @@ class TranslationLayer:
             self.modules = self.repl_module(mods["module"])
         else:
             self.modules = {}
+        self.patched = None
+        self.data_dir = data_dir
 
     def from_json(self):
-        temp_dict = recurse_multi_dict(self.jdict, [self.pred_function,
-                                                    self.pred_module,
-                                                    self.pred_expression],
-                                       {"function": self.repl_function,
-                                        "module": self.repl_module,
-                                        "expression": self.repl_expression})
-        temp_dict = recurse_multi_dict(temp_dict, [partial(self.pred_shift_up, "expr")],
-                                       {"expr_shift_up": partial(self.repl_shift_up, "expr")})
-        temp_dict = recurse_multi_dict(temp_dict, [partial(self.pred_shift_up, "function")],
-                                       {"function_shift_up":
-                                        partial(self.repl_shift_up, "function",
-                                                transform=self.function_initialize)})
-        return self.patch_config(temp_dict)
+        if self.patched is None:
+            temp_dict = recurse_multi_dict(self.jdict, [self.pred_function,
+                                                        self.pred_module,
+                                                        self.pred_expression],
+                                           {"function": self.repl_function,
+                                            "module": self.repl_module,
+                                            "expression": self.repl_expression})
+            temp_dict = recurse_multi_dict(temp_dict, [partial(self.pred_shift_up, "expr")],
+                                           {"expr_shift_up": partial(self.repl_shift_up, "expr")})
+            temp_dict = recurse_multi_dict(temp_dict, [partial(self.pred_shift_up, "function")],
+                                           {"function_shift_up":
+                                            partial(self.repl_shift_up, "function",
+                                                    transform=self.function_initialize)})
+            self.patched = self.patch_config(temp_dict)
+        return copy.deepcopy(self.patched.copy())
 
     def patch_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         _model = config["model_params"]["net"].pop("model")
@@ -56,8 +61,7 @@ class TranslationLayer:
             function=config["model_step_params"]["function"],
             params=update_func_params)
         config["update_functions"] = update_functions
-        config["data_dir"] = ".test_dir"
-        config["production"] = False
+        config["data_dir"] = self.data_dir
         return config
 
     def convert_annotations(self, annot: dict):
@@ -98,8 +102,10 @@ class TranslationLayer:
                 retval["module"].update(self.get_callable_dict(obj))
             return json.dumps(retval)
         elif callable(obj):
-            retval = {"function": {"name": obj.__name__,
-                                   "path": obj.__module__ + obj.__qualname__,
+            retval = {"function": {"name": (getattr(obj, "__name__", None) or
+                                            getattr(obj.__class__, "__name__")),
+                                   "path": obj.__module__ + (getattr(obj, "__qualname__", None) or
+                                                             getattr(obj.__class__, "__qualname__")),
                                    **self.get_callable_dict(obj)}}
             return json.dumps(retval)
         else:

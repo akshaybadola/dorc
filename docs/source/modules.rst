@@ -1,7 +1,7 @@
-trainer
-=======
+dorc
+====
 
 .. toctree::
    :maxdepth: 4
 
-   trainer
+   dorc

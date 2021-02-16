@@ -117,6 +117,7 @@ class TaskTest(unittest.TestCase):
         self.assertFalse(task.running)
         self.assertTrue(task.init)
 
+    # TODO
     def test_loop_task_with_hooks(self):
         pass
 

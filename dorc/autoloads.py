@@ -13,7 +13,7 @@ class ClassificationStep(ModelStep):
     We can pass a "val" attribute to the existing :class:`ModelStep`, which can
     change the `__call__` accordingly
 
-    Example::
+    Example:
         class ClassificationStepWithVal(ModelStep):
             def __init__(self, *args, **kwargs):
                 # Other code

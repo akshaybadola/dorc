@@ -97,7 +97,7 @@ def useable_devices() -> List[int]:
     return inds
 
 
-def init_nvml(gpus: List[int]) -> Tuple[Optional[Union [Dict[int, Any]]], Optional[List[int]]]:
+def init_nvml(gpus: List[int]) -> Tuple[Optional[Union[Dict[int, Any]]], Optional[List[int]]]:
     if not NVML_PRESENT:
         return None, None
     remove = []

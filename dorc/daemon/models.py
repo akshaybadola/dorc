@@ -15,6 +15,13 @@ class BaseModel(SpecModel):
                 prop.pop('title', None)
 
 
+class Session(BaseModel):
+    loaded: bool
+    port: int
+    state: Dict[str, Any]
+    finished: bool
+
+
 class CreateSessionModel(BaseModel):
     """Session creation spec.
 
@@ -29,4 +36,5 @@ class CreateSessionModel(BaseModel):
     name: str
     overrides: Optional[Dict]
     config: Dict
+    load: bool
     saves: Optional[Dict[str, str]]

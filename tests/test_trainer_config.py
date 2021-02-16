@@ -6,7 +6,7 @@ from dorc.autoloads import ClassificationStep
 from dorc.trainer import Trainer, config
 
 
-
+@pytest.mark.todo
 @pytest.mark.quick
 def test_config_should_not_coerce_types(setup_and_net, basic_config):
     pass
@@ -15,7 +15,7 @@ def test_config_should_not_coerce_types(setup_and_net, basic_config):
 @pytest.mark.quick
 def test_config_should_have_same_params_as_config(setup_and_net, basic_config):
     _config, _ = setup_and_net
-    assert set(basic_config.__dict__.keys()) == set({*_config.keys(), "production", "data_dir"})
+    assert set(basic_config.__dict__.keys()) == set({*_config.keys(), "data_dir"})
 
 
 @pytest.mark.quick

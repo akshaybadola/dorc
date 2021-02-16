@@ -2,6 +2,7 @@ backcall==0.1.0
 certifi==2019.11.28
 chardet==3.0.4
 Click==7.0
+configargparse==1.2.3
 cycler==0.10.0
 decorator==4.4.2
 Flask==1.1.1
@@ -16,7 +17,6 @@ kiwisolver==1.1.0
 MarkupSafe==1.1.1
 matplotlib==3.2.0
 networkx==2.4
-nltk==3.4.5
 numpy==1.17.4
 parso==0.6.2
 pexpect==4.8.0

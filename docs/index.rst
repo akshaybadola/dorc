@@ -7,7 +7,7 @@
 Welcome to DORC's documentation!
 ===================================
 
-DORC stands for Deep learning ORchestrator and is envisaged to manage training,
+DORC stands for Deep learning ORChestrator and is envisaged to manage training,
 validation, evaluation and dissection of `Deep Learning` models over multiple
 machines.
 
@@ -44,8 +44,9 @@ You can browse the :ref:`source/contents:contents` or, get started with :ref:`do
    :maxdepth: 2
 
    source/contents
-   source/dorc
-   source/modules
+   ..
+      source/dorc
+      source/modules
 
 Indices and tables
 ==================

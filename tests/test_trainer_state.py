@@ -163,13 +163,15 @@ class StateTest(unittest.TestCase):
         time.sleep(5)
         self.trainer._abort_current("test")
 
-    # # TODO: Need to make a tiny train_loader for both of these
+    # TODO: Need to make a tiny train_loader for both of these
     # def test_ensure_hooks_epoch(self):
     #     pass
 
+    # TODO
     # def test_ensure_hooks_iterations(self):
     #     pass
 
+    # TODO
     # def test_user_adhoc_main(self):
     #     pass
 

@@ -181,9 +181,11 @@ class TrainerTestModels(unittest.TestCase):
         self.assertEqual(self.trainer._models["net_1"].gpus, [1])
         self.assertEqual(self.trainer._models["net_2"].gpus, [0])
 
+    # TODO
     def test_trainer_load_models_state(self):
         pass
 
+    # TODO
     def test_trainer_get_new_models(self):
         pass
 

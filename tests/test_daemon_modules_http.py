@@ -7,7 +7,7 @@ import requests
 import zipfile
 import unittest
 sys.path.append("../")
-from dorc.daemon import _start_daemon
+from dorc.util import make_test_daemon
 
 
 mod_string = """
@@ -123,11 +123,10 @@ class DaemonModulesTest(unittest.TestCase):
             os.mkdir(cls.data_dir)
         cls.port = 23232
         cls.hostname = "127.0.0.1"
-        cls.daemon = _start_daemon(cls.hostname, cls.port, ".test_dir", daemon_name="test@local")
+        cls.daemon, cls.cookies = make_test_daemon(cls.hostname, cls.port, ".test_dir",
+                                                   name="test@local", get_cookies=True)
         cls.host = "http://" + ":".join([cls.hostname, str(cls.port) + "/"])
         time.sleep(.5)
-        cls.cookies = requests.request("POST", cls.host + "login",
-                                       data={"username": "joe", "password": "Monkey$20"}).cookies
         with open("_setup.py", "rb") as f:
             response = requests.request("POST", cls.host + "create_session",
                                         files={"file": f},

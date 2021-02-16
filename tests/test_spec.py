@@ -4,9 +4,14 @@ from pydantic import BaseModel as PydanticBaseModel, Field
 from dorc.spec.models import (BaseModel, ModelNoTitleNoRequiredNoPropTitle,
                               add_nullable, remove_attr, remove_prop_titles)
 from dorc.spec.schemas import ResponseSchema
-from dorc import daemon
+from dorc import daemon, trainer, interfaces
 from dorc import spec
 from dorc.spec import docstring
+
+
+spec._init({"trainer": trainer,
+            "daemon": daemon,
+            "interfaces": interfaces})
 
 
 class FooModel(BaseModel):

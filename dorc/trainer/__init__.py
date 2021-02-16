@@ -27,7 +27,7 @@ from ..overrides import MyDataLoader, default_tensorify
 from .._log import Log
 from ..helpers import (Tag, ProxyDataset, PropertyProxy, HookDict, Hook,
                        GET, POST, Exposes)
-from ..version import __trainer__version__
+from ..version import __version__
 
 from .epoch import Epoch
 from .model import Model, ModelStep
@@ -39,6 +39,7 @@ from . import hooks as hooks_module
 
 control = Tag("control")
 prop = Tag("prop")
+state_var = Tag("state_var")
 extras = Tag("extras")
 methods = Tag("methods")
 objects = Tag("objects")
@@ -127,11 +128,11 @@ def make_info(status: bool, message: str, data: Dict) -> ReturnExtraInfo:
 #       def training_step(self):
 #           return self._training_step
 class Trainer:
-    __version__ = __trainer__version__
+    __version__ = __version__
 
     def __init__(self, model_params, criteria, optimizers, update_functions,
                  extra_metrics, trainer_params, data_params, dataloader_params, data_dir,
-                 production=False, log_levels={"file": "debug", "stream": "info"}):
+                 log_levels={"file": "debug", "stream": "info"}):
         """Initializes the :class:`Trainer` object. This is supposed to be a catch all
         trainer which is robust and easy to train and can generate graphs
         automatically etc.
@@ -186,11 +187,9 @@ class Trainer:
                                     extra_metrics={k: Metric(**v)
                                                    for k, v in extra_metrics.items()},
                                     log_levels=config.LogLevelParams(**log_levels),
-                                    data_dir=data_dir,
-                                    production=production)
+                                    data_dir=data_dir)
         # static attributes
         self._data_dir = data_dir
-        self.production = production
         # logging is started first of all
         self._init_logging()
         # then modules and save dir
@@ -219,7 +218,7 @@ class Trainer:
         self._logfile, self._logger = gen_file_and_stream_logger(
             self._logdir, "trainer", self.config.log_levels.file,
             self.config.log_levels.stream)
-        log = Log(self._logger, self.production)
+        log = Log(self._logger)
         self._logd = log._logd
         self._loge = log._loge
         self._logi = log._logi
@@ -288,7 +287,7 @@ class Trainer:
         self._init_task_runners()
         self._init_modules()
         self._init_hooks()
-        # self._dump_state()
+        self._dump_state()
         # self._init_extra_controls()
 
     # # NOTE: Shouldn't export this to Checks as name will be mangled
@@ -429,14 +428,12 @@ class Trainer:
 
     def _init_state_vars(self):
         """Initialize default state variables.
-        `epoch` always remains 0 if training only with iterations and
-        `self._iterations` increase.
+
+        :attr:`epoch` always remains 0 if training only with iterations and
+        :attr:`iterations` increase.
 
         post_epoch_hooks are run after a specified number of iterations which is
-        `self._hooks_run_iter_frequency`
-
-        :returns: None
-        :rtype: None
+        :attr:`_hooks_run_iter_frequency`
 
         """
         # params and state properties
@@ -534,6 +531,12 @@ class Trainer:
         # self.load_image.__dict__["content_type"] = "form"
 
     def _init_modules(self):
+        """Instantiate :class:`Modules`.
+
+        Modules serves as a single entry point for loading and unloading dynamic
+        modules.
+
+        """
         self._mods = Modules(self._modules_dir, self._logd, self._loge, self._logi, self._logw)
         # NOTE: Data is always available
         #       Other things can be nvml, device and stuff.
@@ -591,6 +594,12 @@ class Trainer:
                 self._models[model_name] = None
 
     def _init_hooks(self):
+        """Initialize :attr:`hooks` and :attr:`hooks_with_args`.
+
+        All initial hooks are loaded from :mod:`hooks_module` but can be added
+        by the user.
+
+        """
         self._hooks = {}
         self._hooks_with_args = {}
         for x in hooks_module.__dict__:
@@ -599,7 +608,16 @@ class Trainer:
             if x.endswith("_hook_with_args"):
                 self._hooks_with_args[x] = hooks_module.__dict__[x]
 
-    def load_models_state(self, model_state) -> Return:
+    def load_models_state(self, model_state: Dict) -> Return:
+        """Load state of all :attr:`loaded_models` from :code:`model_state`.
+
+        Args:
+            model_state: A dictionary of model names and state
+                         See :meth:`model.Model.load` for the components of state.
+
+        Return:
+            Status and message
+        """
         for model in self.loaded_models:
             status, message = self._models[model].load(model_state[model])
             if not status:
@@ -734,6 +752,7 @@ class Trainer:
             return None
 
     @prop                       # type: ignore
+    @state_var                  # type: ignore
     @property
     def loaded_models(self) -> List[str]:
         return [name for name, model in self._models.items() if model.loaded]
@@ -2425,58 +2444,81 @@ class Trainer:
                 "criteria_params", "trainer_params",
                 "data", "dataloader_params", "optimizers", "metrics"]
 
-    def _get_state(self, model_names_only=False):
-        save_state = {}
-        save_state["epoch"] = self.epoch
-        if hasattr(self, "given_name"):
-            save_state["given_name"] = self.given_name
-        save_state["iterations"] = self.iterations
-        save_state["models"] = self .models if model_names_only else\
-            {x: self._models[x].dump() for x in self._models}
-        save_state["model_params"] = copy.deepcopy(self.model_params)
-        save_state["criteria_params"] = copy.deepcopy(self.criteria_params)
-        save_state["data"] = self.data_params
-        save_state["dataloader_params"] = {}
-        save_state["optimizers"] = copy.deepcopy(self._optimizers)
-        for k, v in self.dataloader_params.items():
-            if v is None:
-                save_state["dataloader_params"][k] = None
+    def _get_state(self, lite=False) -> Dict[str, Any]:
+        """Return the trainer state.
+
+        State is a difficult thing to serialize, retrieve and
+        restore. Essentially, all of the trainer should resume given:
+            a. initial config
+            b. current state
+
+        We keep track of the state vars with the tag :attr:`state_vars`.
+
+        """
+        state = {}
+        for k in self.state_vars:
+            if k == "models":
+                if lite:
+                    state["models"] = {x: self._models[x].dict() for x in self._models}
+                else:
+                    state["models"] = {x: self._models[x].dump() for x in self._models}
             else:
-                save_state["dataloader_params"][k] = {}
-                for a, b in v.items():
-                    if a == "collate_fn":
-                        self._logw(f"collate_fn in dataloader {k} params will not be saved")
-                        save_state["dataloader_params"][k][a] = "callable_" + type(b).__qualname__
-                    else:
-                        value = self.dataloader_params[k][a]
-                        if isinstance(value, dict):
-                            save_state["dataloader_params"][k][a] = {}
-                            for x, y in value.items():
-                                if callable(y):
-                                    self._logw(f"callable {type(y).__qualname__} in dataloader" +
-                                               f" {k} params {a, x} will not be saved")
-                                    save_state["dataloader_params"][k][a][x] = "callable_" +\
-                                        type(y).__qualname__
-                                else:
-                                    save_state["dataloader_params"][k][a][x] = y
-                        else:
-                            if callable(value):
-                                self._logw(f"callable {value} in dataloader {k}" +
-                                           f" params {a} will not be saved")
-                                save_state["dataloader_params"][k][a] = "callable_" +\
-                                    type(value).__qualname__
-                            else:
-                                save_state["dataloader_params"][k][a] = value
-        save_state["trainer_params"] = {}
-        for k, v in self.trainer_params.items():
-            if callable(v):
-                self._logw(f"callable {type(v).__qualname__}" +
-                           f" for trainer_params {k} will not be saved")
-                save_state["trainer_params"][k] = "callable_" + type(v).__qualname__
-            else:
-                save_state["trainer_params"][k] = copy.deepcopy(v)
-        save_state["metrics"] = self._metrics
-        return save_state
+                state[k] = getattr(self, k)
+        # state["epoch"] = self.epoch
+        # state["given_name"] = getattr(self, "given_name", "")
+        # state["iterations"] = self.iterations
+        # if lite:
+        #     state["models"] = {x: self._models[x].dict() for x in self._models}
+        # else:
+        #     state["models"] = {x: self._models[x].dump() for x in self._models}
+        # state["model_params"] = copy.deepcopy(self.model_params)
+        # state["criteria_params"] = copy.deepcopy(self.criteria_params)
+        # state["data"] = self.data_params
+        # state["dataloader_params"] = {}
+        # for k, v in self.dataloader_params.items():
+        #     if v is None:
+        #         state["dataloader_params"][k] = None
+        #     else:
+        #         state["dataloader_params"][k] = {}
+        #         for a, b in v.items():
+        #             if a == "collate_fn":
+        #                 self._logw(f"collate_fn in dataloader {k} params will not be saved")
+        #                 state["dataloader_params"][k][a] = "callable_" + type(b).__qualname__
+        #             else:
+        #                 value = self.dataloader_params[k][a]
+        #                 if isinstance(value, dict):
+        #                     state["dataloader_params"][k][a] = {}
+        #                     for x, y in value.items():
+        #                         if callable(y):
+        #                             self._logw(f"callable {type(y).__qualname__} in dataloader" +
+        #                                        f" {k} params {a, x} will not be saved")
+        #                             state["dataloader_params"][k][a][x] = "callable_" +\
+        #                                 type(y).__qualname__
+        #                         else:
+        #                             state["dataloader_params"][k][a][x] = y
+        #                 else:
+        #                     if callable(value):
+        #                         self._logw(f"callable {value} in dataloader {k}" +
+        #                                    f" params {a} will not be saved")
+        #                         state["dataloader_params"][k][a] = "callable_" +\
+        #                             type(value).__qualname__
+        #                     else:
+        #                         state["dataloader_params"][k][a] = value
+        # state["trainer_params"] = {}
+        # for k, v in self.trainer_params.items():
+        #     if callable(v):
+        #         self._logw(f"callable {type(v).__qualname__}" +
+        #                    f" for trainer_params {k} will not be saved")
+        #         state["trainer_params"][k] = "callable_" + type(v).__qualname__
+        #     else:
+        #         state["trainer_params"][k] = copy.deepcopy(v)
+        # state["metrics"] = self._metrics
+        # NOTE: Extra items for tracking required by daemon
+        state["max_epochs"] = self.max_epochs
+        state["max_iterations"] = self.max_iterations
+        # CHECK: If there's a given_name
+        state["given_name"] = getattr(self, "given_name", "")
+        return state
 
     def _save(self, save_path=None, best=False):
         if not save_path:
@@ -2938,6 +2980,7 @@ class Trainer:
         return self._current_state
 
     @prop                       # type: ignore
+    @state_var                  # type: ignore
     @property
     def loop_type(self) -> str:
         """Loop type determines if the training monitor number of epochs or number of batches.
@@ -2960,6 +3003,7 @@ class Trainer:
             return f.read()
 
     @prop                       # type: ignore
+    @state_var                  # type: ignore
     @property
     def saves(self) -> List[str]:
         "A list of all the files in the Saves directory"
@@ -2968,7 +3012,7 @@ class Trainer:
     @prop                       # type: ignore
     @property
     def gpus(self) -> List[int]:
-        "List of GPUs if avaiable on the system.  Returns [-1] if no available"
+        """List of GPUs requested by the config."""
         return self.config.trainer_params.gpus
 
     @gpus.setter
@@ -2987,6 +3031,7 @@ class Trainer:
                 "memory": memory_info()}
 
     @prop                       # type: ignore
+    @state_var                  # type: ignore
     @property
     def devices(self) -> Dict[str, List[int]]:
         """Used to keep track of which device(s) is(are) allocated to which model(s).
@@ -3006,6 +3051,7 @@ class Trainer:
     #         self._devices
 
     @prop                       # type: ignore
+    @state_var                  # type: ignore
     @property
     def allocated_devices(self) -> List[int]:
         devices: List[int] = []
@@ -3014,6 +3060,7 @@ class Trainer:
         return devices
 
     @prop                       # type: ignore
+    @state_var                  # type: ignore
     @property
     def models(self) -> List[str]:
         "Return the names of the models available with the server"
@@ -3025,12 +3072,16 @@ class Trainer:
         return self.config.optimizers
 
     @prop                       # type: ignore
+    @state_var                  # type: ignore
     @property
     def active_model(self) -> str:
         "Active model is both get and set by setting the _update_function"
         # NOTE: Was self.update_functions[self.trainer_params.training_steps[0]]._model_name
         #       "train" is assumed to be present as a step
-        return ", ".join(self.update_functions.train.models.keys())
+        if self.update_functions.train is None:
+            return ""
+        else:
+            return ", ".join(self.update_functions.train.models.keys())
 
     @prop                       # type: ignore
     @property
@@ -3043,7 +3094,15 @@ class Trainer:
                 x != "props" and
                 (x in {"extras", "methods"} or not x.startswith("_"))]
 
+    @property
+    def state_vars(self) -> List[str]:
+        """Return all properties of the instance including `extras` and `methods`
+        except hidden properties
+        """
+        return [*state_var.members.keys()]
+
     @prop                       # type: ignore
+    @state_var                  # type: ignore
     @property
     def epoch(self) -> int:
         "Current Epoch while training, if training type is epoch. See `loop_type`"
@@ -3064,6 +3123,7 @@ class Trainer:
         self.config.trainer_params.max_epochs = x
 
     @prop                       # type: ignore
+    @state_var                  # type: ignore
     @property
     def iterations(self) -> int:
         "Current iteration if training type is iterations. See `loop_type`"
@@ -3077,7 +3137,7 @@ class Trainer:
     @property
     def max_iterations(self) -> int:
         "Max iterations to run if training type is iterations. See `loop_type`"
-        return self.trainer_params.max_iterations
+        return self.trainer_params.max_iterations or 0
 
     @prop                       # type: ignore
     @property
@@ -3279,12 +3339,14 @@ class Trainer:
         return self.config.log_levels
 
     @prop                       # type: ignore
+    @state_var                  # type: ignore
     @property
     def metrics(self) -> Dict[str, Dict]:
         "All the metrics used for evaluation"
         return self._metrics
 
     @prop                       # type: ignore
+    @state_var                  # type: ignore
     @property
     def extra_metrics(self) -> Dict[str, Metric]:
         "Extra metrics used for evaluation"
@@ -3671,11 +3733,13 @@ class Trainer:
             all_hooks["_".join([hook, "post_epoch_hook"])](self)
 
     @prop                       # type: ignore
+    @state_var                  # type: ignore
     @property
     def hooks(self) -> List[str]:
         return [*self._hooks.keys()]
 
     @prop                       # type: ignore
+    @state_var                  # type: ignore
     @property
     def hooks_with_args(self) -> List[str]:
         return [*self._hooks_with_args.keys()]

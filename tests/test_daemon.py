@@ -1,70 +1,189 @@
 import os
+import copy
 import shutil
-import unittest
-import sys
+import pytest
 import time
-sys.path.append("../")
+import json
+import datetime
+import requests
 from dorc.daemon import Daemon
+from dorc.interfaces import FlaskInterface
+from dorc.util import dget
 
 
-class DaemonTest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.data_dir = ".test_dir"
-        if os.path.exists(cls.data_dir):
-            shutil.rmtree(cls.data_dir)
-        if not os.path.exists(cls.data_dir):
-            os.mkdir(cls.data_dir)
-        cls.port = 23232
-        cls.hostname = "127.0.0.1"
-        cls.daemon = Daemon(cls.hostname, cls.port, ".test_dir")
-
-    def test_find_port(self):
-        port = self.daemon._find_open_port()
-        self.assertTrue(port)
-
-    def _create_session(self):
-        with open("_setup.py", "rb") as f:
-            meh = f.read()
-        data = {"name": "test_session", "config": meh}
-        task_id = self.daemon._get_task_id_launch_func(self.daemon.create_session, data)
-        time.sleep(1)
-        return self.daemon._check_result(task_id)[1]
-
-    def test_create_session(self):
-        "create session with existing name but different timestamp"
-        # Should be able to create session on top of scanned and loaded sessions
-        # Should also create session with different timestamp
-        self.assertTrue(self._create_session())
-
-    def test_scan_sessions(self):
-        self._create_session()
-        self._create_session()
-        self._create_session()  # create three more sessions
-        self.terminate_live_sessions()
-        self.daemon._sessions = {}
-        self.daemon.scan_sessions()
-        for k, v in self.daemon._sessions["test_session"]["sessions"].items():
-            with self.subTest(i=str(k)):
-                self.assertIsInstance(v, dict)
-                self.assertFalse("process" in v)
-
-    @classmethod
-    def terminate_live_sessions(cls):
-        for s in cls.daemon._sessions.values():
-            for s_name in s["sessions"]:
-                if "process" in s["sessions"][s_name]:
-                    s["sessions"][s_name]["process"].terminate()
-                    print(f'Terminated {s["sessions"][s_name]["process"]}')
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.daemon._fwd_ports_thread.kill()
-        cls.daemon.stop()
-        cls.terminate_live_sessions()
-        if os.path.exists(cls.data_dir):
-            shutil.rmtree(cls.data_dir)
+def terminate_live_sessions(daemon):
+    for s in daemon._sessions.values():
+        for s_name in s["sessions"]:
+            if "process" in s["sessions"][s_name]:
+                s["sessions"][s_name]["process"].terminate()
+                print(f'Terminated {s["sessions"][s_name]["process"]}')
 
 
-if __name__ == '__main__':
-    unittest.main()
+def _create_session(daemon, config, load=False):
+    data = {"name": "test_session", "config": copy.deepcopy(config), "load": load}
+    daemon.create_session(0, data)
+    result = daemon._check_result(0)
+    return result
+
+
+@pytest.mark.quick
+def test_daemon_find_port(daemon_and_cookies):
+    daemon, cookies = daemon_and_cookies
+    port = daemon._find_open_port()
+    assert port is not None
+
+
+@pytest.mark.todo
+def test_daemon_update_init_file(daemon_and_cookies):
+    pass
+
+
+@pytest.mark.quick
+@pytest.mark.todo
+def test_daemon_modules(daemon_and_cookies):
+    # module available to sessions
+    pass
+
+
+@pytest.mark.quick
+@pytest.mark.todo
+def test_daemon_datasets(daemon_and_cookies):
+    # load unload
+    # dataset valid
+    pass
+
+
+@pytest.mark.quick
+def test_daemon_create_trainer(daemon_and_cookies, json_config):
+    daemon, cookies = daemon_and_cookies
+    name = "test_trainer"
+    time_str = datetime.datetime.now().isoformat()
+    data_dir = os.path.join(daemon._root_dir, name, time_str)
+    os.makedirs(data_dir)
+    daemon._create_trainer(0, name, time_str, data_dir, json_config)
+    time.sleep(1)
+    result = daemon._check_result(0)
+    assert result[1]
+
+
+@pytest.mark.quick
+def test_daemon_create_session(daemon_and_cookies, json_config):
+    daemon, cookies = daemon_and_cookies
+    result = _create_session(daemon, json_config)
+    assert result[1]
+
+
+@pytest.mark.quick
+@pytest.mark.todo
+def test_daemon_session_method_check(daemon_and_cookies):
+    # check key in data, not key in data
+    # check session valid works
+    pass
+
+
+@pytest.mark.quick
+def test_daemon_create_and_then_load_session(daemon_and_cookies, json_config):
+    daemon, cookies = daemon_and_cookies
+    result = _create_session(daemon, json_config)
+    assert result[1]
+    time_str = [*daemon._sessions["test_session"]["sessions"].keys()][-1]
+    assert os.path.exists(os.path.join(".test_dir", "test_session", time_str, "config.json"))
+    daemon._load_session_helper(0, "test_session", time_str)
+    result = daemon._check_result(0)
+    assert os.path.exists(os.path.join(".test_dir", "test_session", time_str, "session_state"))
+    assert result[1]
+
+
+@pytest.mark.quick
+def test_daemon_create_and_load_session_with_overrides(daemon_and_cookies, json_config):
+    daemon, cookies = daemon_and_cookies
+    result = _create_session(daemon, json_config)
+    assert result[1]
+    time_str = [*daemon._sessions["test_session"]["sessions"].keys()][-1]
+    data_dir = os.path.join(".test_dir", "test_session", time_str)
+    assert os.path.exists(os.path.join(data_dir, "config.json"))
+    overrides_0 = [["trainer_params", "max_epochs", 120],
+                   ["optimizers", "Adam", "function", "params", "lr", 0.1]]
+    overrides_1 = [["trainer_params", "seed", 2222],
+                   ["optimizers", "Adam", "function", "params", "lr", 0.2]]
+    config = copy.deepcopy(json_config)
+    FlaskInterface.update_config(config, overrides_0)
+    with open(os.path.join(data_dir, "overrides.json.00"), "w") as f:
+        json.dump(config, f)
+    FlaskInterface.update_config(config, overrides_1)
+    with open(os.path.join(data_dir, "overrides.json.01"), "w") as f:
+        json.dump(config, f)
+    daemon._load_session_helper(0, "test_session", time_str)
+    result = daemon._check_result(0)
+    assert os.path.exists(os.path.join(".test_dir", "test_session", time_str, "session_state"))
+    assert result[1]
+    assert dget(config, "trainer_params", "max_epochs") == 120
+    assert dget(config, "trainer_params", "seed") == 2222
+    assert dget(config, "optimizers", "Adam", "function", "params", "lr") == 0.2
+
+
+@pytest.mark.quick
+def test_daemon_list_sessions(daemon_and_cookies, json_config):
+    daemon, _ = daemon_and_cookies
+    result = _create_session(daemon, json_config)
+    assert result[1]
+    assert "test_session" in [*daemon.sessions_list.keys()][-1]
+
+
+@pytest.mark.quick
+def test_daemon_load_and_unload_session(daemon_and_cookies, json_config):
+    daemon, cookies = daemon_and_cookies
+    if not daemon.sessions_list:
+        result = _create_session(daemon, json_config)
+        assert result[1]
+    key = [*daemon.sessions_list.keys()][0]
+    assert not daemon.sessions_list[key]["loaded"]
+    daemon._load_session_helper(0, *key.split("/"))
+    time.sleep(1)
+    assert "port" in daemon.sessions_list[key]
+    port = daemon.sessions_list[key]['port']
+    response = requests.get(f"http://127.0.0.1:{port}/_ping")
+    assert "pong" in response.content.decode()
+    daemon._unload_session_helper(0, *key.split("/"))
+    time.sleep(.5)
+    with pytest.raises(requests.ConnectionError):
+        response = requests.get(f"http://127.0.0.1:{port}/_ping")
+
+
+@pytest.mark.quick
+def test_daemon_purge_sessions(daemon_and_cookies, json_config):
+    daemon, cookies = daemon_and_cookies
+    if not daemon.sessions_list:
+        _create_session(daemon, json_config)
+    key = [*daemon.sessions_list.keys()][0]
+    assert os.path.exists(os.path.join(daemon.root_dir, key))
+    daemon._purge_session_helper(0, *key.split("/"))
+    assert key not in daemon.sessions_list
+    assert not os.path.exists(os.path.join(daemon.root_dir, key))
+
+
+@pytest.mark.quick
+@pytest.mark.todo
+def test_daemon_load_unfinished_sessions():
+    pass
+
+
+@pytest.mark.quick
+@pytest.mark.todo
+def test_daemon_unload_finished_sessions():
+    pass
+
+
+@pytest.mark.todo
+def test_daemon_scan_sessions(daemon_and_cookies, json_config):
+    pass
+    # daemon, cookies = daemon_and_cookies
+    # config = copy.deepcopy(json_config)
+    # _create_session(daemon)
+    # _create_session(daemon)  # create three more sessions
+    # terminate_live_sessions()
+    # daemon._sessions = {}
+    # daemon.scan_sessions()
+    # for k, v in daemon._sessions["test_session"]["sessions"].items():
+    #     assert isinstance(v, dict)
+    #     assert not "process" in v

@@ -11,7 +11,7 @@ openapi-spec-validator openapi/daemon.yml
 if [ $? -eq 0 ]
 then echo "Validated interface spec"
      # java -jar swagger-codegen-cli.jar generate --lang javascript -o openapi/iface -i openapi/iface.yml
-     java -jar openapi-generator-cli-5.0.0.jar generate -g javascript-flowtyped -o openapi/iface -i openapi/iface.yml
+     java -jar openapi-generator-cli-5.0.0.jar generate -g javascript-flowtyped -o openapi/iface -i openapi/iface.yml -t out
      echo "Generated interface client API"
 else echo "Failed for interface"
      return 1
@@ -21,7 +21,7 @@ openapi-spec-validator openapi/iface.yml
 if [ $? -eq 0 ]
 then echo "Validated daemon spec"
      # java -jar swagger-codegen-cli.jar generate --lang javascript -o openapi/daemon -i openapi/daemon.yml
-     java -jar openapi-generator-cli-5.0.0.jar generate -g javascript-flowtyped -o openapi/daemon -i openapi/daemon.yml
+     java -jar openapi-generator-cli-5.0.0.jar generate -g javascript-flowtyped -o openapi/daemon -i openapi/daemon.yml -t out
      echo "Generating daemon client API"
 else echo "Failed for daemon"
      return 1

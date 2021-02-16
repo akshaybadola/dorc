@@ -33,4 +33,23 @@
   - Removed Tuple and added where there was no return annotation.
 
 ## [2021-02-04 Thu 12:23]
-- Added templated operationId generation in spec and js spec generation.
+- Added templated operationId generation in spec generation.
+- There's only a single version now.
+- Created `setup.py` and checked install.
+- Added `dorc/__main__.py` and removed `dorc/spec/__main__.py`
+- Added Readme
+- Added custom parsers to `docs/conf.py`. Now we can parse `Requests,Responses`
+  etc. sections.
+- Fixed cycling dependencies in `dorc/__init__.py`
+- Separated port forwarding stuff from `dorc/daemon/__init__.py` and some fixes
+  to the file.
+- Minor changes to `if_run.py` and it's now part of the package
+- `config` is now entirely json and can be updated with multiple `overrides` in
+  `dorc.interfaces.FlaskInterface`
+- Added `_write_overrides`, `_get_overrides` and fixed some functions in
+  `dorc.interfaces.FlaskInterface`
+- fixed yaml references in spec generation. See `dorc.spec.fix_yaml_references`
+- Added `state_var` to `dorc.trainer.Trainer`. State will be handled in a more
+  streamlined manner from now.
+- Dumping of `dorc.trainer.model.Model` as json
+- Added various tests and `pytest` mark `todo`.

@@ -38,3 +38,9 @@ class CreateSessionModel(BaseModel):
     config: Dict
     load: bool
     saves: Optional[Dict[str, str]]
+
+
+class SessionMethodResponseModel(BaseModel):
+    result: bool
+    message: str
+    task_id: int

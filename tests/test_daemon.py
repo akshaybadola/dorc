@@ -9,21 +9,7 @@ import requests
 from dorc.daemon import Daemon
 from dorc.interfaces import FlaskInterface
 from dorc.util import dget
-
-
-def terminate_live_sessions(daemon):
-    for s in daemon._sessions.values():
-        for s_name in s["sessions"]:
-            if "process" in s["sessions"][s_name]:
-                s["sessions"][s_name]["process"].terminate()
-                print(f'Terminated {s["sessions"][s_name]["process"]}')
-
-
-def _create_session(daemon, config, load=False):
-    data = {"name": "test_session", "config": copy.deepcopy(config), "load": load}
-    daemon.create_session(0, data)
-    result = daemon._check_result(0)
-    return result
+from util import _create_session
 
 
 @pytest.mark.quick

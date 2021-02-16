@@ -26,6 +26,7 @@ from functools import partial
 import flask_login
 from flask import Flask, render_template, request, Response, make_response
 from flask_cors import CORS
+from flask_pydantic import validate
 from werkzeug import serving
 
 from ..version import __version__
@@ -1767,8 +1768,9 @@ if "{self.root_dir}" not in sys.path:
             return _dump([True, self._modules])
 
         @self.app.route("/add_global_module", methods=["POST"])
+        @validate()
         @flask_login.login_required
-        def __add_global_module():
+        def __add_global_module() -> models.SessionMethodResponseModel:
             """Add a module to the global modules.
 
             Can be python or zip file. Shows up in global modules and is immediately
@@ -1801,11 +1803,13 @@ if "{self.root_dir}" not in sys.path:
                     data = json.loads(request.form["name"])
                     file_bytes = request.files["file"].read()
                 except Exception as e:
-                    return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
+                    return models.SessionMethodResponseModel.parse_obj(
+                        {"task_id": 0, "result": False,
+                         "message": f"{e}" + "\n" + traceback.format_exc()})
             data = {"name": data, "data_file": file_bytes}
             task_id = self._get_task_id_launch_func(self._load_module, data)
-            return _dump([True, {"task_id": task_id,
-                                 "message": "Adding global module"}])
+            return models.SessionMethodResponseModel.parse_obj(
+                {"task_id": task_id, "result": True, "message": "Adding global module"})
 
         @self.app.route("/delete_global_module", methods=["POST"])
         @flask_login.login_required
@@ -1835,11 +1839,11 @@ if "{self.root_dir}" not in sys.path:
             """
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
-                return _dump([False, "Name not in request or empty name"])
+                return "Name not in request or empty name"
             else:
                 mod_name = self._get_module_name(request.form["name"])
                 if mod_name not in self._modules:
-                    return _dump([False, f"No such module {request.form['name']}"])
+                    return f"No such module {request.form['name']}"
             try:
                 self._modules.pop(mod_name)
                 mods_dir = self.modules_dir
@@ -1848,17 +1852,17 @@ if "{self.root_dir}" not in sys.path:
                         os.unlink(os.path.join(mods_dir, mod_name))
                     else:
                         shutil.rmtree(os.path.join(mods_dir, mod_name))
-                    return _dump([True, f"Removed {mod_name}."])
+                    return f"Removed {mod_name}."
                 elif os.path.exists(os.path.join(mods_dir, mod_name + ".py")):
                     if os.path.islink(os.path.join(mods_dir, mod_name)):
                         os.unlink(os.path.join(mods_dir, mod_name + ".py"))
                     else:
                         os.remove(os.path.join(mods_dir, mod_name + ".py"))
-                    return _dump([True, f"Removed {mod_name}."])
+                    return f"Removed {mod_name}."
                 else:
-                    return _dump([False, f"Module {mod_name} was not on disk"])
+                    return f"Module {mod_name} was not on disk"
             except Exception as e:
-                return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
+                return f"Error occured {e}" + "\n" + traceback.format_exc()
 
         @self.app.route("/list_datasets", methods=["GET"])
         @flask_login.login_required
@@ -1879,8 +1883,9 @@ if "{self.root_dir}" not in sys.path:
             return make_json(self.datasets)
 
         @self.app.route("/upload_dataset", methods=["POST"])
+        @validate()
         @flask_login.login_required
-        def __upload_dataset():
+        def __upload_dataset() -> models.SessionMethodResponseModel:
             """Upload a dataset which would be globally available to the server.
 
             Must be zip file. An __init__.py should be at the top of the zip file and
@@ -1916,24 +1921,28 @@ if "{self.root_dir}" not in sys.path:
             """
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
-                return _dump([False, "Name not in request or empty name"])
+                return models.SessionMethodResponseModel(
+                    task_id=0, result=False, message="Name not in request or empty name")
             if "description" not in request.form or ("description" in request.form
                                                      and not len(request.form["description"])):
-                return _dump([False, "Description not in request or empty description"])
+                return models.SessionMethodResponseModel(
+                    task_id=0, result=False, message="Description not in request or empty description")
             if "type" not in request.form or ("type" in request.form
                                               and not len(request.form["type"])):
-                return _dump([False, "Dataset type not in request or empty"])
+                return models.SessionMethodResponseModel(
+                    task_id=0, result=False, message="Dataset type not in request or empty")
             try:
                 data = {}
                 for x in ["name", "description", "type"]:
                     data[x] = request.form[x]
                 file_bytes = request.files["file"].read()
             except Exception as e:
-                return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
+                return models.SessionMethodResponseModel(
+                    task_id=0, result=False, message=f"{e}" + "\n" + traceback.format_exc())
             data = {"data_file": file_bytes, **data}
             task_id = self._get_task_id_launch_func(self._load_dataset, data)
-            return _dump([True, {"task_id": task_id,
-                                 "message": "Adding global data"}])
+            return models.SessionMethodResponseModel.parse_obj({"result": True, "task_id": task_id,
+                                                                "message": "Adding global data"})
 
         @self.app.route("/delete_dataset", methods=["POST"])
         @flask_login.login_required
@@ -1957,26 +1966,26 @@ if "{self.root_dir}" not in sys.path:
             """
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
-                return _dump([False, "Name not in request or empty name"])
+                return "Name not in request or empty name"
             else:
                 name = self._get_dataset_name(request.form["name"])
                 if name not in self._datasets:
-                    return _dump([False, f"No such dataset {request.form['name']}"])
+                    return f"No such dataset {request.form['name']}"
             try:
                 self._datasets.pop(name)
                 data_dir = self.datasets_dir
                 if os.path.exists(os.path.join(data_dir, name)):
                     shutil.rmtree(os.path.join(data_dir, name))
                     os.remove(os.path.join(data_dir, name) + ".json")
-                    return _dump([True, f"Removed {name}."])
+                    return f"Removed {name}."
                 elif os.path.exists(os.path.join(data_dir, name + ".py")):
                     os.remove(os.path.join(data_dir, name + ".py"))
                     os.remove(os.path.join(data_dir, name) + ".json")
-                    return _dump([True, f"Removed {name}."])
+                    return f"Removed {name}."
                 else:
-                    return _dump([False, f"Dataset {name} was not on disk"])
+                    return f"Dataset {name} was not on disk"
             except Exception as e:
-                return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
+                return f"Error occured {e}" + "\n" + traceback.format_exc()
 
         @self.app.route("/_ping", methods=["GET"])
         def __ping():

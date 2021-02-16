@@ -53,3 +53,7 @@
   streamlined manner from now.
 - Dumping of `dorc.trainer.model.Model` as json
 - Added various tests and `pytest` mark `todo`.
+
+## [2021-02-16 Tue 16:31]
+- Added [Flask-Pydantic](https://github.com/bauerji/flask_pydantic) to requirements.
+- Added `@validate` to a couple of daemon routes.

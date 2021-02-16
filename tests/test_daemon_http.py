@@ -3,11 +3,7 @@ import time
 import json
 import requests
 from dorc.util import make_test_daemon
-from test_daemon import _create_session
-
-
-def assertIn(a, b):
-    assert a in b
+from util import _create_session, assertIn
 
 
 @pytest.mark.http

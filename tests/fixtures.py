@@ -111,7 +111,7 @@ def params_and_iface():
     shutil.rmtree(".test_dir")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def daemon_and_cookies():
     import time
     import requests

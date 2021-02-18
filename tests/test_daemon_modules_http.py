@@ -179,6 +179,7 @@ def test_add_delete_global_module(daemon_and_cookies, json_config):
 
 
 @pytest.mark.http
+@pytest.mark.skipif("IN_GITHUB_WORKFLOW" in os.environ, reason="Don't run in Github workflow")
 def test_add_delete_dataset(daemon_and_cookies, json_config):
     py_string = """
 class MnistDataset:

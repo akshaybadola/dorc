@@ -82,6 +82,7 @@ def generate_spec(arglist):
                                     [trainer.models.Return,
                                      trainer.models.ReturnBinary,
                                      trainer.models.ReturnExtraInfo,
+                                     trainer.models.TrainerState,
                                      dorc.daemon.models.Session,
                                      dorc.daemon.models.SessionMethodResponseModel,
                                      dorc.daemon.models.CreateSessionModel],
@@ -114,6 +115,7 @@ def generate_spec(arglist):
                                                          "interfaces": interfaces},
                                     [trainer.models.Return,
                                      trainer.models.ReturnBinary,
+                                     trainer.models.TrainerState,
                                      trainer.models.ReturnExtraInfo],
                                     aliases)
         out_str = fix_yaml_references(yaml.safe_dump(out))

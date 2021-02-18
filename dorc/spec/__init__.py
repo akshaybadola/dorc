@@ -48,7 +48,10 @@ def extract_definitions(paths: Dict[str, Any], missing: List[type]) -> Dict[str,
     for x in missing:
         if x.__name__ not in definitions:
             definitions[x.__name__] = x.schema()
-    return definitions
+    # NOTE: sometimes there're references to `definitions` in `missing`
+    definitions = recurse_dict(definitions, pred, repl)
+    more_definitions = pop_if(definitions, pop_pred)
+    return {**definitions, **more_definitions}
 
 
 def fix_redundancies(paths: Dict[str, Any], definitions: Dict[str, Any]):

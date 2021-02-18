@@ -25,12 +25,12 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        export IN_GITHUB_WORKFLOW=1
         export SKIP_CYTHON=1
         if [ -f requirements-${{ matrix.python-version }}.txt ]; then python -m pip install -r requirements-${{ matrix.python-version }}.txt; fi
         python -m pip install pytest==6.2.1
     - name: Test with pytest
       run: |
+        export IN_GITHUB_WORKFLOW=1
         cd tests && python -m pytest -m 'quick and not todo' && \
         python -m pytest -m 'threaded and not todo' && \
         python -m pytest -m 'http and not todo' -k 'not daemon_modules_http' && \

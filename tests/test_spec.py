@@ -243,6 +243,8 @@ def test_check_for_redirects():
     assert attr == "return"
 
 
+@pytest.mark.todo
+@pytest.mark.bug
 @pytest.mark.spec
 def test_get_request_body():
     request = parser.get_requests(bleh, "GET", "")

@@ -38,8 +38,14 @@ class TrainerTestDevice(unittest.TestCase):
         os.mkdir(".test_dir/test_session")
         time_str = datetime.now().isoformat()
         os.mkdir(f".test_dir/test_session/{time_str}")
+        gmods_dir = os.path.abspath(".test_dir/global_modules")
+        gdata_dir = os.path.abspath(".test_dir/global_datasets")
+        os.mkdir(gmods_dir)
+        os.mkdir(gdata_dir)
         cls.data_dir = f".test_dir/test_session/{time_str}"
-        cls.params = {"data_dir": cls.data_dir, **cls.config}
+        cls.params = {"global_modules_dir": gmods_dir,
+                      "global_datasets_dir": gdata_dir,
+                      "data_dir": cls.data_dir, **cls.config}
 
     def setUp(self):
         self.trainer = SubTrainer(False, **self.params)

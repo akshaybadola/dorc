@@ -9,7 +9,9 @@ from dorc.trainer import config as trainer_config
 @pytest.mark.quick
 def test_translate_config_from_json(json_config):
     config = json_config
-    tlayer = TranslationLayer(config, "")
+    tlayer = TranslationLayer(config, {"data_dir": ".",
+                                       "global_modules_dir": ".",
+                                       "global_datasets_dir": "."})
     test_config = tlayer.from_json()
     trainer_config.Config(**test_config)
 
@@ -17,7 +19,9 @@ def test_translate_config_from_json(json_config):
 @pytest.mark.quick
 def test_translate_to_json(json_config):
     config = json_config
-    tlayer = TranslationLayer(config, "")
+    tlayer = TranslationLayer(config, {"data_dir": ".",
+                                       "global_modules_dir": ".",
+                                       "global_datasets_dir": "."})
     test_config = tlayer.from_json()
     config = trainer_config.Config(**test_config)
     config.schema()

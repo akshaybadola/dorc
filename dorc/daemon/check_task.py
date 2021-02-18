@@ -19,15 +19,15 @@ class CheckTask(MethodView):
                 task_id: int
 
         Schemas:
-            class Success(BaseModel):
-                task_id: int
-                result: bool
+            class SessionMethodResponseModel(BaseModel):
+                status: bool
                 message: str
+                task_id: int
 
         Responses:
             bad_params: ResponseSchema(400, "Bad Params", MimeTypes.text, "task_id not given")
             No such task: ResponseSchema(404, "No such Task", MimeTypes.text, "No such task 4")
-            Success: ResponseSchema(200, "Check Successful", MimeTypes.json, "Success")
+            Success: ResponseSchema(200, "Check Successful", MimeTypes.json, "SessionMethodResponseModel")
 
         """
         try:
@@ -53,10 +53,10 @@ class CheckTask(MethodView):
             return {"task_id": task_id, "result": 0, "message": "Not yet processed"}
         else:
             if len(result) == 2:
-                return {"task_id": result[0], "result": True, "message": "Successful"}
+                return {"task_id": result[0], "status": True, "message": "Successful"}
             elif len(result) == 3 and result[1]:
-                return {"task_id": result[0], "result": True, "message": result[2]}
+                return {"task_id": result[0], "status": True, "message": result[2]}
             elif len(result) == 3 and not result[1]:
-                return {"task_id": result[0], "result": False, "message": result[2]}
+                return {"task_id": result[0], "status": False, "message": result[2]}
             else:
                 return result

@@ -34,11 +34,15 @@ class TrainerTestModels(unittest.TestCase):
         if os.path.exists(".test_dir"):
             shutil.rmtree(".test_dir")
         os.mkdir(".test_dir")
+        os.mkdir(".test_dir/global_modules")
+        os.mkdir(".test_dir/global_datasets")
         os.mkdir(".test_dir/test_session")
         time_str = datetime.now().isoformat()
         os.mkdir(f".test_dir/test_session/{time_str}")
         cls.data_dir = f".test_dir/test_session/{time_str}"
-        cls.params = {"data_dir": cls.data_dir, **cls.config}
+        cls.params = {"global_modules_dir": ".test_dir/global_modules",
+                      "global_datasets_dir": ".test_dir/global_datasets",
+                      "data_dir": cls.data_dir, **cls.config}
         cls.Net = cls.config["model_params"]["net"]["model"]
 
     def test_trainer_init_models_one_model_no_gpus(self):

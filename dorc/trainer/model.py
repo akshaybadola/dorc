@@ -1,4 +1,4 @@
-from typing import List, Dict, Union, Iterable, Callable, Tuple, Any
+from typing import List, Dict, Union, Iterable, Callable, Tuple, Any, Optional
 from collections.abc import Sequence
 import abc
 import torch
@@ -44,6 +44,29 @@ class Model:
 
     def eval(self):
         self._model.eval()
+
+    # NOTE: I tried a from_dump but optimizer["function"] has to be given which
+    #       can't be reliably dumped.
+    #
+    # @classmethod
+    # def from_dump(cls, dump) -> Optional["Model"]:
+    #     required_keys = ["name", "model_def", "params", "optimizer", "gpus"]
+    #     if any(x not in dump for x in required_keys):
+    #         if "params" not in dump and "model_params" not in dump:
+    #             return None
+    #         elif "params" in dump:
+    #             params = dump["params"]
+    #         elif "model_params" in dump:
+    #             params = dump["model_params"]
+    #         else:
+    #             return None
+    #         model = cls(**{**{k: dump[k] for k in required_keys}, "params": params})
+    #     else:
+    #         model = cls(**{k: dump[k] for k in required_keys})
+    #     if "state_dict" in dump:
+    #         model.load_into_memory()
+    #         model.load_weights(dump["state_dict"])
+    #     return model
 
     def forward(self, x):
         return self.model.forward(x)
@@ -211,26 +234,29 @@ class Model:
                               "params": self._optimizer_params},
                 "gpus": self._gpus}
 
-    def dump(self) -> Dict[str, Any]:
+    def dump(self, include_def=False) -> Optional[Dict[str, Any]]:
         """Dump the current state.
 
-        Returns a dictionary with keys ``[name, params, optimizer, gpus,
-        state_dict]``
+        Returns a dictionary with keys :code:`[name, params, optimizer, gpus,
+        state_dict]` and optional :code:`model_def`
 
         If the model is backed up to :attr:`backup_path` then that state is
         returned.
 
         """
-        if not self.loaded:
-            if self.backup_path and self.backup_path != "RAM":
-                return torch.load(self.backup_path)
-        return {"name": self._name,
-                "params": self._model_params,
-                "optimizer": {"name": self._optimizer_name,
-                              "state_dict": self._optimizer and self._optimizer.state_dict(),
-                              "params": self._optimizer_params},
-                "gpus": self._gpus,
-                "state_dict": self._model and self._model.state_dict()}
+        if self.backup_path and self.backup_path != "RAM":
+            return torch.load(self.backup_path)
+        else:
+            dump = {"name": self._name,
+                    "params": self._model_params,
+                    "optimizer": {"name": self._optimizer_name,
+                                  "state_dict": self._optimizer and self._optimizer.state_dict(),
+                                  "params": self._optimizer_params},
+                    "gpus": self._gpus,
+                    "state_dict": self._model and self._model.state_dict()}
+            if include_def:
+                dump["model_def"] = self._model_def
+            return dump
 
     def load(self, state: Dict[str, Any]) -> Tuple[bool, Union[str, None]]:
         """Load the entire model state.
@@ -247,7 +273,6 @@ class Model:
         """
         warnings = []
         try:
-            # status = {"model": None, "optimizer": None, "gpus": None}
             if not self.loaded:
                 return False, "Model not loaded into memory"
             if state["name"] != self._name:

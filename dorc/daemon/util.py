@@ -144,7 +144,6 @@ def create_module(module_dir: Union[Path, str],
             f.write(file_str)
 
 
-
 class Tracker:
     def __init__(self):
         self._trackers = {}

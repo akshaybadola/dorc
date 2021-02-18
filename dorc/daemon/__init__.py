@@ -45,9 +45,15 @@ from .sessions import Sessions
 from .trainer_views import Trainer
 from .check_task import CheckTask
 
-session_method = Tag("session_method")
+session_get = Tag("session_get")
+session_post = Tag("session_post")
+
 
 Path = Union[str, pathlib.Path]
+
+
+def sess_response(status, msg, tid=0) -> models.SessionMethodResponseModel:
+    return models.SessionMethodResponseModel(task_id=tid, message=msg, status=status)
 
 
 class Daemon:
@@ -169,8 +175,9 @@ if "{self.root_dir}" not in sys.path:
 
     def _init_modules(self):
         "Initialize Module Loader, modules and datasets"
-        self._module_loader = Modules(self._root_dir, self._logd, self._loge,
-                                      self._logi, self._logw)
+        self._module_loader = Modules(self.modules_dir,
+                                      {"logd": self._logd, "loge": self._loge,
+                                       "logi": self._logi, "logw": self._logw})
         self._load_available_global_modules()
         self._load_available_global_datasets()
 
@@ -254,6 +261,8 @@ if "{self.root_dir}" not in sys.path:
             try:
                 self._logd(f"Checking config")
                 iface = FlaskInterface(None, None, data_dir,
+                                       self.modules_dir,
+                                       self.datasets_dir,
                                        config_overrides=overrides,
                                        no_start=True)
                 status, result = iface.create_trainer(config)
@@ -316,8 +325,9 @@ if "{self.root_dir}" not in sys.path:
         lines = []
         for m in module_names:
             lines.append(f"from . import {m}\n")
-        with open(init_file, "w") as f:
-            f.writelines(lines)
+        if lines:
+            with open(init_file, "w") as f:
+                f.writelines(lines)
 
     def _load_available_global_modules(self):
         "Scan the :attr:`modules_dir` and load all modules"
@@ -599,12 +609,11 @@ if "{self.root_dir}" not in sys.path:
                     self._sessions[name]["sessions"][time_str]["config"] = config
                     self._sessions[name]["sessions"][time_str]["port"] = port
                     self._sessions[name]["sessions"][time_str]["data_dir"] = data_dir
-                    self._sessions[name]["sessions"][time_str]["data_dir"] = data_dir
                     if overrides:
                         with open(os.path.join(data_dir, "config_overrides.json")) as f:
                             json.dump(overrides, f)
                     cmd = f"python {self.if_run_file} {self.hostname} {port} {data_dir} " +\
-                        "--config-overrides=True"
+                        f"{self.modules_dir} {self.datasets_dir} --config-overrides=True"
                     cwd = os.path.dirname(self._lib_dir)
                     self._logd(f"Running command {cmd} in {cwd}")
                     p = Popen(shlex.split(cmd), env=os.environ, cwd=cwd)
@@ -716,17 +725,18 @@ if "{self.root_dir}" not in sys.path:
     #        What if the config changes in the middle? It should update automatically.
     @property
     def sessions_list(self) -> Dict[str, models.Session]:
-        retval: Dict[str, Dict[str, Union[None, bool, int, Dict]]] = {}
+        retval: Dict[str, models.Session] = {}
         for k, v in self._sessions.items():
             session_stamps = v["sessions"].keys()
             for ts in session_stamps:
                 key = k + "/" + ts
                 session = v["sessions"][ts]
-                retval[key] = {}
-                retval[key]["loaded"] = "process" in session and session["process"].poll() is None
-                retval[key]["port"] = session["port"] if retval[key]["loaded"] else None
-                retval[key]["state"] = session["state"]
-                retval[key]["finished"] = self._session_finished_p(session["state"])
+                val = {}
+                val["loaded"] = "process" in session and session["process"].poll() is None
+                val["port"] = session["port"] if val["loaded"] else None
+                val["state"] = session["state"]
+                val["finished"] = self._session_finished_p(session["state"])
+                retval[key] = models.Session.parse_obj(val)
         return retval
 
     def _check_username_password(self, data: Dict[str, str]):
@@ -781,8 +791,19 @@ if "{self.root_dir}" not in sys.path:
         if task_id is not None:
             self._task_q.put((task_id, status, message))
 
+
     @property
-    def _session_methods(self) -> List[str]:
+    def _session_get(self) -> List[str]:
+        """Return list of :code:`session_get` tags.
+
+        A :code:`session_get` tag is attached for any method with a GET request
+        and which manipulates the session. See :meth:`_session_check_get`
+
+        """
+        return [x[1:].replace("_helper", "") for x in session_get.names]
+
+    @property
+    def _session_post(self) -> List[str]:
         """Return list of `session_method`s.
 
         A `session_method` is any method used for manipulating a method. It's
@@ -794,9 +815,9 @@ if "{self.root_dir}" not in sys.path:
         :meth:`_load_session_helper` is exported as `load_session`
 
         """
-        return [x[1:].replace("_helper", "") for x in session_method.names]
+        return [x[1:].replace("_helper", "") for x in session_post.names]
 
-    @session_method
+    @session_post
     def _load_session_helper(self, task_id, name, time_str, data={}):
         """Load a session with given key `name`/`time_str`
 
@@ -805,6 +826,10 @@ if "{self.root_dir}" not in sys.path:
             name: `name` of the session
             time_str: The time stamp of the session
             data: Any additional data passed from the request
+
+        Schemas:
+            class LoadSessionModel(BaseModel):
+                default: Dict
 
         """
         key = name + "/" + time_str
@@ -821,7 +846,7 @@ if "{self.root_dir}" not in sys.path:
             self._error_and_put(task_id, False, f"Could not load Session for {key}. {e}"
                                 + "\n" + traceback.format_exc())
 
-    @session_method
+    @session_get
     def _unload_session_helper(self, task_id, name, time_str=None, data=None):
         """Unload a session with given key `name`/`time_str`
 
@@ -859,7 +884,7 @@ if "{self.root_dir}" not in sys.path:
             except Exception as e:
                 self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
 
-    @session_method
+    @session_get
     def _purge_session_helper(self, task_id, name, time_str, data=None):
         """Purge a session with given key `name`/`time_str`
 
@@ -888,9 +913,9 @@ if "{self.root_dir}" not in sys.path:
         except Exception as e:
             self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
 
-    @session_method
+    @session_post
     def _archive_session_helper(self, task_id: int, name: str,
-                                time_str: str, data: Any = None):
+                                time_str: str, data: Dict[str, Any] = {}):
         """Archive a session with given key `name`/`time_str`
 
         Args:
@@ -918,8 +943,8 @@ if "{self.root_dir}" not in sys.path:
             pass
         self._info_and_put(task_id, True, "Archive session helper")
 
-    @session_method
-    def _clone_to_helper(self, task_id, name, time_str, data=None):
+    @session_post
+    def _clone_to_helper(self, task_id, name, time_str, data={}):
         """Load a session with given key `name`/`time_str` to a given server
 
         Args:
@@ -1009,8 +1034,8 @@ if "{self.root_dir}" not in sys.path:
         except Exception as e:
             self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
 
-    @session_method
-    def _clone_session_helper(self, task_id, name, time_str, data=None):
+    @session_post
+    def _clone_session_helper(self, task_id, name, time_str, data={}):
         """Clone the session with `name`/`time_str` and optional given config differences
 
         Args:
@@ -1054,8 +1079,8 @@ if "{self.root_dir}" not in sys.path:
         else:
             self._logd(f"Failed to clone with task_id {task_id}")
 
-    @session_method
-    def _reinit_session_helper(self, task_id, name, time_str, data=None):
+    @session_post
+    def _reinit_session_helper(self, task_id, name, time_str, data={}):
         """Reinitialize a session with given key `name`/`time_str`
 
         Args:
@@ -1115,44 +1140,83 @@ if "{self.root_dir}" not in sys.path:
                         func = getattr(self, "_" + func_name + "_helper")
                     else:
                         func = getattr(self, func_name + "_helper")
-                    data.pop("session_key")
-                    func(task_id, session_name, timestamp, data=data)
+                    temp = data.copy()
+                    temp.pop("session_key")
+                    func(task_id, session_name, timestamp, data=temp)
                 except Exception as e:
                     self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
         else:
             self._error_and_put(task_id, False, "Incorrect data format given")
 
-    def _session_check_get(self, func_name):
-        func = getattr(self, func_name)
-        return _dump(func())
+    @validate()
+    def _session_check_get(self, func_name: str) -> Union[str, models.SessionMethodResponseModel]:
+        """Handle a GET request with a helper function.
 
-    def _session_check_post(self, func_name):
-        """Handle a POST request for a `session_method`
+        Similar to :meth:`_session_check_post`
 
         Args:
             func_name: The name of the helper method
 
-        Schema:
-            class Task(BaseModel):
-                task_id: int
+        Schemas:
+            class SessionMethodResponseModel(BaseModel):
+                status: bool
                 message: str
+                task_id: int
 
         Request:
-            content-type: MimeTypes.json
-            body:
-                session_key: str
-                data: Union[:meth:`daemon.Daemon._archive_session_helper`: ArchiveSessionModel,
-                            :meth:`_reinit_session_helper`: ReinitSessionModel,
-                            :meth:`_clone_session_helper`: CloneSessionModel,
-                            :meth:`_clone_to_helper`: CloneToServerModel,
-                            Dict]
+            session_key: str
 
         Responses:
             Invalid data: ResponseSchema(405, "Invalid Data", MimeTypes.text,
                                         "Invalid data {some: json}")
             bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
                                        "Session key not in params")
-            Success: ResponseSchema(200, "Initiated Task", MimeTypes.json, "Task")
+            Success: ResponseSchema(200, "Initiated Task", MimeTypes.json,
+                                         "SessionMethodResponseModel")
+        """
+        if "session_key" not in request.args:
+            return f"'session_key' must be in request"
+        else:
+            data = request.args
+            task_id = self._get_task_id_launch_func(self._session_method_check, func_name, data)
+            return sess_response(True, f"{func_name.split('_')[0]}ing {data}", task_id)
+
+    @validate()
+    def _session_check_post(self, func_name: str) -> Union[str, models.SessionMethodResponseModel]:
+        """Handle a POST request with a helper function.
+
+        Perform initial checks and eventually call the function `func_name`.
+
+        The functions themselves are actually prefixed with `_` and suffixed
+        with `_helper`.  For example, for an :code:`/load_session` request,
+        the :code:`func_name` corresponds to :code:`load_session` and helper
+        is :meth:`_load_session_helper`.
+
+        Args:
+            func_name: The name of the helper method
+
+        Map:
+            /<func_name>: :class:`daemon.Daemon`._<func_name>_helper
+
+        Schemas:
+            class SessionMethodResponseModel(BaseModel):
+                status: bool
+                message: str
+                task_id: int
+
+        Request:
+            content-type: MimeTypes.json
+            body:
+                session_key: str
+                data: :meth:`daemon.Daemon._<func_name>_helper`:<_>Model
+
+        Responses:
+            Invalid data: ResponseSchema(405, "Invalid Data", MimeTypes.text,
+                                        "Invalid data {some: json}")
+            bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
+                                       "Session key not in params")
+            Success: ResponseSchema(200, "Initiated Task", MimeTypes.json,
+                                         "SessionMethodResponseModel")
 
         """
         # session_key: str
@@ -1163,15 +1227,14 @@ if "{self.root_dir}" not in sys.path:
         try:
             data = load_json(request.json)
             if data is None:
-                return _dump([False, f"Invalid data {request.json}"])
+                return f"Invalid data {request.json}"
         except Exception as e:
             return f"Invalid data {request.json}, {e}"
         if "session_key" not in data:
             return f"'session_key' must be in data.\nInvalid data {data}"
         else:
             task_id = self._get_task_id_launch_func(self._session_method_check, func_name, data)
-            return _dump([True, {"task_id": task_id,
-                                 "message": f"{func_name.split('_')[0]}ing {data}"}])
+            return sess_response(True, f"{func_name.split('_')[0]}ing {data}", task_id)
 
     def stop(self):
         # NOTE: clear the fwd_ports_event
@@ -1352,6 +1415,48 @@ if "{self.root_dir}" not in sys.path:
         #     else:
         #         return _dump([True, self.sessions_list])
 
+        # @self.app.route("/sessions", methods=["GET"])
+        # @validate()
+        # @flask_login.login_required
+        # def __sessions() -> Union[str, Dict[str, models.Session]]:
+        #     """GET the sessions list.
+
+        #     See :attr:`~daemon.Daemon.sessions_list`
+
+        #     Tags:
+        #         daemon
+
+        #     Requests:
+        #         params:
+        #             name: Optional[str]
+
+        #     Schemas:
+        #         class Success(BaseModel):
+        #             default: :attr:`daemon.Daemon.sessions_list`.returns
+
+        #     Responses:
+        #         failure: ResponseSchema(404, "No such session", MimeTypes.text,
+        #                                 "No Session with key: some_key")
+        #         Success: ResponseSchema(200, "Check Successful", MimeTypes.json, "Success")
+
+        #     """
+        #     try:
+        #         name = request.args.get("name")
+        #     except Exception:
+        #         name = None
+        #     sess_list = self.sessions_list
+        #     if name:
+        #         name = name.strip()
+        #         sessions = {k: v  # models.Session.parse_obj(v)
+        #                     for k, v in sess_list.items()
+        #                     if k.startswith(name)}
+        #         if sessions:
+        #             return sessions
+        #         else:
+        #             return f"No session found with name: {name}"
+        #     else:
+        #         return sess_list
+
         @self.app.route("/current_user", methods=["GET"])
         @flask_login.login_required
         def __current_user():
@@ -1429,8 +1534,9 @@ if "{self.root_dir}" not in sys.path:
                     return _dump([False, "Could not assign name"])
 
         @self.app.route("/create_session", methods=["POST"])
+        @validate()
         @flask_login.login_required
-        def __create_session():
+        def __create_session() -> Union[str, models.SessionMethodResponseModel]:
             """Create a new session.
 
             Tags:
@@ -1452,12 +1558,9 @@ if "{self.root_dir}" not in sys.path:
             """
             data = load_json(request.json)
             if data is None:
-                return _dump([False, f"Invalid data {request.json}"])
-            # except Exception as e:
-            #     return _dump([False, f"{e}" + "\n" + traceback.format_exc()])
+                return f"Invalid data {request.json}"
             task_id = self._get_task_id_launch_func(self.create_session, data)
-            return _dump([True, {"task_id": task_id,
-                                 "message": "Creating session with whatever data given"}])
+            return sess_response(True, "Creating session with whatever data given", task_id)
 
         # FIXME: How's this different from create_session?
         @self.app.route("/upload_session", methods=["POST"])
@@ -1797,32 +1900,25 @@ if "{self.root_dir}" not in sys.path:
             """
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
-                return _dump([False, "Name not in request or empty name"])
+                return sess_response(False, "Name not in request or empty name")
             else:
                 try:
                     data = json.loads(request.form["name"])
                     file_bytes = request.files["file"].read()
                 except Exception as e:
-                    return models.SessionMethodResponseModel.parse_obj(
-                        {"task_id": 0, "result": False,
-                         "message": f"{e}" + "\n" + traceback.format_exc()})
+                    return sess_response(False, f"{e}" + "\n" + traceback.format_exc(), 0)
             data = {"name": data, "data_file": file_bytes}
             task_id = self._get_task_id_launch_func(self._load_module, data)
-            return models.SessionMethodResponseModel.parse_obj(
-                {"task_id": task_id, "result": True, "message": "Adding global module"})
+            return sess_response(True, "Adding global module", task_id)
 
         @self.app.route("/delete_global_module", methods=["POST"])
         @flask_login.login_required
         def __delete_global_module():
             """Delete the given module from the list of global modules.
 
-            The module is immediately unavailable for all future running functions.
-
-            NOTE: Make sure that the imports are reloaded if there's an update
-            NOTE: What if a function relied on some deleted module? It should
-                  no longer work. Not sure how to handle that.
-            NOTE: Module names start with _module_ internally and the module name
-                  itself shouldn't start with _
+            The module is immediately unavailable for all future running
+            functions.  :code:`name` for module names start with _module_
+            internally and the module name itself shouldn't start with _
 
             Tags:
                 daemon, modules
@@ -1837,6 +1933,10 @@ if "{self.root_dir}" not in sys.path:
                 Success: ResponseSchema(200, "Deleted Dataset", MimeTypes.text, "Deleted module MNIST")
 
             """
+            # TODO: Make sure that the imports are reloaded if there's an update
+            # TODO: What if a function relied on some deleted module? It should
+            #       no longer work. Not sure how to handle that.
+            # TODO: Check if module is in use by some session
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
                 return "Name not in request or empty name"
@@ -1922,15 +2022,15 @@ if "{self.root_dir}" not in sys.path:
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
                 return models.SessionMethodResponseModel(
-                    task_id=0, result=False, message="Name not in request or empty name")
+                    task_id=0, status=False, message="Name not in request or empty name")
             if "description" not in request.form or ("description" in request.form
                                                      and not len(request.form["description"])):
                 return models.SessionMethodResponseModel(
-                    task_id=0, result=False, message="Description not in request or empty description")
+                    task_id=0, status=False, message="Description not in request or empty description")
             if "type" not in request.form or ("type" in request.form
                                               and not len(request.form["type"])):
                 return models.SessionMethodResponseModel(
-                    task_id=0, result=False, message="Dataset type not in request or empty")
+                    task_id=0, status=False, message="Dataset type not in request or empty")
             try:
                 data = {}
                 for x in ["name", "description", "type"]:
@@ -1938,11 +2038,10 @@ if "{self.root_dir}" not in sys.path:
                 file_bytes = request.files["file"].read()
             except Exception as e:
                 return models.SessionMethodResponseModel(
-                    task_id=0, result=False, message=f"{e}" + "\n" + traceback.format_exc())
+                    task_id=0, status=False, message=f"{e}" + "\n" + traceback.format_exc())
             data = {"data_file": file_bytes, **data}
             task_id = self._get_task_id_launch_func(self._load_dataset, data)
-            return models.SessionMethodResponseModel.parse_obj({"result": True, "task_id": task_id,
-                                                                "message": "Adding global data"})
+            return sess_response(True, "Adding global data", task_id)
 
         @self.app.route("/delete_dataset", methods=["POST"])
         @flask_login.login_required
@@ -1964,6 +2063,7 @@ if "{self.root_dir}" not in sys.path:
                 Success: ResponseSchema(200, "Deleted Dataset", MimeTypes.text, "Deleted dataset MNIST")
 
             """
+            # TODO: Check if dataset is in use by some session
             if "name" not in request.form or ("name" in request.form
                                               and not len(request.form["name"])):
                 return "Name not in request or empty name"
@@ -2034,9 +2134,12 @@ if "{self.root_dir}" not in sys.path:
         #     # only views the progress and parameters. No trainer is started
         #     return _dump([False, "Doesn't do anything"])
 
-        # NOTE: Add session_methods.  Routes are added by removing "_" prefix
-        #       and "_helper" suffix from self._session_methods
-        for x in self._session_methods:
+        # NOTE: Add session_get and session_post.  Routes are added by removing
+        #       "_" prefix and "_helper" suffix from self._session_methods
+        for x in self._session_get:
+            self.app.add_url_rule("/" + x, x, partial(self._session_check_get, x),
+                                  methods=["GET"])
+        for x in self._session_post:
             self.app.add_url_rule("/" + x, x, partial(self._session_check_post, x),
                                   methods=["POST"])
 

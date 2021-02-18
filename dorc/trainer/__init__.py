@@ -1,4 +1,4 @@
-from typing import List, Dict, Iterable, Any, Union, Tuple, Callable, Optional
+from typing import List, Dict, Iterable, Any, Union, Tuple, Callable, Optional, cast
 import re
 import io
 import os
@@ -22,7 +22,7 @@ from ..device import (init_nvml, gpu_ranking, gpu_util, gpu_name,
                       cpu_info, memory_info, DeviceMonitor)
 from ..util import gen_file_and_stream_logger, deprecated, _dump, concat, diff_as_sets, BasicType
 from ..task import Signals
-from ..mods import Modules as Modules
+from ..mods import Modules
 from ..overrides import MyDataLoader, default_tensorify
 from .._log import Log
 from ..helpers import (Tag, ProxyDataset, PropertyProxy, HookDict, Hook,
@@ -31,12 +31,13 @@ from ..version import __version__
 
 from .epoch import Epoch
 from .model import Model, ModelStep
-from .models import Return, ReturnBinary, ReturnExtraInfo, AdhocEvalParams
+from .models import Return, ReturnBinary, ReturnExtraInfo, AdhocEvalParams, TrainerState, StateEnum
 from . import config
 from .config import Metric
 from . import hooks as hooks_module
 
 
+PathType = Union[pathlib.Path, str]
 control = Tag("control")
 prop = Tag("prop")
 state_var = Tag("state_var")
@@ -117,7 +118,11 @@ def make_return(status: bool, message: str) -> Return:
     return Return(status=status, message=message)
 
 
-def make_info(status: bool, message: str, data: Dict) -> ReturnExtraInfo:
+def reterr(message: str) -> Return:
+    return Return(status=False, message=message)
+
+
+def make_info(status: bool, message: str, data: Dict = {}) -> ReturnExtraInfo:
     return ReturnExtraInfo(status=status, message=message, data=data)
 
 
@@ -132,6 +137,7 @@ class Trainer:
 
     def __init__(self, model_params, criteria, optimizers, update_functions,
                  extra_metrics, trainer_params, data_params, dataloader_params, data_dir,
+                 global_modules_dir, global_datasets_dir,
                  log_levels={"file": "debug", "stream": "info"}):
         """Initializes the :class:`Trainer` object. This is supposed to be a catch all
         trainer which is robust and easy to train and can generate graphs
@@ -187,7 +193,9 @@ class Trainer:
                                     extra_metrics={k: Metric(**v)
                                                    for k, v in extra_metrics.items()},
                                     log_levels=config.LogLevelParams(**log_levels),
-                                    data_dir=data_dir)
+                                    data_dir=data_dir,
+                                    global_modules_dir=global_modules_dir,
+                                    global_datasets_dir=global_datasets_dir)
         # static attributes
         self._data_dir = data_dir
         # logging is started first of all
@@ -243,36 +251,51 @@ class Trainer:
     def _check_resume_or_init_weights(self):
         if self.trainer_params.init_weights:
             self._logw("Warning! Loading weights directly to model")
-            load_state = torch.load(self.trainer_params["init_weights"])
+            load_state = torch.load(self.trainer_params.init_weights)
             for name in self._models.names:
                 self._models.load_weights(name, load_state["models"][name])
             self._resume_path = None
-        elif self.trainer_params.resume:  # implies resume from somewhere
-            if self.trainer_params.resume_best:
-                # try to find and resume best weights
-                self._loge("Resume from best is not yet implemented")
-                self._resume_path = None
-            elif self.trainer_params.resume_dict:
-                if os.path.exists(self.trainer_params.resume_dict):
-                    self._resume_path = self.trainer_params.resume_dict
-                else:
-                    self._logw("Given resume weights do not exist")
-                    self._resume_path = None  # set appropriate path
-            else:
-                # if both resume_best and resume_dict are false
-                # AND resume is true AND checkpoint_path is valid
-                if os.path.exists(self._checkpoint_path):
-                    self._logi("Checkpoint exists. Will resume from there")
-                    self._resume_path = self._checkpoint_path
-                else:
-                    self._logi("No checkpoint found. Will train from beginninng")
-                    self._resume_path = None
-        else:
-            # Don't resume
-            self._resume_path = None
-        if self.trainer_params["resume"] and self._resume_path:
-            self._logi(f"Resuming from {self._resume_path}")
-            self._resume_from_path(self._resume_path)
+        elif self.trainer_params.resume:
+            pass
+    # def _check_resume_or_init_weights(self):
+    #     """Check for resume or initial weights and set :attr:`_resume_path`.
+
+    #     :code:`config` is already loaded and will not be loaded again. Only
+    #     state will be restored.
+
+    #     """
+    #     if self.trainer_params.init_weights:
+    #         self._logw("Warning! Loading weights directly to model")
+    #         load_state = torch.load(self.trainer_params.init_weights)
+    #         for name in self._models.names:
+    #             self._models.load_weights(name, load_state["models"][name])
+    #         self._resume_path = None
+    #     elif self.trainer_params.resume:  # implies resume from somewhere
+    #         if self.trainer_params.resume_best:
+    #             # try to find and resume best weights
+    #             self._loge("Resume from best is not yet implemented")
+    #             self._resume_path = None
+    #         elif self.trainer_params.resume_dict:
+    #             if os.path.exists(self.trainer_params.resume_dict):
+    #                 self._resume_path = self.trainer_params.resume_dict
+    #             else:
+    #                 self._logw("Given resume weights do not exist")
+    #                 self._resume_path = None  # set appropriate path
+    #         else:
+    #             # if both resume_best and resume_dict are false
+    #             # AND resume is true AND checkpoint_path is valid
+    #             if os.path.exists(self._checkpoint_path):
+    #                 self._logi("Checkpoint exists. Will resume from there")
+    #                 self._resume_path = self._checkpoint_path
+    #             else:
+    #                 self._logi("No checkpoint found. Will train from beginninng")
+    #                 self._resume_path = None
+    #     else:
+    #         # Don't resume
+    #         self._resume_path = None
+    #     if self.trainer_params["resume"] and self._resume_path:
+    #         self._logi(f"Resuming from {self._resume_path}")
+    #         self._resume_from_path(self._resume_path)
 
 
     def _init_all(self):
@@ -537,7 +560,9 @@ class Trainer:
         modules.
 
         """
-        self._mods = Modules(self._modules_dir, self._logd, self._loge, self._logi, self._logw)
+        self._modules = Modules(self._modules_dir,
+                                {"logd": self._logd, "loge": self._loge,
+                                 "logi": self._logi, "logw": self._logw})
         # NOTE: Data is always available
         #       Other things can be nvml, device and stuff.
         self._user_func_env_params = {"train_loader": self.train_loader,
@@ -1634,9 +1659,10 @@ class Trainer:
     # START: Extras
     @POST
     @extras
-    def load_saves(self, weights: Union[pathlib.Path, str], method: str) -> Return:
-        """Load model weights or trainer state from a given filename. The file must be
-        present in the `savedir`.
+    def load_saves(self, weights: PathType, method: str) -> Return:
+        """Load model weights or trainer state from a given filename.
+
+        The file must be present in the :attr:`savedir`.
 
         Args:
             weights: The name of the weights file
@@ -2054,13 +2080,13 @@ class Trainer:
                 if name != model_name:  # free only GPU resources
                     self._models.set_device(model_name, torch.device("cpu"))
             for x in self.update_functions:
-                self.update_functions[x]._model_name = model_name
+                self._training_steps[x]._model_name = model_name
             return make_return(True, self._logd(f"Model {model_name} is now the current active model."))
 
     # TODO: This should be a given input and not an image
     @POST
     @methods
-    def fetch_predictions_for_data(self, img_path: Union[pathlib.Path, str]) -> Dict:
+    def fetch_predictions_for_data(self, img_path: PathType) -> ReturnExtraInfo:
         """Fetch the prediction for a given data instance
 
         Args:
@@ -2072,7 +2098,7 @@ class Trainer:
         """
         if True:              # img_path in self._temp_runner._processed_images:
             if not hasattr(self._temp_runner, "running") or self._temp_runner.running:
-                return False, f"The function is still running"
+                return make_info(False, f"The function is still running")
             else:
                 import ipdb; ipdb.set_trace()
                 temp_list = [(x[1], [_x[0] for _x in x[-1]]) for x in self._temp_runner.batch_vars
@@ -2098,7 +2124,7 @@ class Trainer:
                             img_indx = [_x[0] for _x in x[-1]].index(img_path)
                 else:
                     import ipdb; ipdb.set_trace()
-                    return False, f"Img seems to not have been processed. Check."
+                    return make_info(False, f"Img seems to not have been processed. Check.")
                 if all(x is not None for x in [batch_preds, batch_lengths,
                                                img_indx, batch_targets]):
                     probs, indices = torch.topk(torch.nn.functional.softmax(batch_preds, 1), 5)
@@ -2109,10 +2135,11 @@ class Trainer:
                     topk = [[vocab.idx2word[int(x)] for x in y] for y in indices]
                     targets = [vocab.idx2word[int(x)] for x in batch_targets]
                     # _raw = [x for x in self._temp_runner.batch_vars if x[2] == "raw"]
-                    return True, {"preds_targets": [preds, targets],
-                                  "topk_words": topk, "probs": probs}
+                    return make_info(True, "Got predictions",
+                                     {"preds_targets": [preds, targets],
+                                      "topk_words": topk, "probs": probs})
                 else:
-                    return False, f"Img seems to not have been processed. Check."
+                    return make_info(False, f"Img seems to not have been processed. Check.")
         elif not os.path.exists(img_path):
             return False, f"Image {img_path} doesn't exist"
         else:
@@ -2126,7 +2153,7 @@ class Trainer:
     # TODO: These functions for images can be generalized for arbitrary binary data
     @GET
     @methods
-    def fetch_image(self, img_path: Union[pathlib.Path, str]) ->\
+    def fetch_image(self, img_path: PathType) ->\
             Union[Return, ReturnBinary]:
         """Fetch the image from a given path.
         """
@@ -2151,8 +2178,8 @@ class Trainer:
             img_file = request.files["file"].read()
             test = self._check_file_magic(img_file, "image")
         except Exception as e:
-            return False, self._loge(f"Error reading file {e}" +
-                                     f"\n{traceback.format_exc()}")
+            return make_return(False, self._loge(f"Error reading file {e}" +
+                                                 f"\n{traceback.format_exc()}"))
         if test:
             import skimage
             self._logd("Detected image file")
@@ -2165,13 +2192,13 @@ class Trainer:
             ix_to_word = self.train_loader.loader._ix_to_word
             funcs[0](model, img, ix_to_word, funcs[1])
             # FIXME: It calls the callback but return message should be better
-            return True, "meh"
+            return make_return(True, "meh")
         else:
-            return False, self._loge("Data is not image")
+            return make_return(False, self._loge("Data is not image"))
 
     @POST
     @methods
-    def load_weights(self, model_names: List[str], weights_file: Dict[str, bytes]) -> Return:
+    def load_weights(self, model_names: List[str], weights: bytes) -> Return:
         """Load weights for given model names.
 
         The weights file must be sent in the request along with the model names
@@ -2187,21 +2214,21 @@ class Trainer:
 
         """
         try:
-            weights = torch.load(weights_file, map_location="cpu")
+            weights = torch.load(io.BytesIO(weights), map_location="cpu")
         except Exception as e:
             return make_return(False,
                                self._loge(f"Error occured while reading data {e}" +
                                           f"\n{traceback.format_exc()}"))
-        if not all(x in weights for x in model_names):
+        if not all(x in weights for x in model_names):  # type: ignore
             return make_return(False,
                                self._logd(f"Check save file! Not all {model_names} " +
-                                          f"in given weights {weights.keys()}"))
+                                          f"in given weights {weights.keys()}"))  # type: ignore
         if not all(x in self.models for x in model_names):
             return make_return(False, self._logd(f"Some models currently not in scope"))
         try:
             for model_name in model_names:
                 status, err = self._models[model_name].load_weights(
-                    {"name": model_name, "weights": weights[model_name]})
+                    {"name": model_name, "weights": weights[model_name]})  # type: ignore
                 if err:
                     return make_return(False, self._loge(f"Error while updating component {err}"))
             return make_return(True, self._logd(f"Updated Models {model_names}"))
@@ -2248,11 +2275,11 @@ class Trainer:
                     statuses.append(False)
                     self._loge(f"could not set value for {k}: {v['value']}. Error {e}")
         if all(statuses):
-            return True, "All values updated!"
+            return make_return(True, "All values updated!")
         elif any(statuses):
-            return True, "Some values could not be updated."
+            return make_return(True, "Some values could not be updated.")
         else:
-            return False, "None of the values could be updated."
+            return make_return(False, "None of the values could be updated.")
 
     @POST
     @methods
@@ -2261,7 +2288,7 @@ class Trainer:
         Delegates to :meth:`~trainer.mods.Modules.add_user_funcs`
 
         """
-        return self._mods.add_user_funcs(request, self._user_funcs)
+        return self._modules.add_user_funcs(request, self._user_funcs)
 
     @POST
     @methods
@@ -2309,19 +2336,18 @@ class Trainer:
             A tuple of status and message
 
         """
-        checks: Iterable[Callable] = []
-        status, response = self.add_module(request, checks)
+        status, response = self.add_module(model_str, None, [])
         if status:
             module_exports = response
             if "model_params" not in module_exports:
-                return False, self._logw(f"Model params not sent in data")
+                return make_return(False, self._logw(f"Model params not sent in data"))
             elif "optimizers" not in module_exports:
-                return False, self._logw(f"Optimizers not sent in data")
+                return make_return(False, self._logw(f"Optimizers not sent in data"))
             else:
                 return self._add_new_models_helper(module_exports["model_params"],
                                                    module_exports["optimizers"])
         else:
-            return status, response
+            return make_return(status, response)
 
     # TODO: Any change in state of trainer vars should have a rollback mechanism
     #       E.g., if some of the params change here and then an error is raised.
@@ -2401,14 +2427,25 @@ class Trainer:
                 #         self._logw(f"Initialized optimizer for {model} in add_model with default params")
                 # else:
                 #     False, self._logd(f"Unrecognized optimizer for model {model}")
-            return True, status
+            return make_return(True, status)
         except Exception as e:
-            return False, f"{e}"
+            return make_return(False, f"{e}")
+
+    def exec_some_string(self, string: str):
+        exec(string)
 
     @POST
     @methods
-    def add_module(self, request: flask.Request, checks) -> Return:
-        return make_return(*self._mods.add_module(request, checks))
+    def add_module(self, request: flask.Request,
+                   checks: Iterable[Callable[[str], bool]] = []) -> Return:
+        """File must be present in request and is read as :code:`request.files["file"]`
+
+        Args:
+            request: A :mod:`flask` request
+            checks: An iterable of predicates. The input to the functions will be the
+                    file path to which the module is written.
+        """
+        return make_return(*self._modules.add_module(request, checks))
     # END: Methods
 
     # START: Objects
@@ -2431,20 +2468,12 @@ class Trainer:
             dump_path = os.path.join(self._data_dir, "session_state")
             state = self._get_state(True)
             with open(dump_path, "w") as f:
-                f.write(_dump(state))
+                f.write(state.json())
             return make_return(True, "Dumped")
         except Exception as e:
             return make_return(False, self._loge(f"{e}" + f"\n{traceback.format_exc()}"))
 
-    @property
-    def _save_and_load_keys(self):
-        """Keys which should be present in save and load state"""
-        # TODO: add "hooks_to_run" and other keys to state
-        return ["epoch", "iterations", "models", "model_params",
-                "criteria_params", "trainer_params",
-                "data", "dataloader_params", "optimizers", "metrics"]
-
-    def _get_state(self, lite=False) -> Dict[str, Any]:
+    def _get_state(self, lite=False) -> TrainerState:
         """Return the trainer state.
 
         State is a difficult thing to serialize, retrieve and
@@ -2453,6 +2482,9 @@ class Trainer:
             b. current state
 
         We keep track of the state vars with the tag :attr:`state_vars`.
+        Additionally, the state is defined in TrainerState for required
+        variables, while some extra variables in state can be defined by the
+        user.
 
         """
         state = {}
@@ -2517,8 +2549,10 @@ class Trainer:
         state["max_epochs"] = self.max_epochs
         state["max_iterations"] = self.max_iterations
         # CHECK: If there's a given_name
+        state["data"] = self.data_params.name
         state["given_name"] = getattr(self, "given_name", "")
-        return state
+        state["mode"] = "lite" if lite else "full"  # type: ignore
+        return TrainerState.parse_obj(state)
 
     def _save(self, save_path=None, best=False):
         if not save_path:
@@ -2533,68 +2567,68 @@ class Trainer:
         self._logd(f"Trying to save to {save_path}")
         save_state = self._get_state()
         self._logi(f"Saving to {save_path}")
+        torch.save(save_state, save_path)
+        # # FIXME: If some thing is not saved, it cannot be resumed also
+        # # NOTE: As I've removed callable saving from dataloader params,
+        # #       this should save now
+        # def try_save():
+        #     try:
+        #         torch.save(save_state, save_path)
+        #         not_saved = False
+        #     except Exception:
+        #         not_saved = True
+        #     return not_saved
+        # not_saved = try_save()
+        # while not_saved:
+        #     self.fix_state(save_state, save_path)
+        #     not_saved = try_save()
 
-        # FIXME: If some thing is not saved, it cannot be resumed also
-        # NOTE: As I've removed callable saving from dataloader params,
-        #       this should save now
-        def try_save():
-            try:
-                torch.save(save_state, save_path)
-                not_saved = False
-            except Exception:
-                not_saved = True
-            return not_saved
-        not_saved = try_save()
-        while not_saved:
-            self.fix_state(save_state, save_path)
-            not_saved = try_save()
+    # def fix_state(self, save_state: Dict, save_path: str):
+    #     """Fix serialization errors in trainer state.
 
-    def fix_state(self, save_state: Dict, save_path: str):
-        """Fix serialization errors in trainer state.
+    #     Used to save with :func:`torch.save`.
 
-        Used to save with :func:`torch.save`.
+    #     """
+    #     tmp_path = save_path + "_tmp"
 
-        """
-        tmp_path = save_path + "_tmp"
-
-        def find_error_key(state_dict):
-            for x in state_dict.keys():
-                try:
-                    torch.save(state_dict[x], tmp_path)
-                except Exception:
-                    return x
-            return None
-        state_dict = save_state
-        keys = []
-        while True:
-            error_key = find_error_key(state_dict)
-            if error_key is None:
-                break
-            else:
-                keys.append(error_key)
-                state_dict = state_dict[error_key]
-        x = save_state
-        if keys:
-            for key in keys[:-1]:
-                x = x[key]
-            x[keys[-1]] = type(x[keys[-1]]).__qualname__
-            self._logw(f"Value with keychain {keys} could not be saved." +
-                       f" Replaced with name = {x[keys[-1]]}")
-            if "not_saved" not in save_state:
-                save_state["not_saved"] = [keys]
-            else:
-                save_state["not_saved"].append(keys)
-            os.remove(tmp_path)
-        else:
-            self._logw(f"Nothing to fix in state")
+    #     def find_error_key(state_dict):
+    #         for x in state_dict.keys():
+    #             try:
+    #                 torch.save(state_dict[x], tmp_path)
+    #             except Exception:
+    #                 return x
+    #         return None
+    #     state_dict = save_state
+    #     keys = []
+    #     while True:
+    #         error_key = find_error_key(state_dict)
+    #         if error_key is None:
+    #             break
+    #         else:
+    #             keys.append(error_key)
+    #             state_dict = state_dict[error_key]
+    #     x = save_state
+    #     if keys:
+    #         for key in keys[:-1]:
+    #             x = x[key]
+    #         x[keys[-1]] = type(x[keys[-1]]).__qualname__
+    #         self._logw(f"Value with keychain {keys} could not be saved." +
+    #                    f" Replaced with name = {x[keys[-1]]}")
+    #         if "not_saved" not in save_state:
+    #             save_state["not_saved"] = [keys]
+    #         else:
+    #             save_state["not_saved"].append(keys)
+    #         os.remove(tmp_path)
+    #     else:
+    #         self._logw(f"Nothing to fix in state")
 
     # TODO: Right now, the list of saves and resume_path etc are given as full paths while
     #       they should be relative paths to .savedir/"_".join(model_names)
-    def _resume_from_path(self, resume_path):
+    def _resume_from_path(self, resume_path: PathType):
         saved_state = torch.load(resume_path)
         self._resume_from_state(saved_state)
 
-    def _resume_from_state(self, saved_state):
+    def _resume_from_state(self, saved_state: TrainerState) -> Return:
         """Resume the trainer from a given state.
 
         Trainer can only be resumed if the models and dataloaders are
@@ -2603,92 +2637,84 @@ class Trainer:
         can be changed in the resume state.
 
         """
+        if self._have_resumed:
+            make_return(False, "Already resumed")
         self._backup_state = self._get_state()
         self._have_resumed = True
-        diff = diff_as_sets(self._save_and_load_keys, saved_state.keys())
+        if isinstance(saved_state, dict):
+            saved_keys = saved_state.keys()
+        elif isinstance(saved_state, TrainerState):
+            saved_keys = saved_state.dict().keys()
+        else:
+            return reterr(self._loge("Unknown data for saved state. Could not load."))
+        diff = diff_as_sets(self._backup_state.dict().keys(), saved_keys)
         if diff:
-            return self._loge(f"Could not load saved_state. Missing keys {diff}")
-        data_name = saved_state["data"]["name"]
-        if data_name != self.data_params["name"]:
-            return self._loge("Cannot load saved_state, Different datasets: " +
-                              f"{data_name}, {self.data_params}")
-        diff = (diff_as_sets(self.models, saved_state["model_params"].keys()),
-                diff_as_sets(saved_state["model_params"].keys(), self.models))
-        if diff[0] or diff[1]:
-            return self._loge("Could not load saved_state. " +
-                              f"Models differ {diff}")
-        self.epoch = saved_state["epoch"]
-        self.iterations = saved_state["iterations"]
-        self.model_params = saved_state["model_params"]
-        self.criteria_params = saved_state["criteria_params"]
-        self._restore_dataloader_params(saved_state["dataloader_params"])
-        # NOTE: restore trainer_params
-        self._logd("Restoring trainer_params")
-        for k, v in saved_state["trainer_params"].items():
-            if isinstance(v, str) and v.startswith("callable_"):
-                self._logw(f"callable {k} not restored in trainer_params")
-            else:
-                self.trainer_params[k] = saved_state["trainer_params"][k]
-        # NOTE: sanity check after param updates
-        self._sanity_check()
-        # CHECK: Which models should be reinitialized?
-        self._init_device()
-        self._optimizers = saved_state["optimizers"]
-        status, message = self.load_models_state(saved_state["models"])
-        if not status:
-            self._rollback_resume()
-            return status, message
-        status, message = self._init_data_and_dataloaders()
-        if not status:
-            self._rollback_resume()
-            return status, message
-        # Only if criteria and/or optimizer have changed.  In fact, there might
-        # be a mismatch if criteria change suddenly as the model has changed,
-        # but resume_dict should not really be concerned about that, at
-        # least.
-        # self._init_criteria_optimizers()
-        # Only if new metrics are added and even then only update metrics
-        # NOTE: Other inits
-        self._init_metrics()
-        # Only if update_funcs are changed.
-        # In fact, this is not in saved state
-        self._init_update_funcs()
-        self._init_state_vars()
-        self._init_task_runners()
-        self._init_modules()
-
-        # NOTE: The model and optimizer checks are in `Model` now
-        # self._logd("Restoring models and optimizers")
-        # default = [*self._optimizers.keys()][0]
-        # for k in saved_state["models"].keys():
-        #     if "optimizer" in saved_state["models"][k]:
-        #         self._logw(f"Optimizer shouldn't be in saved_state for model {k}")
-        #         x = saved_state.pop("optimizer")
-        #         saved_state["models"][k]["optimizer_name"] = x
-        #     elif "optimizer_name" not in saved_state["models"][k]:
-        #         optim_name = default
-        #         self._logw(f"No optimizer_name in saved_state for model {k}. Using {default}")
-        #     else:
-        #         optim_name = saved_state["models"][k]["optimizer_name"]
-        #         if optim_name not in self._optimizers:
-        #             self._logw(f"{optim_name} not a known optimizer for model {k}. Using {default}")
-        #             optim_name = default
-        #     optim = self._optimizers[optim_name]
-        #     saved_state["models"][k]["optimizer_name"] = optim_name
-        #     saved_state["models"][k]["optimizer"] = optim["function"](self._models[k].parameters(),
-        #                                                               **optim["params"])
-        # self._models.load(saved_state["models"])
-
-        diff = set(self._metrics.keys()).difference(saved_state["metrics"].keys())
-        if diff:
-            self._logw(f"Some metric _steps_ aren't there in saved state {diff}")
-        for k in self._metrics.keys():
-            diff = set(self._metrics[k].keys()).difference(saved_state["metrics"][k].keys())
+            return reterr(self._loge(f"Could not load saved_state. Missing keys {diff}"))
+        if isinstance(saved_state, dict):
+            data_name = saved_state["data"]
+        else:
+            data_name = saved_state.data
+        if data_name != self.data_params.name:
+            return reterr(self._loge("Cannot load saved_state, Different datasets: " +
+                                     f"{data_name}, {self.data_params}"))
+        if isinstance(saved_state, dict):
+            saved_models = saved_state["models"].keys()
+        else:
+            saved_models = saved_state.models.keys()     # type: ignore
+        # TODO: Should allow extra models
+        diff = diff_as_sets(self.models, saved_models)  # type: ignore
+        if diff:  # type: ignore
+            return reterr(self._loge("Could not load saved_state. " +
+                                     f"Some required models not in saved state {diff}"))
+        if isinstance(saved_state, dict):
+            saved_dict = saved_state
+        else:
+            saved_dict = saved_state.dict()
+        try:
+            self._init_all()
+            for k, v in saved_dict.items():
+                if k == "models":
+                    for model, model_state in v.items():
+                        if model in self._models:
+                            self._models[model].load(v)
+                        # TODO: This has to be initialized manually as optimizer
+                        #       definition in case would be required.
+                        #
+                        # elif "model_def" in model_state:  # pickled state is error prone
+                        #     self._models[model] = Model.from_dump(model_state)
+                        else:
+                            self._logw(f"Model {model} has no definition. Will not add.")
+                elif k == "saves" and isinstance(v, dict):
+                    # write the files
+                    pass
+                elif k not in {"loaded_models", "active_model", "hooks", "devices",
+                               "saves", "metrics", "allocated_devices", "extra_metrics",
+                               "extra_items"}:
+                    # NOTE: state_vars
+                    setattr(self, k, v)
+            if saved_dict["extra_items"]:
+                for k, v in saved_dict["extra_items"].items():
+                    setattr(self, k, v)
+            # NOTE: restore metrics
+            diff = diff_as_sets(self._metrics.keys(), saved_dict["metrics"].keys())
             if diff:
-                self._logw(f"Some metrics {diff} in {k} aren't there in saved state")
-        self._logd("Restoring metrics")
-        self._metrics = copy.deepcopy(saved_state["metrics"])
-        self._logi("Resumed successfully")
+                self._logw(f"Some metric _steps_ aren't there in saved state {diff}")
+            for k in self._metrics.keys():
+                diff = diff_as_sets(self._metrics.keys(), saved_dict["metrics"][k].keys())
+                if diff:
+                    self._logw(f"Some metrics {diff} in {k} aren't there in saved state")
+            self._logd("Restoring metrics")
+            self._metrics = copy.deepcopy(saved_dict["metrics"])
+            status, message = True, self._logi("Resumed successfully")
+            self._dump_state()
+        except Exception as e:
+            status, message = False, f"Error occurred. {e}" + "\n" + traceback.format_exc()
+            self._rollback_resume()
+        return make_return(status, message)
+
+    def _rollback_resume(self):
+        self._init_all()
+        self._resume_from_state(self._backup_state)
 
     def check_and_save(self):
         if self._check_func is not None:
@@ -2980,15 +3006,11 @@ class Trainer:
         return self._current_state
 
     @prop                       # type: ignore
-    @state_var                  # type: ignore
     @property
     def loop_type(self) -> str:
         """Loop type determines if the training monitor number of epochs or number of batches.
         """
-        if "iterations" in self.trainer_params.training_steps:
-            return "iterations"
-        else:
-            return "epoch"
+        return self.trainer_params.training_type.value
 
     @property
     def logger(self):
@@ -3139,6 +3161,10 @@ class Trainer:
         "Max iterations to run if training type is iterations. See `loop_type`"
         return self.trainer_params.max_iterations or 0
 
+    @max_iterations.setter
+    def max_iterations(self, x: int):
+        self.config.trainer_params.max_iterations = x
+
     @prop                       # type: ignore
     @property
     def controls(self) -> Dict[str, Callable[[], str]]:
@@ -3282,27 +3308,25 @@ class Trainer:
             else:
                 return None
 
-    # Internal property. Will not be exposed outside
-    # @prop                       # type: ignore
     @property
     def _save_path_with_epoch(self):
+        given_name = getattr(self, "given_name", "")
         if "iterations" in self.trainer_params.training_steps:
             update_key = self.iterations / self._hooks_run_iter_frequency
         else:
             update_key = self.epoch
-        model_names = "_".join(self.models)
+        model_names = (given_name and (given_name + "_")) + "_".join(self.models)
         save_name = os.path.join(self._savedir, "_".join([model_names,
                                                           "{:03}".format(update_key)]))
         return save_name
 
-    # @prop                       # type: ignore
     @property
     def _save_path_without_epoch(self):
-        model_names = "_".join(self.models)
-        save_name = os.path.join(self._savedir, "_".join(model_names))
+        given_name = getattr(self, "given_name", "")
+        model_names = (given_name and (given_name + "_")) + "_".join(self.models)
+        save_name = os.path.join(self._savedir, model_names)
         return save_name
 
-    # @prop                       # type: ignore
     @property
     def _checkpoint_path(self):
         # model_names = "_".join(self._models.names)
@@ -3639,7 +3663,7 @@ class Trainer:
         :rtype: None
 
         """
-        loop_type = self.trainer_params.training_type.value
+        loop_type = self.loop_type
         self._logd(f"Beginning training. Loop type is {loop_type}.")
         if loop_type == "iterations":
             self._logd(f"Total number of iterations is {self.max_iterations}")

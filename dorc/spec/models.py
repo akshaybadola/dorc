@@ -60,10 +60,9 @@ def add_nullable(schema: Dict[str, Any], model: PydanticBaseModel) -> None:
         elif field.args_field and field.args_field.sub_fields is None:
             value["properties"]["args"] = {"type": "object"}
         elif field.args_field is not None:
-            add_nullable_subroutine(field.args_field, value["properties"]["args"],
-                                    process_all)
+            add_nullable_subroutine(field.args_field, value["properties"]["args"], True)
         if field.ret_field is not None:
-            add_nullable_subroutine(field.ret_field, value["properties"]["retval"])
+            add_nullable_subroutine(field.ret_field, value["properties"]["retval"], True)
     for prop, value in schema.get('properties', {}).items():
         field = [x for x in model.__fields__.values() if x.alias == prop][0]
         pa = 'x-type' in value and value['x-type'] == "function"

@@ -44,30 +44,25 @@ def test_trainer_init_data_good_params_dict(trainer):
     assert isinstance(iter(trainer.train_loader).__next__()[0], torch.Tensor)
 
 
-# # TODO
-# @pytest.mark.quick
-# def test_trainer_init_custom_loader_good_params(params_and_trainer):
-#     # inject custom loader with bad params
-#     params, trainer = params_and_trainer
-#     trainer._init_device()
-#     trainer._init_models()
-#     trainer._init_data_and_dataloaders()
+@pytest.mark.quick
+@pytest.mark.todo
+def test_trainer_init_custom_loader_good_params(params_and_trainer):
+    # inject custom loader with bad params
+    params, trainer = params_and_trainer
+    pass
+
+@pytest.mark.quick
+@pytest.mark.todo
+def test_trainer_init_custom_loader_bad_params(params_and_trainer):
+    # inject custom loader with bad params
+    params, trainer = params_and_trainer
+    pass
 
 
-# # TODO
-# @pytest.mark.quick
-# def test_trainer_init_custom_loader_bad_params(params_and_trainer):
-#     # inject custom loader with bad params
-#     params, trainer = params_and_trainer
-#     trainer._init_device()
-#     trainer._init_models()
-#     trainer._init_data_and_dataloaders()
-
-
-# # TODO
-# @pytest.mark.quick
-# def test_trainer_init_data_check_raw(params_and_trainer):
-#     pass
+@pytest.mark.todo
+@pytest.mark.quick
+def test_trainer_init_data_check_raw(params_and_trainer):
+    pass
 
 
 @pytest.mark.quick
@@ -202,32 +197,43 @@ def test_trainer_init_and_dump_state(params_and_trainer):
     assert os.path.exists(state_file)
     with open(state_file) as f:
         state = json.load(f)
-    assert "epoch" in state
-    assert "max_epochs" in state
-    assert "iterations" in state
-    assert "max_iterations" in state
-    assert "given_name" in state
+    from dorc.trainer import TrainerState
+    TrainerState.parse_obj(state)
 
 
-# TODO
-# @pytest.mark.quick
-# def test_trainer_init_state_vars(params_and_trainer):
-#     params, trainer = params_and_trainer
+@pytest.mark.todo
+@pytest.mark.quick
+def test_trainer_init_state_vars(params_and_trainer):
+    params, trainer = params_and_trainer
 
-#     def dummy_func(loss, epoch):
-#         return (epoch, loss ** 2)
+    def dummy_func(loss, epoch):
+        return (epoch, loss ** 2)
 
-#     params["extra_metrics"] = {'awesome_metric':
-#                                {"steps": ["train", "test"],
-#                                 "function": dummy_func,
-#                                 "inputs": ["epoch", "loss"],
-#                                 "when": "EPOCH"}}
-#     trainer = Trainer(**params)
-#     trainer._init_device()
-#     trainer._init_models()
-#     trainer._init_data_and_dataloaders()
-#     trainer._init_update_funcs()
-#     trainer._init_training_steps()
-#     trainer._init_metrics()
-#     trainer._init_state_vars()
-#     # TODO: assert stuff about the state
+    params["extra_metrics"] = {'awesome_metric':
+                               {"steps": ["train", "test"],
+                                "function": dummy_func,
+                                "inputs": ["epoch", "loss"],
+                                "when": "EPOCH"}}
+    trainer = Trainer(**params)
+    trainer._init_device()
+    trainer._init_models()
+    trainer._init_data_and_dataloaders()
+    trainer._init_update_funcs()
+    trainer._init_training_steps()
+    trainer._init_metrics()
+    trainer._init_state_vars()
+    # TODO: assert stuff about the state
+
+
+@pytest.mark.todo
+@pytest.mark.quick
+def test_trainer_init_resume_or_init(params_and_trainer):
+    params, trainer = params_and_trainer
+    # import pytest; pytest.set_trace()
+
+
+@pytest.mark.todo
+@pytest.mark.quick
+def test_trainer_init_hooks(params_and_trainer):
+    params, trainer = params_and_trainer
+    # import pytest; pytest.set_trace()

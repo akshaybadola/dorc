@@ -11,6 +11,8 @@ if __name__ == '__main__':
     parser.add_argument("hostname", type=str)
     parser.add_argument("port", type=int)
     parser.add_argument("data_dir", type=str)
+    parser.add_argument("gmods_dir", type=str)
+    parser.add_argument("gdata_dir", type=str)
     parser.add_argument("--config-overrides", type=str, default="False")
     args, _ = parser.parse_known_args()
     hostname = args.hostname
@@ -24,6 +26,7 @@ if __name__ == '__main__':
     else:
         print("NO CONFIG OVERRIDES")
         config = None
-    sys.path.append(os.path.join(data_dir, "..", ".."))
+    # sys.path.append(os.path.join(data_dir, "..", ".."))
     sys.argv = [sys.argv[0]]
-    FlaskInterface(hostname, port, data_dir, config_overrides=config)
+    FlaskInterface(hostname, port, data_dir, args.gmods_dir, args.gdata_dir,
+                   config_overrides=config)

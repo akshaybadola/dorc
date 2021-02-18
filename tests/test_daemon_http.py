@@ -4,6 +4,7 @@ import json
 import requests
 from dorc.util import make_test_daemon
 from util import _create_session, assertIn
+from dorc.daemon.models import SessionMethodResponseModel as smod
 
 
 @pytest.mark.http
@@ -56,12 +57,10 @@ def test_daemon_http_load_unload_session(daemon_and_cookies, json_config):
     assert isinstance(response, dict)
     key = [*response.keys()][-1]
     assert response[key]["loaded"]
-    response = requests.request("POST", host + "unload_session",
-                                json=json.dumps({"session_key": key}),
-                                cookies=cookies)
-    status, resp = json.loads(response.content)
-    task_id = resp["task_id"]
-    response = requests.request("GET", host + f"check_task?task_id={task_id}",
+    response = requests.get(host + f"unload_session?session_key={key}",
+                            cookies=cookies)
+    result = smod.parse_obj(json.loads(response.content))
+    response = requests.request("GET", host + f"check_task?task_id={result.task_id}",
                                 cookies=cookies)
     response = json.loads(response.content)
     assertIn("task_id", response)
@@ -81,12 +80,10 @@ def test_daemon_http_unload_then_load_session(daemon_and_cookies, json_config):
     assert isinstance(response, dict)
     key = [*response.keys()][-1]
     assert response[key]["loaded"]
-    response = requests.request("POST", host + "unload_session",
-                                json=json.dumps({"session_key": key}),
-                                cookies=cookies)
-    status, resp = json.loads(response.content)
-    task_id = resp["task_id"]
-    response = requests.request("GET", host + f"check_task?task_id={task_id}",
+    response = requests.get(host + f"unload_session?session_key={key}",
+                            cookies=cookies)
+    result = smod.parse_obj(json.loads(response.content))
+    response = requests.request("GET", host + f"check_task?task_id={result.task_id}",
                                 cookies=cookies)
     response = json.loads(response.content)
     assertIn("task_id", response)
@@ -95,14 +92,13 @@ def test_daemon_http_unload_then_load_session(daemon_and_cookies, json_config):
     response = requests.request("POST", host + "load_session",
                                 json=json.dumps({"session_key": key}),
                                 cookies=cookies)
-    assertIn("task_id", json.loads(response.content)[1])
-    task_id = json.loads(response.content)[1]["task_id"]
+    result = smod.parse_obj(json.loads(response.content))
     time.sleep(1)
-    response = requests.request("GET", host + f"check_task?task_id={task_id}",
+    response = requests.request("GET", host + f"check_task?task_id={result.task_id}",
                                 cookies=cookies)
     while "not yet" in json.loads(response.content)["message"].lower():
         time.sleep(1)
-        response = requests.request("GET", host + f"check_task?task_id={task_id}",
+        response = requests.request("GET", host + f"check_task?task_id={result.task_id}",
                                     cookies=cookies)
     response = requests.get(host + "sessions", cookies=cookies)
     sessions = json.loads(response.content)

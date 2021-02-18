@@ -3,6 +3,7 @@ import traceback
 from flask import request, Response
 from flask.views import MethodView
 from flask_login import login_required
+from flask_pydantic import validate
 
 from ..util import make_json
 
@@ -15,6 +16,7 @@ class Sessions(MethodView):
     def __init__(self, daemon):
         self.daemon = daemon
 
+    @validate()
     def get(self) -> Response:
         """GET the sessions list.
 
@@ -29,7 +31,7 @@ class Sessions(MethodView):
 
         Schemas:
             class Success(BaseModel):
-                default: :attr:`~daemon.Daemon.sessions_list`.returns
+                default: :attr:`daemon.Daemon.sessions_list`.returns
 
         Responses:
             failure: ResponseSchema(404, "No such session", MimeTypes.text,
@@ -44,11 +46,11 @@ class Sessions(MethodView):
         sess_list = self.daemon.sessions_list
         if name:
             name = name.strip()
-            sessions = {k: v for k, v in sess_list.items()
+            sessions = {k: v.dict() for k, v in sess_list.items()
                         if k.startswith(name)}
             if sessions:
                 return make_json(sessions)
             else:
                 return Response(f"No session found with name: {name}", 404)
         else:
-            return sess_list
+            return make_json({k: v.dict() for k, v in sess_list.items()})

@@ -6,6 +6,7 @@ from dorc.spec.models import (BaseModel, ModelNoTitleNoRequiredNoPropTitle,
 from dorc.spec.schemas import ResponseSchema
 from dorc import daemon, trainer, interfaces
 from dorc import spec
+from dorc.spec import parser
 from dorc.spec import docstring
 
 
@@ -166,29 +167,29 @@ def bleh_annot():
 
 @pytest.mark.spec
 def test_get_opId():
-    assert spec.get_opId("/path/get_stuff", bleh_annot, None,
-                         ["task_id", "op_id"], "GET",
-                         "[__%M%r%n]__[_%p]__%H", {}) == 'TestSpec__get_stuff__task_id_op_id__GET'
-    assert spec.get_opId("/path/get_stuff", bleh_annot, None,
-                         ["task_id", "op_id"], "GET",
-                         "[__%m%r%n]__[_%p]__%H", {}) == 'testSpec__get_stuff__task_id_op_id__GET'
-    assert spec.get_opId("/path/get_stuff", bleh_annot, None,
-                         ["task_id", "op_id"], "GET",
-                         "[__%C%r%n]__[_%p]__%H", {}) == 'get_stuff__task_id_op_id__GET'
-    assert spec.get_opId("/path/get_stuff", bleh_annot, None,
-                         ["task_id", "op_id"], "GET",
-                         "[__%C%f%r%n]__[_%p]__%H", {}) ==\
-                         'bleh_annot__get_stuff__task_id_op_id__GET'
-    assert spec.get_opId("/path/get_stuff", bleh_annot, None,
-                         ["task_id", "op_id"], "GET",
-                         "[__%C%F%r%n]__[_%p]__%H", {}) ==\
-                         'Bleh_annot__get_stuff__task_id_op_id__GET'
-    assert spec.get_opId("/path/create_session", daemon.Daemon.create_session, None,
-                         [], "GET", "[__%M%C%f%r%n]__[_%p]__%H", {}) ==\
-                         'Dorc.Daemon__Daemon__create_session____GET'
-    assert spec.get_opId("/path/create_session", daemon.Daemon.create_session, None,
-                         [], "GET", "[_%C%f%r]%H", {}) ==\
-                         'Daemon_create_sessionGET'
+    assert parser.get_opId("/path/get_stuff", bleh_annot, None,
+                           ["task_id", "op_id"], "GET",
+                           "[__%M%r%n]__[_%p]__%H", {}) == 'TestSpec__get_stuff__task_id_op_id__GET'
+    assert parser.get_opId("/path/get_stuff", bleh_annot, None,
+                           ["task_id", "op_id"], "GET",
+                           "[__%m%r%n]__[_%p]__%H", {}) == 'testSpec__get_stuff__task_id_op_id__GET'
+    assert parser.get_opId("/path/get_stuff", bleh_annot, None,
+                           ["task_id", "op_id"], "GET",
+                           "[__%C%r%n]__[_%p]__%H", {}) == 'get_stuff__task_id_op_id__GET'
+    assert parser.get_opId("/path/get_stuff", bleh_annot, None,
+                           ["task_id", "op_id"], "GET",
+                           "[__%C%f%r%n]__[_%p]__%H", {}) ==\
+                           'bleh_annot__get_stuff__task_id_op_id__GET'
+    assert parser.get_opId("/path/get_stuff", bleh_annot, None,
+                           ["task_id", "op_id"], "GET",
+                           "[__%C%F%r%n]__[_%p]__%H", {}) ==\
+                           'Bleh_annot__get_stuff__task_id_op_id__GET'
+    assert parser.get_opId("/path/create_session", daemon.Daemon.create_session, None,
+                           [], "GET", "[__%M%C%f%r%n]__[_%p]__%H", {}) ==\
+                           'Dorc.Daemon__Daemon__create_session____GET'
+    assert parser.get_opId("/path/create_session", daemon.Daemon.create_session, None,
+                           [], "GET", "[_%C%f%r]%H", {}) ==\
+                           'Daemon_create_sessionGET'
 
 
 @pytest.mark.spec
@@ -233,27 +234,27 @@ def test_get_requests():
 @pytest.mark.spec
 def test_check_for_redirects():
     check_str = ':meth:`daemon.Daemon._reinit_session_helper`: ReinitSessionModel'
-    func, attr = spec.check_for_redirects(check_str, bleh)
+    func, attr = parser.check_for_redirects(check_str, bleh)
     assert func == daemon.Daemon._reinit_session_helper
     assert attr == "ReinitSessionModel"
     check_str = ':func:`test_check_for_redirects`'
-    func, attr = spec.check_for_redirects(check_str, bleh)
+    func, attr = parser.check_for_redirects(check_str, bleh)
     assert func == test_check_for_redirects
     assert attr == "return"
 
 
 @pytest.mark.spec
 def test_get_request_body():
-    request = spec.get_requests(bleh, "GET", "")
+    request = parser.get_requests(bleh, "GET", "")
     assert request['content-type'] == 'MimeTypes.json'
     assert "body" in request
-    body = spec.join_subsection(request["body"])
+    body = parser.join_subsection(request["body"])
     assert len(body) == 3
     splits = [x.split(":", 1)[0].strip() for x in body]
     assert 'session_key' in splits
     assert 'data' in splits
     assert 'some_other_shit' in splits
-    body = spec.get_request_body(request["body"], bleh)
+    body = parser.get_request_body(request["body"], bleh)
     props = body['properties']
     assert 'session_key' in props
     assert 'data' in props
@@ -270,10 +271,10 @@ def test_get_request_body():
 
 @pytest.mark.spec
 def test_get_request_body_from_annotations():
-    request = spec.get_requests(bleh_annot, "GET", "")
+    request = parser.get_requests(bleh_annot, "GET", "")
     assert request['content-type'] == 'MimeTypes.json'
     assert "body" in request
-    body = spec.get_request_body(request["body"], bleh_annot)
+    body = parser.get_request_body(request["body"], bleh_annot)
     assert "some_attr" in body["properties"]
     # TODO: Check for attributes in body by redirect to '$ref'
 

@@ -332,21 +332,31 @@ class CallableModel(TCallable):
         )
 
 
-# class TrainerState(BaseModel):
-#     """Config for the state returned by :meth:`Trainer._get_state`
+class StateEnum(str, Enum):
+    lite = "lite"
+    full = "full"
+    complete = "complete"
 
-#     Args:
-#         epoch: current epoch
-#         given_name: If a name has been assigned to the trainer(session)
-#         iterations: Current iterations
-#         models: Names or full model dictionary
-#         metrics: Metrics
-#     """
-#     epoch: int
-#     given_name: str
-#     iterations: int
-#     models: Union[List[str], Dict[str, Any]]
-#     metrics: Dict[str, Dict[str, Any]]
+
+class TrainerState(BaseModel):
+    """Config for the state returned by :meth:`Trainer._get_state`"""
+    mode: StateEnum
+    epoch: int
+    max_epochs: int
+    given_name: str
+    iterations: int
+    max_iterations: int
+    saves: Union[List[str], Dict[str, str]]  # name or dict of save file
+    devices: Dict[str, List[int]]
+    allocated_devices: List[int]
+    active_model: str
+    loaded_models: Union[List[str], Dict[str, Any]]
+    models: Union[List[str], Dict[str, Any]]
+    metrics: Dict[str, Dict[str, Any]]
+    extra_metrics: Dict[str, Dict[str, Any]]
+    data: str
+    hooks: List[str]            # Dict[str, Dict[str, Any]]
+    extra_items: Optional[Dict]
 
 
 class Return(BaseModel):

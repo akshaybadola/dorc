@@ -1,4 +1,5 @@
 import sys
+import random
 import shutil
 import datetime
 import os
@@ -42,8 +43,15 @@ def trainer(json_config):
     os.mkdir(".test_dir/test_session")
     time_str = datetime.datetime.now().isoformat()
     data_dir = f".test_dir/test_session/{time_str}"
+    gmods_dir = os.path.abspath(".test_dir/global_modules")
+    gdata_dir = os.path.abspath(".test_dir/global_datasets")
+    os.mkdir(gmods_dir)
+    os.mkdir(gdata_dir)
     os.mkdir(data_dir)
-    tlayer = TranslationLayer(config, data_dir)
+    extra_opts = {"data_dir": data_dir,
+                  "global_modules_dir": gmods_dir,
+                  "global_datasets_dir": gdata_dir}
+    tlayer = TranslationLayer(config, extra_opts)
     test_config = tlayer.from_json()
     test_config.pop("model_step_params")
     return Trainer(**test_config)
@@ -77,10 +85,15 @@ def params_and_trainer(setup_and_net):
         shutil.rmtree(".test_dir")
     os.mkdir(".test_dir")
     os.mkdir(".test_dir/test_session")
+    gmods_dir = os.path.abspath(".test_dir/global_modules")
+    gdata_dir = os.path.abspath(".test_dir/global_datasets")
+    os.mkdir(gmods_dir)
+    os.mkdir(gdata_dir)
     time_str = datetime.datetime.now().isoformat()
     os.mkdir(f".test_dir/test_session/{time_str}")
-    data_dir = f".test_dir/test_session/{time_str}"
-    params = {"data_dir": data_dir, **config}
+    data_dir = os.path.abspath(f".test_dir/test_session/{time_str}")
+    params = {"data_dir": data_dir, "global_modules_dir": gmods_dir,
+              "global_datasets_dir": gdata_dir, **config}
     yield (params, Trainer(**params))
     shutil.rmtree(".test_dir")
 
@@ -90,23 +103,28 @@ def params_and_iface():
     importlib.reload(_setup)
     config = _setup.config.copy()
     hostname = "127.0.0.1"
-    port = 12321
-    root_dir = ".test_dir"
+    port = random.randint(12321, 19321)
+    root_dir = os.path.abspath(".test_dir")
     data_dir = os.path.join(".test_dir", "test_iface", datetime.datetime.now().isoformat())
     host = "http://" + ":".join([hostname, str(port)]) + "/"
     if os.path.exists(data_dir):
         shutil.rmtree(data_dir)
     os.makedirs(data_dir)
-    create_module(os.path.abspath(os.path.join(root_dir, "global_modules")),
-                  [os.path.abspath("../dorc/autoloads.py")])
+    gmods_dir = os.path.join(root_dir, "global_modules")
+    gdata_dir = os.path.join(root_dir, "global_datasets")
+    create_module(gmods_dir, [os.path.abspath("../dorc/autoloads.py")])
+    create_module(gdata_dir)
     sys.path.append(os.path.abspath(root_dir))
-    iface = FlaskInterface(hostname, port, data_dir, no_start=True)
+    iface = FlaskInterface(hostname, port, data_dir, gmods_dir, gdata_dir, no_start=True)
     # from global_modules import autoloads
     status, message = iface.create_trainer(config)
     iface_thread = Thread(target=iface.start)
     iface_thread.start()
     time.sleep(1)
-    yield ({"config": config, "host": host, "data_dir": data_dir}, iface)
+    yield ({"config": config, "host": host,
+            "gmods_dir": gmods_dir,
+            "gdata_dir": gdata_dir,
+            "data_dir": data_dir}, iface)
     requests.get(host + "_shutdown")
     shutil.rmtree(".test_dir")
 
@@ -163,4 +181,6 @@ def basic_config(setup_and_net):
                                  data_params=data_params,
                                  extra_metrics=extra_metrics,
                                  dataloader_params=dataloader_params,
-                                 data_dir=Path("."))
+                                 data_dir=Path("."),
+                                 global_modules_dir=Path("."),
+                                 global_datasets_dir=Path("."))

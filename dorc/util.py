@@ -162,7 +162,7 @@ def stop_test_daemon(port=23232):
 
 def make_test_daemon(hostname="127.0.0.1", port=23232,
                      root_dir=".test_dir", name="test_daemon",
-                     get_cookies=False):
+                     get_cookies=False, no_clear=False):
     import requests
     from .daemon import Daemon
 
@@ -177,7 +177,7 @@ def make_test_daemon(hostname="127.0.0.1", port=23232,
             time.sleep(1)
     except requests.ConnectionError:
         pass
-    if os.path.exists(root_dir):
+    if os.path.exists(root_dir) and not no_clear:
         shutil.rmtree(root_dir)
     if not os.path.exists(root_dir):
         os.mkdir(root_dir)
@@ -205,14 +205,26 @@ def make_test_interface(setup_path, autoloads_path):
         shutil.rmtree(data_dir)
     if not os.path.exists(data_dir):
         os.mkdir(data_dir)
-    iface = FlaskInterface(hostname, port, data_dir, no_start=True)
-    create_module(os.path.abspath(os.path.join(data_dir, "global_modules")),
+    gmods_dir = os.path.abspath(os.path.join(data_dir, "global_modules"))
+    gdata_dir = os.path.abspath(os.path.join(data_dir, "global_datasets"))
+    create_module(gmods_dir,
                   [os.path.abspath(autoloads_path)])
+    create_module(gdata_dir)
     sys.path.append(os.path.abspath(data_dir))
-    with open(setup_path, "rb") as f:
-        f_bytes = f.read()
-        status, message = iface.create_trainer(f_bytes)
-    iface_thread = Thread(target=iface.start)
+    iface = FlaskInterface(hostname, port, data_dir, gmods_dir, gdata_dir, no_start=True)
+    setup_dir = os.path.dirname(setup_path)
+    sys.path.append(setup_dir)
+    sfile = setup_path.split("/")[-1].replace(".py", "")
+    ldict = {}
+    exec(f"from {sfile} import config", globals(), ldict)
+    config = ldict["config"]
+    sys.path.remove(setup_dir)
+    status, message = iface.create_trainer(config)
+    if status:
+        iface_thread = Thread(target=iface.start)
+    else:
+        print("Could not create trainer")
+        sys.exit(1)
     iface_thread.start()
     time.sleep(1)
     return iface
@@ -247,8 +259,8 @@ def recurse_multi_dict(jdict: Dict[str, Any],
                        repls: Dict[str, Callable[[str], str]]) -> Dict[str, Any]:
     """Recurse over a :class:`dict` and perform replacement.
 
-    This function replaces the values of the dictionary in place. Used to
-    fix the generated schema :class:`dict`.
+    This function replaces the values of the dictionary in place. It's used to
+    fix the generated OpenAPI schema
 
     Args:
         jdict: A dictionary
@@ -280,7 +292,8 @@ def recurse_multi_dict(jdict: Dict[str, Any],
 
 def recurse_dict(jdict: Dict[str, Any],
                  pred: Callable[[str, Any], bool],
-                 repl: Callable[[str, str], str]) -> Dict[str, Any]:
+                 repl: Callable[[str, str], str],
+                 repl_only: bool = False) -> Dict[str, Any]:
     """Recurse over a :class:`dict` and perform replacement.
 
     This function replaces the values of the dictionary in place. Used to
@@ -301,14 +314,16 @@ def recurse_dict(jdict: Dict[str, Any],
         for k, v in jdict.items():
             if pred(k, v):
                 jdict[k] = repl(k, v)
+                if repl_only:
+                    continue
             if isinstance(v, dict):
-                jdict[k] = recurse_dict(v, pred, repl)
+                jdict[k] = recurse_dict(v, pred, repl, repl_only)
             if isinstance(v, list):
                 for i, item in enumerate(v):
-                    v[i] = recurse_dict(item, pred, repl)
+                    v[i] = recurse_dict(item, pred, repl, repl_only)
     elif isinstance(jdict, list):
         for i, item in enumerate(jdict):
-            jdict[i] = recurse_dict(item, pred, repl)
+            jdict[i] = recurse_dict(item, pred, repl, repl_only)
     return jdict
 
 

@@ -1,7 +1,6 @@
 from typing import List, Dict, Iterable, Any, Union, Tuple, Callable, Optional
-from ..trainer import config
-from ..spec.models import BaseModel as SpecModel
-import numpy
+from ..spec.models import add_nullable, remove_prop_titles, BaseModel as SpecModel
+from ..trainer.models import TrainerState
 
 
 class BaseModel(SpecModel):
@@ -10,16 +9,19 @@ class BaseModel(SpecModel):
         validate_assignment = True
 
         @staticmethod
-        def schema_extra(schema: Dict[str, Any]) -> None:
-            for prop in schema.get('properties', {}).values():
-                prop.pop('title', None)
+        def schema_extra(schema: Dict[str, Any], model) -> None:
+            add_nullable(schema, model)
 
 
 class Session(BaseModel):
     loaded: bool
-    port: int
-    state: Dict[str, Any]
+    port: Optional[int]
+    state: TrainerState
     finished: bool
+
+
+class Sessions(BaseModel):
+    default: Union[str, Dict[str, Session]]
 
 
 class CreateSessionModel(BaseModel):
@@ -41,6 +43,6 @@ class CreateSessionModel(BaseModel):
 
 
 class SessionMethodResponseModel(BaseModel):
-    result: bool
+    status: bool
     message: str
     task_id: int

@@ -2,6 +2,7 @@ import os
 import sys
 import argparse
 import configargparse
+import dorc
 from . import daemon
 from . import interfaces
 from . import trainer
@@ -14,7 +15,7 @@ def generate_spec(arglist):
     import yaml
 
     from . import util
-    from .spec import openapi_spec, fix_yaml_references
+    from .spec import openapi_spec, fix_yaml_references, fix_redundancies
 
     parser = argparse.ArgumentParser("OpenAPI Spec Generator",
                                      formatter_class=argparse.RawTextHelpFormatter)
@@ -74,12 +75,16 @@ def generate_spec(arglist):
         else:
             aliases = {}
         out, err, ex = openapi_spec(dmn.app, excludes, args.gen_opid,
-                                    args.opid_template, {"trainer": trainer,
+                                    args.opid_template, {"dorc": dorc,
+                                                         "trainer": trainer,
                                                          "daemon": daemon,
                                                          "interfaces": interfaces},
                                     [trainer.models.Return,
                                      trainer.models.ReturnBinary,
-                                     trainer.models.ReturnExtraInfo],
+                                     trainer.models.ReturnExtraInfo,
+                                     dorc.daemon.models.Session,
+                                     dorc.daemon.models.SessionMethodResponseModel,
+                                     dorc.daemon.models.CreateSessionModel],
                                     aliases)
         out_str = fix_yaml_references(yaml.safe_dump(out))
         with open(fname, "w") as f:
@@ -90,7 +95,7 @@ def generate_spec(arglist):
     if args.interface:
         fname = args.interface_spec
         setup_path = os.path.join(os.path.dirname(
-            os.path.abspath(__file__)), "../tests/_setup_local.py")
+            os.path.abspath(__file__)), "../tests/_setup.py")
         autoloads_path = os.path.join(os.path.dirname(
             os.path.abspath(__file__)), "autoloads.py")
         iface = util.make_test_interface(setup_path, autoloads_path)
@@ -103,7 +108,8 @@ def generate_spec(arglist):
         else:
             aliases = {}
         out, err, ex = openapi_spec(iface.app, excludes, args.gen_opid,
-                                    args.opid_template, {"trainer": trainer,
+                                    args.opid_template, {"dorc": dorc,
+                                                         "trainer": trainer,
                                                          "daemon": daemon,
                                                          "interfaces": interfaces},
                                     [trainer.models.Return,

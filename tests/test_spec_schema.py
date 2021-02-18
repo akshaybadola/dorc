@@ -1,5 +1,5 @@
 import pytest
-from typing import Union, List, Callable, Dict, Optional
+from typing import Union, List, Callable, Dict, Optional, Any
 from dorc.spec.models import BaseModel
 from dorc.util import dget
 
@@ -86,6 +86,34 @@ def test_callable_with_nullable_simple_args():
 
 
 @pytest.mark.spec
+def test_callable_with_nullable_args_inside_strucutre():
+    class DictArgs(BaseModel):
+        func: Dict[str, Callable[[Optional[int]], None]]
+    schema = DictArgs.schema()
+    assert dget(schema, "properties", "func", "additionalProperties")
+    func = dget(schema, "properties", "func", "additionalProperties")
+    assert "x-type" in func and func["x-type"] == "function"
+    assert dget(func, "properties", "args", "type") == "object"
+    assert 0 in dget(func, "properties", "args", "properties")
+    assert dget(func, "properties", "args", "properties", 0, "nullable")
+    assert dget(func, "properties", "args", "properties", 0, "type") == "integer"
+    assert dget(func, "properties", "retval", "nullable")
+
+
+@pytest.mark.spec
+def test_callable_with_one_any_arg():
+    class DictArgs(BaseModel):
+        func: Callable[[Any], None]
+    schema = DictArgs.schema()
+    assert dget(schema, "properties", "func", "properties", "args", "type") == "object"
+    assert dget(schema, "properties", "func",
+                "properties", "args", "properties").keys() == {0}
+    assert dget(schema, "properties", "func",
+                "properties", "args", "properties", 0, "nullable")
+    assert dget(schema, "properties", "func", "properties", "retval", "nullable")
+
+
+@pytest.mark.spec
 def test_callable_with_nullable_recurse_args():
     class RecurseArgs(BaseModel):
         func: Callable[[int, int, Callable[[int], None]], None]
@@ -100,3 +128,19 @@ def test_callable_with_nullable_recurse_args():
     assert dget(func_arg, "properties", "args", "properties",
                 0, "type") == "integer"
     assert dget(func_arg, "properties", "retval", "nullable")
+
+# importlib.reload(models)
+# class UpdateFunctionsParams(models.BaseModel):
+#     models: List[str]
+#     criteria_map: Dict[str, str]
+#     checks: Dict[str, Callable[[Optional[int]], bool]]
+#     logs: List[str]
+# yaml.dump(UpdateFunctionsParams.schema(), sys.stdout)
+
+# importlib.reload(models)
+# class UpdateFunctionsParams(models.BaseModel):
+#     models: List[str]
+#     criteria_map: Dict[str, str]
+#     checks: Dict[str, Dict[int, Optional[bool]]]
+#     logs: List[Optional[str]]
+# yaml.dump(UpdateFunctionsParams.schema(), sys.stdout)

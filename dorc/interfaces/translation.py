@@ -20,7 +20,7 @@ class TranslationLayer:
 
     We'll define a simple mechanism to translate such objects from/JSON.
     """
-    def __init__(self, jdict: Union[Dict, str], data_dir: str):
+    def __init__(self, jdict: Union[Dict, str], extra_opts: Dict[str, Any] = {}):
         if isinstance(jdict, dict):
             self.jdict = jdict.copy()
         else:
@@ -32,7 +32,7 @@ class TranslationLayer:
         else:
             self.modules = {}
         self.patched = None
-        self.data_dir = data_dir
+        self.extra_opts = extra_opts
 
     def from_json(self):
         if self.patched is None:
@@ -61,7 +61,7 @@ class TranslationLayer:
             function=config["model_step_params"]["function"],
             params=update_func_params)
         config["update_functions"] = update_functions
-        config["data_dir"] = self.data_dir
+        config.update(self.extra_opts)
         return config
 
     def convert_annotations(self, annot: dict):

@@ -57,3 +57,13 @@
 ## [2021-02-16 Tue 16:31]
 - Added [Flask-Pydantic](https://github.com/bauerji/flask_pydantic) to requirements.
 - Added `@validate` to a couple of daemon routes.
+
+## [2021-02-18 Thu 08:57]
+- Fixed some `spec` issues.
+- Separated `parser.py` from `spec.__init__.py`
+- Fixed a lot of daemon and trainer bugs.
+- Interface runner `if_run.py` accepts `gmods_dir` and `gdata_dir` as args now.
+- Enhancements to `dorc.mods.Module`
+- Defined `TrainerState` schema and integrated with daemon.
+- Fixed trainer load, save and resume functions.
+- Changed the tests to run all of them

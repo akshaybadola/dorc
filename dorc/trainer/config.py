@@ -281,19 +281,21 @@ class TrainerParams(BaseModel):
         check_func: FIXME Don't recall what this does
         max_epochs: Maximum epochs to train
         load_all: Load all models into memory
-                  If false, only the models which have `load == True` will be loaded.
-        max_iterations: Maximum iterations to train if training with `iterations`
-        training_steps: Training steps (usually `[train, val, test]`)
-        training_type: Type of training loop `iterations` or `epoch`
+                  If false, only the models which have :code:`load == True` will be loaded.
+        max_iterations: Maximum iterations to train if training with :code:`iterations`
+        training_steps: Training steps (usually :code:`[train, val, test]`)
+        training_type: Type of training loop :attr:`~dorc.trainer.Trainer.iterations`
+                       or :attr:`~dorc.trainer.Trainer.epoch`
 
-    The behaviour of resuming from a previous state depends on both `resume` and
-    the params given. In case `init_weights` are given then `resume` need not be
-    `True`, the weights are loaded into the corresponsding models and the
+    The behaviour of resuming from a previous state depends on both :code:`resume` and
+    the params given. In case :code:`init_weights` are given then :code:`resume` need not be
+    :code:`True`, the weights are loaded into the corresponsding models and the
     trainer starts from beginning.
 
-    If however, `resume` is `True` then `resume_bset` is checked first and
-    `trainer._resume_path` is set to that. Otherwise if `resume_dict` is
-    given, then the state (including model weights) is resumed from there.
+    If however, :code:`resume` is :code:`True` then :code:`resume_best` is
+    checked first and :code:`trainer._resume_path` is set to that. Otherwise if
+    :code:`resume_dict` is given, then the state (including model weights) is
+    resumed from there.
 
     Otherwise we resume from the last checkpoint.
 
@@ -427,6 +429,8 @@ class Config(PydanticBaseModel):
         dataloader_params: Instance of :class:`DataLoaderParams`
         extra_metrics: Dictionary mapping metric names to instances of :class:`Metric`
         data_dir: Path where all the trainer state will be stored
+        global_modules_dir: Path of the global modules shared across sessions
+        global_datasets_dir: Path of the global datasets shared across sessions
 
     """
     model_params: Dict[str, ModelParams]
@@ -438,8 +442,10 @@ class Config(PydanticBaseModel):
     data_params: DataParams
     extra_metrics: Dict[str, Metric]
     dataloader_params: DataLoaderParams
-    # NOTE: data_dir is given by interface
+    # NOTE: following is given by interface
     data_dir: Path
+    global_modules_dir: Path
+    global_datasets_dir: Path
 
     @validator("model_params")
     def model_params_must_not_be_empty(cls, v):
@@ -455,6 +461,7 @@ class Config(PydanticBaseModel):
         return v
 
     class Config:
+        # arbitrary_types_allowed = True
         validate_assignment = True
 
     # TODO: `assert all(x in self._update_functions)` should be in update_functions

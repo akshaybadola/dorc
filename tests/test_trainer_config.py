@@ -15,7 +15,9 @@ def test_config_should_not_coerce_types(setup_and_net, basic_config):
 @pytest.mark.quick
 def test_config_should_have_same_params_as_config(setup_and_net, basic_config):
     _config, _ = setup_and_net
-    assert set(basic_config.__dict__.keys()) == set({*_config.keys(), "data_dir"})
+    assert set(basic_config.__dict__.keys()) == set({*_config.keys(), "data_dir",
+                                                     "global_modules_dir",
+                                                     "global_datasets_dir"})
 
 
 @pytest.mark.quick

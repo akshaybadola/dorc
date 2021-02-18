@@ -7,8 +7,7 @@ import requests
 import zipfile
 
 from util import assertIn
-from dorc.daemon.models import SessionMethodResponseModel
-smod = SessionMethodResponseModel
+from dorc.daemon.models import SessionMethodResponseModel as smod
 
 
 mod_string = """
@@ -114,6 +113,7 @@ def hack_param():
 """
 
 
+@pytest.mark.http
 def test_list_modules(daemon_and_cookies, json_config):
     daemon, cookies = daemon_and_cookies
     time.sleep(1)
@@ -134,6 +134,7 @@ def test_list_modules(daemon_and_cookies, json_config):
         assert set(mods[1][k]) == set(expected[k])
 
 
+@pytest.mark.http
 def test_add_delete_global_module(daemon_and_cookies, json_config):
     daemon, cookies = daemon_and_cookies
     host = f"http://{daemon.hostname}:{daemon.port}/"
@@ -144,14 +145,15 @@ def test_add_delete_global_module(daemon_and_cookies, json_config):
                                     files={"file": f},
                                     data={"name": json.dumps("test_module_a")},
                                     cookies=cookies)
+    time.sleep(.5)
     result = smod.parse_obj(json.loads(response.content))
-    assert result.result
+    assert result.status
     task_id = result.task_id
     time.sleep(1)
     response = requests.request("GET", host + f"check_task?task_id={task_id}",
                                 cookies=cookies)
     result = smod.parse_obj(json.loads(response.content))
-    assert result.result
+    assert result.status
     assertIn("_module_test_module_a", daemon._modules)
     with open("./._test_py_file.py", "rb") as f:
         response = requests.request("POST", host + "add_global_module",
@@ -159,13 +161,13 @@ def test_add_delete_global_module(daemon_and_cookies, json_config):
                                     data={"name": json.dumps("test_module_b")},
                                     cookies=cookies)
     result = smod.parse_obj(json.loads(response.content))
-    assert result.result
+    assert result.status
     task_id = result.task_id
     time.sleep(1)
     response = requests.request("GET", host + f"check_task?task_id={task_id}",
                                 cookies=cookies)
     result = smod.parse_obj(json.loads(response.content))
-    assert result.result
+    assert result.status
     assertIn("_module_test_module_b", daemon._modules)
     response = requests.request("POST", host + "delete_global_module",
                                 data={"name": "test_module_a"},
@@ -176,6 +178,7 @@ def test_add_delete_global_module(daemon_and_cookies, json_config):
     assert "_module_test_module_a" not in daemon._modules
 
 
+@pytest.mark.http
 def test_add_delete_dataset(daemon_and_cookies, json_config):
     py_string = """
 class MnistDataset:
@@ -213,13 +216,13 @@ dataset = MnistDataset(os.path.join(file_dir, "training.pt"))
                                           "type": "image"},
                                     cookies=cookies)
     result = smod.parse_obj(json.loads(response.content))
-    assert result.result
+    assert result.status
     task_id = result.task_id
     time.sleep(1)
     response = requests.request("GET", host + f"check_task?task_id={task_id}",
                                 cookies=cookies)
     result = smod.parse_obj(json.loads(response.content))
-    assert result.result
+    assert result.status
     assertIn("_dataset_MNIST", daemon._datasets)
     py_string_2 = """
 class MnistDataset:
@@ -245,13 +248,13 @@ dataset = MnistDataset("/home/joe/projects/trainer/.data/MNIST/processed/trainin
                                           "type": "image"},
                                     cookies=cookies)
     result = smod.parse_obj(json.loads(response.content))
-    assert result.result
+    assert result.status
     task_id = result.task_id
     time.sleep(1)
     response = requests.request("GET", host + f"check_task?task_id={task_id}",
                                 cookies=cookies)
     result = smod.parse_obj(json.loads(response.content))
-    assert result.result
+    assert result.status
     assertIn("_dataset_MNIST_2", daemon._datasets)
     response = requests.request("POST", host + "delete_dataset",
                                 data={"name": "MNIST_2"},
@@ -259,3 +262,33 @@ dataset = MnistDataset("/home/joe/projects/trainer/.data/MNIST/processed/trainin
     time.sleep(.3)
     print(response.content)
     assert "_dataset_MNIST_2" not in daemon._datasets
+
+
+@pytest.mark.http
+def test_daemon_global_modules_available_to_trainer(daemon_and_cookies,
+                                                    params_and_iface, json_config):
+    class FakeProc:
+        def poll(self):
+            return None
+    daemon, cookies = daemon_and_cookies
+    params, iface = params_and_iface
+    host = f"http://{daemon.hostname}:{daemon.port}/"
+    with open("./._test_py_file.py", "w") as f:
+        f.write(mod_string)
+    with open("./._test_py_file.py", "rb") as f:
+        response = requests.request("POST", host + "add_global_module",
+                                    files={"file": f},
+                                    data={"name": json.dumps("test_module_a")},
+                                    cookies=cookies)
+    name, time_str = iface.data_dir.split("/")[-2:]
+    daemon._sessions[name] = {}
+    daemon._sessions[name]["path"] = os.path.dirname(iface.data_dir)
+    daemon._sessions[name]["modules"] = {}
+    daemon._sessions[name]["sessions"] = {}
+    daemon._sessions[name]["sessions"][time_str] = {}
+    daemon._sessions[name]["sessions"][time_str]["config"] = json_config.copy()
+    daemon._sessions[name]["sessions"][time_str]["port"] = iface.api_port
+    daemon._sessions[name]["sessions"][time_str]["data_dir"] = iface.data_dir
+    daemon._sessions[name]["sessions"][time_str]["process"] = FakeProc()
+    daemon._refresh_state(name + "/" + time_str)
+    iface.trainer.exec_some_string("import _module_test_module_a")

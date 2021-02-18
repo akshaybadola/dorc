@@ -1,4 +1,4 @@
-from typing import Any, Optional, Dict, Union, Any, Iterable, List, Callable
+from typing import Optional, Dict, Union, Any, Iterable, List, Callable
 import os
 import re
 import sys
@@ -21,7 +21,6 @@ from ..spec.models import BaseModel
 from ..util import _dump, deprecated
 from ..trainer import Trainer
 from ..trainer.models import Return
-from ..mods import Modules
 from .._log import Log
 
 from .translation import TranslationLayer
@@ -50,7 +49,8 @@ class FlaskInterface:
     trainer. Everything's communicated as JSON.
     """
 
-    def __init__(self, hostname, port, data_dir, bare=True, no_start=False,
+    def __init__(self, hostname, port, data_dir, gmods_dir, gdata_dir,
+                 bare=True, no_start=False,
                  config_overrides: Dict[str, Any] = {}):
         """
         :param hostname: :class:`str` host over which to serve
@@ -65,6 +65,8 @@ class FlaskInterface:
         self.api_host = hostname
         self.api_port = port
         self.logger = None
+        self.gmods_dir = gmods_dir
+        self.gdata_dir = gdata_dir
         self.data_dir = data_dir
         self.bare = bare
         self.config_overrides = config_overrides
@@ -87,8 +89,6 @@ class FlaskInterface:
         self._loge = log._loge
         self._logi = log._logi
         self._logw = log._logw
-        self._modules = Modules(self.data_dir, self._logd, self._loge,
-                                self._logi, self._logw)
         self._orig_config = None
         self._current_config = None
         if (self.api_host and self.api_port and self.config_exists):
@@ -144,6 +144,12 @@ class FlaskInterface:
                                        "port": self.api_port})
         result = json.loads(response.content)
         return result
+
+    def get_tlayer(self, config):
+        extra_opts = {"data_dir": self.data_dir,
+                      "global_modules_dir": self.gmods_dir,
+                      "global_datasets_dir": self.gdata_dir}
+        return TranslationLayer(config, extra_opts)
 
     @classmethod
     def update_config(cls, config: Dict, overrides: List[Union[int, float, str]]):
@@ -215,7 +221,7 @@ class FlaskInterface:
     def _create_trainer_helper(self, tlayer: Optional[TranslationLayer] = None):
         if tlayer is None:
             with open(self.config_file) as f:
-                tlayer = TranslationLayer(json.load(f), self.data_dir)
+                tlayer = self.get_tlayer(json.load(f))
         config = tlayer.from_json()
         config.pop("model_step_params", None)
         try:
@@ -266,7 +272,7 @@ class FlaskInterface:
             return False, "No existing config"
         elif not self.config_exists and config is not None:
             try:
-                tlayer = TranslationLayer(config, self.data_dir)
+                tlayer = self.get_tlayer(config)
                 status = True
                 with open(self.config_file, "w") as f:
                     json.dump(config, f)

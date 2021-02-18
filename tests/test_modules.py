@@ -64,8 +64,7 @@ module_exports = {"A": A, "B": B, "f": f, "g": g}
 
         def print_func(x):
             print(x)
-        cls._modules = Modules(os.path.join(cls.mods_dir, "meh_modules"),
-                               print_func, print_func, print_func, print_func)
+        cls._modules = Modules(os.path.join(cls.mods_dir, "meh_modules"))
 
     @pytest.mark.todo
     def test_load_py_file(self):
@@ -74,9 +73,9 @@ module_exports = {"A": A, "B": B, "f": f, "g": g}
         # 2. file python file but loading error
         with open(self.fnames["a"], "rb") as f:
             meh = f.read()
-        status, result = self._modules._load_python_file(meh, [], "_meh_a.py",
-                                                         "from _meh_a import module_exports",
-                                                         "module_exports")
+        status, msgs, result = self._modules._load_python_file(meh, [], "_meh_a.py",
+                                                               "from _meh_a import module_exports",
+                                                               "module_exports")
         self.assertTrue(status)
         self.assertTrue("cls" in result)
         self.assertTrue("f" in result)
@@ -94,16 +93,16 @@ module_exports = {"A": A, "B": B, "f": f, "g": g}
                 f.write(fname, arcname=os.path.basename(fname))
         with open("bleh.zip", "rb") as f:
             meh = f.read()
-        status, result = self._modules._load_zip_file(meh, [], "_meh_dir",
-                                                      "from _meh_dir import module_exports",
-                                                      "module_exports")
+        status, msgs, result = self._modules._load_zip_file(meh, [], "_meh_dir",
+                                                            "from _meh_dir import module_exports",
+                                                            "module_exports")
 
     def test_add_config(self):
         with open("_setup_local.py", "rb") as f:
             meh = f.read()
-        status, result = self._modules._load_python_file(meh, [], "_meh.py",
-                                                         "from _meh import config",
-                                                         "config")
+        status, msgs, result = self._modules._load_python_file(meh, [], "_meh.py",
+                                                               "from _meh import config",
+                                                               "config")
         self.assertTrue(status)
         self.assertTrue("optimizers" in result)
         self.assertTrue("criteria" in result)
@@ -123,7 +122,7 @@ module_exports = {"A": A, "B": B, "f": f, "g": g}
                     self.assertTrue(result[0])
                     print(result[1])
 
-    def test_get_symbols_from_module(self):
+    def test_modules_module_symbols(self):
         mod_string = """
 import types
 
@@ -145,7 +144,7 @@ module_exports = {"cls": A, "f": func}
             f.write(mod_string)
         if self.mods_dir not in sys.path:
             sys.path.append(self.mods_dir)
-        symbol_names = self._modules._get_symbols_from_module("test_symbols")
+        symbol_names = self._modules.module_symbols("test_symbols")
         valid_names = ["A", "func", "_test_var", "sname", "module_exports"]
         invalid_names = ["__invisible_var", "__spec__", "__file__", "__dict__"]
         for v in valid_names:

@@ -123,11 +123,12 @@ def test_daemon_load_and_unload_session(daemon_and_cookies, json_config):
         result = _create_session(daemon, json_config)
         assert result[1]
     key = [*daemon.sessions_list.keys()][0]
-    assert not daemon.sessions_list[key]["loaded"]
+    assert not daemon.sessions_list[key].loaded
     daemon._load_session_helper(0, *key.split("/"))
     time.sleep(1)
-    assert "port" in daemon.sessions_list[key]
-    port = daemon.sessions_list[key]['port']
+    assert "port" in daemon.sessions_list[key].dict()
+    port = daemon.sessions_list[key].port
+    assert port is not None
     response = requests.get(f"http://127.0.0.1:{port}/_ping")
     assert "pong" in response.content.decode()
     daemon._unload_session_helper(0, *key.split("/"))

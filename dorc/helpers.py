@@ -63,10 +63,11 @@ class Hook:
     A :class:`Hook` is a list of :class:`Callable` usually which take no
     arguments and return nothing.
 
-    They can be executed at arbitrary points in a codebase with separate concerns.
+    They can be executed at arbitrary points in a codebase with separate
+    concerns.
 
-    An instance of a :class:`Hook` must be called with :func:`run_hook` and if the
-    functions in the hook require args, then :func:`run_hook_with_args`
+    An instance of a :class:`Hook` must be called with :func:`run_hook` and if
+    the functions in the hook require args, then :func:`run_hook_with_args`
 
     Args:
         permanent_items: List of functions which will never be removed from the hook

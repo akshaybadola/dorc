@@ -20,7 +20,7 @@ class DaemonHTTPTestLoadUnfinished(unittest.TestCase):
             shutil.rmtree(cls.data_dir)
         if not os.path.exists(cls.data_dir):
             os.mkdir(cls.data_dir)
-        cls.port = 24232
+        cls.port = 23244
         cls.hostname = "127.0.0.1"
         cls.host = "http://" + ":".join([cls.hostname, str(cls.port) + "/"])
         cls.daemon = make_test_daemon(cls.hostname, cls.port, ".test_dir")

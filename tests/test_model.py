@@ -55,7 +55,7 @@ class ModelTest(unittest.TestCase):
 
     def test_model_dump_not_loaded_no_gpus(self):
         model = get_model("net", self.config, [])
-        dump = model.dump()
+        dump = model.dump(True)
         expected = {"name": str, "params": dict,
                     "optimizer": dict, "gpus": list,
                     "state_dict": type(None)}

@@ -113,14 +113,16 @@ module_exports = {"A": A, "B": B, "f": f, "g": g}
         pass
 
     def test_add_named_module(self):
+        if self.mods_dir not in sys.path:
+            sys.path.append(self.mods_dir)
         for letter in self.fnames:
             if letter != "i":
                 with open(self.fnames[letter], "rb") as f:
                     file_bytes = f.read()
-                    result = self._modules.add_named_module(self.mods_dir,
-                                                            file_bytes, "mod_" + letter)
-                    self.assertTrue(result[0])
-                    print(result[1])
+                result = self._modules.add_named_module(self.mods_dir,
+                                                        file_bytes, "mod_" + letter)
+                self.assertTrue(result[0])
+                print(result[1])
 
     def test_modules_module_symbols(self):
         mod_string = """

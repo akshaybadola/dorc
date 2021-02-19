@@ -9,16 +9,7 @@ from _setup_local import config
 sys.path.append("../")
 from dorc.device import all_devices, useable_devices
 from dorc.trainer import Trainer
-
-
-class SubTrainer(Trainer):
-    def __init__(self, _cuda, *args, **kwargs):
-        self._cuda = _cuda
-        super().__init__(*args, **kwargs)
-
-    @property
-    def have_cuda(self):
-        return self._cuda
+from util import SubTrainer
 
 
 # TODO

@@ -106,7 +106,7 @@ class FlaskInterface:
             self._logi(f"Initializing Trainer State")
             status, message = self.create_trainer()
             self._logd(f"{status}, {message}")
-            self.trainer = None
+            self.trainer: Optional[Trainer] = None
             del self.trainer
         elif not self.state_exists and not self.config_exists:
             self._logd(f"Config doesn't exist. Cannot create trainer")
@@ -381,6 +381,7 @@ class FlaskInterface:
         exec("\n".join(["class Annot(BaseModel):", *lines]), globals(), ldict)
         return ldict["Annot"]
 
+    # FIXME: Don't need this now I think
     def check_data_trainer_method(self, func_name: str, data: Dict):
         func = getattr(self.trainer, func_name)
         if func is None:
@@ -474,7 +475,7 @@ class FlaskInterface:
                 return make_json(make_return(False, "Bleh"))
             else:
                 data.pop("secret")
-                status, response = getattr(self.trainer, func_name)(**data)
+                status, response = getattr(self.trainer, attr_name)(**data)
             response = _dump(response)
             if not status:
                 return Response(response, status=400, mimetype='application/json')
@@ -757,7 +758,8 @@ class FlaskInterface:
                 interface, maintenance
 
             Responses:
-                Success: ResponseSchema(200, "Update and restart", MimeTypes.text, "Update and restart")
+                Success: ResponseSchema(200, "Update and restart", MimeTypes.text,
+                         "Update and restart")
 
             """
             return _dump("Does nothing for now")

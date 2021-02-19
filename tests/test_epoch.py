@@ -8,7 +8,8 @@ from dorc.trainer import Trainer
 
 
 @pytest.mark.threaded
-def test_epoch_device_poll(trainer):
+def test_epoch_device_poll(trainer_json_config):
+    _, trainer = trainer_json_config
     trainer._init_all()
     with trainer._epoch_runner.device_poll.monitor():
         for x in range(1000):
@@ -23,7 +24,8 @@ def test_epoch_device_poll(trainer):
 
 
 @pytest.mark.threaded
-def test_epoch_train(trainer):
+def test_epoch_train(trainer_json_config):
+    _, trainer = trainer_json_config
     def _debug():
         print(epoch_runner.train_loop.running)
         print(epoch_runner.train_loop.waiting)
@@ -33,6 +35,7 @@ def test_epoch_train(trainer):
         print([x for x in epoch_runner.batch_vars])
 
     trainer._init_all()
+    trainer.set_model({"net": "net"})
     epoch_runner = trainer._epoch_runner
     t = Thread(target=epoch_runner.run_train,
                args=[trainer._training_steps["train"][0], trainer.train_loader, "epoch"])
@@ -63,7 +66,8 @@ def test_epoch_train(trainer):
 
 
 @pytest.mark.threaded
-def test_epoch_test(trainer):
+def test_epoch_test(trainer_json_config):
+    _, trainer = trainer_json_config
     def _debug():
         print(epoch_runner.test_loop.running)
         print(epoch_runner.test_loop.waiting)
@@ -73,6 +77,7 @@ def test_epoch_test(trainer):
         print([x for x in epoch_runner.batch_vars])
 
     trainer._init_all()
+    trainer.set_model({"net": "net"})
     epoch_runner = trainer._epoch_runner
     t = Thread(target=epoch_runner.run_test,
                args=[trainer._training_steps["test"][0], trainer.test_loader])

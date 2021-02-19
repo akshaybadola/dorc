@@ -34,19 +34,39 @@ def json_config():
     return _setup.config
 
 
+    # config = json_config
+    # if os.path.exists(".test_dir"):
+    #     shutil.rmtree(".test_dir")
+    # os.mkdir(".test_dir")
+    # os.mkdir(".test_dir/test_session")
+    # time_str = datetime.datetime.now().isoformat()
+    # data_dir = f".test_dir/test_session/{time_str}"
+    # gmods_dir = os.path.abspath(".test_dir/global_modules")
+    # gdata_dir = os.path.abspath(".test_dir/global_datasets")
+    # os.mkdir(gmods_dir)
+    # os.mkdir(gdata_dir)
+    # os.mkdir(data_dir)
+    # extra_opts = {"data_dir": data_dir,
+    #               "global_modules_dir": gmods_dir,
+    #               "global_datasets_dir": gdata_dir}
+    # tlayer = TranslationLayer(config, extra_opts)
+    # test_config = tlayer.from_json()
+    # test_config.pop("model_step_params")
+    # return Trainer(**test_config)
+
+
 @pytest.fixture
-def trainer(json_config):
+def trainer_json_config(json_config):
     config = json_config
-    if os.path.exists(".test_dir"):
-        shutil.rmtree(".test_dir")
-    os.mkdir(".test_dir")
-    os.mkdir(".test_dir/test_session")
-    time_str = datetime.datetime.now().isoformat()
-    data_dir = f".test_dir/test_session/{time_str}"
     gmods_dir = os.path.abspath(".test_dir/global_modules")
     gdata_dir = os.path.abspath(".test_dir/global_datasets")
-    os.mkdir(gmods_dir)
-    os.mkdir(gdata_dir)
+    if not os.path.exists(".test_dir"):
+        os.mkdir(".test_dir")
+        os.mkdir(".test_dir/test_session")
+        os.mkdir(gmods_dir)
+        os.mkdir(gdata_dir)
+    time_str = datetime.datetime.now().isoformat()
+    data_dir = f".test_dir/test_session/{time_str}"
     os.mkdir(data_dir)
     extra_opts = {"data_dir": data_dir,
                   "global_modules_dir": gmods_dir,
@@ -54,7 +74,7 @@ def trainer(json_config):
     tlayer = TranslationLayer(config, extra_opts)
     test_config = tlayer.from_json()
     test_config.pop("model_step_params")
-    return Trainer(**test_config)
+    yield (test_config, Trainer(**test_config))
 
 
 @pytest.fixture
@@ -79,22 +99,29 @@ def get_step(setup_and_net):
 
 
 @pytest.fixture
-def params_and_trainer(setup_and_net):
+def params_old_config(setup_and_net):
     config, _ = setup_and_net
-    if os.path.exists(".test_dir"):
-        shutil.rmtree(".test_dir")
-    os.mkdir(".test_dir")
-    os.mkdir(".test_dir/test_session")
     gmods_dir = os.path.abspath(".test_dir/global_modules")
     gdata_dir = os.path.abspath(".test_dir/global_datasets")
-    os.mkdir(gmods_dir)
-    os.mkdir(gdata_dir)
+    if not os.path.exists(".test_dir"):
+        os.mkdir(".test_dir")
+        os.mkdir(".test_dir/test_session")
+        os.mkdir(gmods_dir)
+        os.mkdir(gdata_dir)
     time_str = datetime.datetime.now().isoformat()
     os.mkdir(f".test_dir/test_session/{time_str}")
     data_dir = os.path.abspath(f".test_dir/test_session/{time_str}")
     params = {"data_dir": data_dir, "global_modules_dir": gmods_dir,
               "global_datasets_dir": gdata_dir, **config}
     yield (params, Trainer(**params))
+
+
+@pytest.fixture
+def params_and_trainer(request, trainer_json_config, params_old_config):
+    if hasattr(request, "param") and request.param:
+        yield trainer_json_config
+    else:
+        yield params_old_config
     shutil.rmtree(".test_dir")
 
 

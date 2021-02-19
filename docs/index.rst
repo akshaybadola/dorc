@@ -1,11 +1,21 @@
 .. trainer documentation master file, created by
    sphinx-quickstart on Sun Jan  5 16:51:58 2020.
    You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+   contain the root `toctree** directive.
+
+..
+   Note
+   Heading levels
+   # with overline, for parts
+   * with overline, for chapters
+   =, for sections
+   -, for subsections
+   ^, for subsubsections
+   ", for paragraphs
 
 
 Welcome to DORC's documentation!
-===================================
+********************************
 
 DORC stands for Deep learning ORChestrator and is envisaged to manage training,
 validation, evaluation and dissection of `Deep Learning` models over multiple
@@ -28,25 +38,33 @@ It has features like:
 - View remote files in a code editor and save it back to the machine.
 - And many more...
 
-You can browse the :ref:`source/contents:contents` or, get started with :ref:`dorc-root`
+You can browse the api docs at :doc:`/api/modules` or, get started with :doc:`/intro`
+
+.. _index-need:
 
 ..
-  .. _index-need:
-  Need
-  ----
+   Need
+   ----
 
-  Which :ref:`index:Need`, :ref:`dorc-root` do we link to?
+   Which :ref:`intro:Need` (intro#Need), :ref:`dorc-root` do we link to?
 
-  Test, :ref:`source/dorc:Device Allocation`, :ref:`source/dorc:Need`, :mod:`torch.optim`
+   Test, :ref:`index-need` (#Need) :ref:`intro:Device Allocation`, :ref:`intro:Need`, :mod:`torch.optim`
+
+Contents:
+=========
 
 .. toctree::
-   :hidden:
-   :maxdepth: 2
+   :maxdepth: 4
 
-   source/contents
-   ..
-      source/dorc
-      source/modules
+   intro
+   session
+   models
+   modelstep
+   Data and Dataloaders <data>
+   criteria
+   trainer
+   API reference <api/modules>
+
 
 Indices and tables
 ==================

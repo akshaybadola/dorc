@@ -3,25 +3,18 @@ import time
 import sys
 sys.path.append("../")
 from dorc.trainer import Trainer
-
-
-class SubTrainer(Trainer):
-    def __init__(self, _cuda, *args, **kwargs):
-        _cuda = _cuda
-        super().__init__(*args, **kwargs)
-
-    @property
-    def have_cuda(self):
-        return self._cuda
+from util import SubTrainer
 
 
 @pytest.mark.threaded
-def test_trainer_capture_metrics_epoch(trainer):
+def test_trainer_capture_metrics_epoch(trainer_json_config):
+    _, trainer = trainer_json_config
     trainer.reserved_gpus = []
     trainer.reserve_gpus = lambda x: [True, None]
     trainer.trainer_params.cuda = True
 
     trainer._init_all()
+    trainer.set_model({"net": "net"})
     trainer.start()
     time.sleep(2)
     trainer.pause()
@@ -41,7 +34,8 @@ def test_trainer_capture_metrics_epoch(trainer):
 
 
 @pytest.mark.threaded
-def test_trainer_capture_metrics_iterations(trainer):
+def test_trainer_capture_metrics_iterations(trainer_json_config):
+    _, trainer = trainer_json_config
     bleh = trainer.trainer_params.dict()
     new_config = {}
     new_config["training_type"] = "iterations"
@@ -51,6 +45,7 @@ def test_trainer_capture_metrics_iterations(trainer):
     bleh.update(new_config)
     trainer.config.trainer_params = trainer.trainer_params.__class__(**bleh)
     trainer._init_all()
+    trainer.set_model({"net": "net"})
     trainer.start()
     time.sleep(2)
     trainer.pause()

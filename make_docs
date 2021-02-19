@@ -1,6 +1,5 @@
 #! /bin/bash
 
 cd docs
-rm source/dorc.*
-sphinx-apidoc -f -M -e -o source ../dorc /*meh* /*bleh* /*_daemon* /*_trainer* /*flycheck*
+sphinx-apidoc -f -M -e -o api ../dorc /*meh* /*bleh* /*_daemon* /*_trainer* /*flycheck*
 make html

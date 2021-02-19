@@ -8,23 +8,7 @@ import json
 import torch
 from dorc.device import all_devices, useable_devices
 from dorc.trainer import Trainer
-
-
-class FakeRequest:
-    def __init__(self):
-        self.form = {}
-        self.json = None
-        self.files = {}
-
-
-class SubTrainer(Trainer):
-    def __init__(self, _cuda, *args, **kwargs):
-        self._cuda = _cuda
-        super().__init__(*args, **kwargs)
-
-    @property
-    def have_cuda(self):
-        return self._cuda
+from util import SubTrainer, FakeRequest
 
 
 @pytest.mark.quick
@@ -74,6 +58,47 @@ def test_trainer_load_weights_no_gpu(params_and_trainer, setup_and_net):
     trainer.trainer_params.cuda = True
     trainer._init_device()
     trainer._init_models()
+    trainer._init_update_funcs()
+    with pytest.raises(TypeError):
+        trainer.load_weights(["net_1", "net_2"])
+    with open("_test_weights.pth", "rb") as f:
+        tmp = f.read()
+    ret = trainer.load_weights(["net_1", "net_2"], tmp)
+    assert not ret.status, "weights_for_only_one_model_given"
+    assert "given weights" in ret.message.lower()
+    net = torch.load("_test_weights.pth")
+    weights = net["net"]
+    torch.save({"net": weights, "net_1": weights, "net_2": weights}, "_temp_weights.pth")
+    with open("_temp_weights.pth", "rb") as f:
+        tmp = f.read()
+    ret = trainer.load_weights(["net_1", "net_2"], tmp)
+    assert not ret.status
+    assert "not in scope" in ret.message.lower()
+    ret = trainer.load_weights(["net"], tmp)
+    assert ret.status
+
+
+@pytest.mark.quick
+def test_trainer_load_weights_two_models_no_gpus(params_and_trainer, setup_and_net):
+    params, _ = params_and_trainer
+    _, Net = setup_and_net
+    params["model_params"] = {"net_1": {"model": Net, "optimizer": "Adam",
+                                        "params": {}, "gpus": "auto"},
+                              "net_2": {"model": Net, "optimizer": "Adam",
+                                        "params": {}, "gpus": "auto"}}
+    trainer = SubTrainer(False, **params)
+    trainer.reserved_gpus = []
+    trainer.reserve_gpus = lambda x: [True, None]
+    trainer.trainer_params.gpus = []
+    trainer.trainer_params.cuda = True
+    trainer._init_device()
+    trainer._init_models()
+    trainer._init_update_funcs()
+    model = trainer.update_functions.train.models["net"]
+    trainer.update_functions.train._models = {"net_1": model, "net_2": model}
+    trainer.update_functions.train._checks = {"net_1": lambda x: True, "net_2": lambda x: True}
+    trainer.set_model({"net_1": "net_1", "net_2": "net_2"})
+    assert trainer.active_models == {"net_1": "net_1", "net_2": "net_2"}
     with pytest.raises(TypeError):
         trainer.load_weights(["net_1", "net_2"])
     with open("_test_weights.pth", "rb") as f:
@@ -105,6 +130,7 @@ def test_trainer_load_weights_two_models_two_gpus(params_and_trainer, setup_and_
     trainer.trainer_params.gpus = [0, 1]
     trainer._init_device()
     trainer._init_models()
+    trainer._init_update_funcs()
     net = torch.load("_test_weights.pth")
     weights = net["net"]
     torch.save({"net_1": weights, "net_2": weights}, "_temp_weights.pth")
@@ -175,8 +201,8 @@ def test_trainer_should_not_resume_from_extra_model_names(params_and_trainer):
     bleh["models"]["meh"] = [*models.values()][0]
     result = trainer._resume_from_state(bleh)
     assert result.status
-    assert "meh" not in trainer.models
+    assert "meh" not in trainer.models_available
     bleh["models"]["meh"]["model_def"] = trainer._models["net"]._model_def
     result = trainer._resume_from_state(bleh)
     assert result.status
-    assert "meh" not in trainer.models
+    assert "meh" not in trainer.models_available

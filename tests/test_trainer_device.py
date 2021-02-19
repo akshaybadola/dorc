@@ -10,16 +10,8 @@ from _setup_local import config
 sys.path.append("../")
 from dorc.device import all_devices, useable_devices
 from dorc.trainer import Trainer
+from util import SubTrainer
 
-
-class SubTrainer(Trainer):
-    def __init__(self, _cuda, *args, **kwargs):
-        self._cuda = _cuda
-        super().__init__(*args, **kwargs)
-
-    @property
-    def have_cuda(self):
-        return self._cuda
 
 
 @pytest.mark.quick
@@ -107,6 +99,7 @@ class TrainerTestDevice(unittest.TestCase):
                 self.trainer._set_device()
                 self.assertEqual(self.trainer.gpus, [-1])
                 self.trainer._init_models()
+                self.trainer._init_update_funcs()
                 self.assertEqual(self.trainer._models["net"]._device, torch.device("cpu"))
 
     def test_check_trainer_set_device_cuda_given_AND_no_gpus_given(self):
@@ -115,6 +108,7 @@ class TrainerTestDevice(unittest.TestCase):
         self.trainer._set_device()
         self.assertEqual(self.trainer.gpus, [-1])
         self.trainer._init_models()
+        self.trainer._init_update_funcs()
         self.assertEqual(self.trainer._models["net"]._device, torch.device("cpu"))
 
     @unittest.skipIf(not all_devices(), f"Cannot run without GPUs.")
@@ -126,6 +120,7 @@ class TrainerTestDevice(unittest.TestCase):
         self.trainer._set_device()
         self.assertEqual(self.trainer.gpus, [0])
         self.trainer._init_models()
+        self.trainer._init_update_funcs()
         self.assertEqual(self.trainer._models["net"]._device, torch.device(0))
 
     @unittest.skipIf(len(all_devices()) < 2, f"Cannot run without at least 2 GPUs.")
@@ -135,6 +130,7 @@ class TrainerTestDevice(unittest.TestCase):
         self.trainer._set_device()
         self.assertEqual(self.trainer.gpus, [0, 1])
         self.trainer._init_models()
+        self.trainer._init_update_funcs()
         self.assertEqual(self.trainer._models["net"]._device, "dataparallel")
         with self.subTest(i="tensor_is_placed_correctly_on_model_device"):
             import torch

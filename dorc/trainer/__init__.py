@@ -122,6 +122,10 @@ def reterr(message: str) -> Return:
     return Return(status=False, message=message)
 
 
+def retsucc(message: str) -> Return:
+    return Return(status=True, message=message)
+
+
 def make_info(status: bool, message: str, data: Dict = {}) -> ReturnExtraInfo:
     return ReturnExtraInfo(status=status, message=message, data=data)
 
@@ -573,24 +577,27 @@ class Trainer:
     def _init_models(self):
         """Initialize models with a :class:`~trainer.model.Model` class
 
-        Criteria are are initialized also.  :attr:`Trainer.model_params` should
-        be a :class:`dict` of {model_name: :class:`config.ModelParams`}.  Device
-        allocation can be specified with giving `gpus` in model_params. There
-        can be overlap between models and GPUs and it is left up to the user.
+        Criteria are also initialized also.  :attr:`Trainer.model_params` should
+        be a :class:`dict` like :code:`{model_name: model_params}` where
+        :code:`model_params` is an instance of :class:`config.ModelParams`.
+        Device allocation can be specified with giving `gpus` in
+        model_params. There can be overlap between models and GPUs and it is
+        left up to the user.
 
-        `gpus` can also be specified as "auto" or "parallel".  If "auto" is
-        given then certain heuristics are applied according which of the models
-        are to be loaded initially the the gpus available.
+        :code:`gpus` can also be specified as :code:`auto` or :code:`parallel`.
+        If :code:`auto` is given then certain heuristics are applied according
+        which of the models are to be loaded initially the the gpus available.
 
-        Devices are allocated for the models in alphabetical order except `auto`
-        and `parallel` which are allocated last. So if there's a conflict
-        between devices priority is given alphabetically.
+        Models are *NOT* loaded into memory (or set active) here. But are done
+        so on demand.
 
-        models which are to be loaded should have {"loaded": True} in their
-        params. Alternatively one can specify {"load_all": True} in
-        :attr:`trainer_params`
+        Devices when allocated for the models are allocated for the models in
+        alphabetical order except :code:`auto` and :code:`parallel` which are
+        allocated last. So if there's a conflict between devices priority is
+        given alphabetically. See :ref:`intro:Device Allocation` for details
 
-        See :ref:`source/dorc:Device Allocation` for details
+        Models which are to be active should have :code:`{"active": True}` in
+        their params.
 
         """
         self._logi("Initializing Criteria and Models.")
@@ -598,30 +605,13 @@ class Trainer:
         for k, v in self.criteria_params.items():
             self.criteria[k] = v.function(**v.params)
         # TODO: Model parallel and sharding
-        # NOTE: if only one model load it
-        self._models = {}
-        if self.trainer_params.load_all:
-            load_models = self.model_params.keys()
-        else:
-            load_models = [k for k, v in self.model_params.items() if v.load]
-        if self.gpus and self.gpus != [-1]:
-            self.allocate_devices(load_models)
-        else:
-            for model_name in load_models:
-                self.devices[model_name] = []
-        for model_name in load_models:
-            self._models[model_name] = self._model_init_helper(model_name)
-            if self._models[model_name]:
-                status, response = self._models[model_name].load_into_memory()
-                if not status:
-                    self._loge(response)
-            else:
-                self._models[model_name] = None
+        self._models: Dict[str, Model] = {}
+        self._models_map: Dict[str, str] = {}
 
     def _init_hooks(self):
         """Initialize :attr:`hooks` and :attr:`hooks_with_args`.
 
-        All initial hooks are loaded from :mod:`hooks_module` but can be added
+        All initial hooks are loaded from :mod:`hooks` but can be added
         by the user.
 
         """
@@ -662,7 +652,8 @@ class Trainer:
             into system memory
 
         For allocation, explicitly mentioned gpus are given preference
-        first. After that `auto` is given preference over `parallel`.
+        first. After that :code:`auto` is given preference over
+        :code:`parallel`.
 
         """
         if isinstance(load_models, str):
@@ -921,25 +912,100 @@ class Trainer:
                             if isinstance(value, str) and not value.startswith("callable_"):
                                 self.dataloader_params[k][a] = value
 
+    def _load_models(self, load_models: List[str]) -> Return:
+        # NOTE: if only one model load it
+        # CHECK: What if the ModelStep needs two models and only two models are given? LOL
+        # if len(self.model_params.keys()) == 1:
+        #     load_models = [*self.model_params.keys()]
+        # else:
+        #     load_models = []
+        #     # load_models = [k for k, v in self.model_params.items() if v.load]
+        diff = diff_as_sets(self._models.keys(), load_models)
+        for model in diff:
+            if self._models[model] is not None:
+                if self._models[model].loaded:
+                    self._models[model].unload("RAM")
+                    self.devices[model] = []
+        if self.gpus and self.gpus != [-1]:
+            self.allocate_devices(load_models)
+        else:
+            for model_name in load_models:
+                self.devices[model_name] = []
+        for model_name in load_models:
+            model = self._model_init_helper(model_name)
+            if model is not None:
+                self._models[model_name] = model
+                status, response = self._models[model_name].load_into_memory()
+                if not status:
+                    return reterr(self._loge(response))
+        return retsucc(f"Loaded {load_models}")
+
     def _init_update_funcs(self):
+        """Initialize the :attr:`update_functions`
+
+        For each `update_function` (usually they'd have the same models) if the
+        model they name is in :attr:`self.model_params`, then it's loaded into
+        the device.
+
+        Otherwise, it's left to the user to specify and load the model for the
+        `update_function`.
+
+        Device allocation happens according to :meth:`allocate_devices`.
+
+        """
         self._logi("Initializing Update Functions")
         self._model_step_func = None
+        # TODO: Hard coded models, maybe should remove this
         if self.update_functions.train is not None:
             for x in self.trainer_params.training_steps:
                 func = self.update_functions.__dict__[x]
-                if func is not None and not func.criteria:
-                    criteria = {m: self.criteria[c] for m, c in func.criteria_map.items()}
-                    self.update_functions.__dict__[x].set_criteria(criteria)
+                if func is not None:
+                    if not func.criteria:
+                        criteria = {m: self.criteria[c] for m, c in func.criteria_map.items()}
+                        self.update_functions.__dict__[x].set_criteria(criteria)
+                    for k, v in self.update_functions.__dict__[x].models.items():
+                        if k not in self.model_params:
+                            self.model_params[k] = config.ModelParams(**v.to_params())
+                        self._models[k] = v
+                        self._models_map[k] = k
+                        if not v.loaded:
+                            v.load_into_memory()
         else:
             func = self.update_functions.function
             params = self.update_functions.params.__dict__.copy()
-            # models and criteria already exist with the trainer.
-            # They are to be updated according to maps in the func.
-            models = {m: self._models[m] for m in params["models"]}
+            load_models = []
+            for m in params["models"]:
+                if m in self.model_params and self.model_params[m].loaded:
+                    load_models.append(m)
+            if load_models:
+                # NOTE: Error occurred in loading
+                if not self._load_models(load_models).status:
+                    return self._logw("No models loaded")
+            else:
+                self._logw("No models loaded")
+            # NOTE: if m is in self._models loading keys matched and loading was successful
+            models = {m: self._models.get(m, None) for m in params["models"]}
             criteria = {m: self.criteria[c] for m, c in params["criteria_map"].items()}
             params["models"] = models
             params["criteria"] = criteria
             self._model_step_func = func(**params)
+
+    def _refresh_update_funcs(self, models_map: Dict[str, str]) -> Return:
+        models = {k: self._models[v] for k, v in models_map.items()}
+        null_models = [k for k, v in models.items() if v is None]
+        if null_models:
+            return reterr(f"Models {null_models} are None")
+        if self.update_functions.train is not None:
+            for x in self.trainer_params.training_steps:
+                func = self.update_functions.__dict__[x]
+                if func is not None:
+                    self.update_functions.__dict__[x].set_models(models)
+        else:
+            self._model_step_func.set_models(models)  # type: ignore
+        self._models_map.update(models_map)
+        self._models_map = {k: v for k, v in self._models_map.items()
+                            if k in models}
+        return retsucc("Loaded models")
 
     def _init_training_steps(self):
         """Which training steps will be run.
@@ -1713,7 +1779,7 @@ class Trainer:
             if method == "load":
                 load_state = torch.load(os.path.join(self._savedir, weights))
                 try:
-                    for name in self.models:
+                    for name in self.models_available:
                         self._models[name].load_weights(
                             {"name": name, "weights": load_state["models"][name]})
                 except Exception as e:
@@ -2054,34 +2120,39 @@ class Trainer:
     # START: Methods
     @POST
     @methods
-    def set_model(self, model_name: str) -> Return:
-        """Set one of the available models as current active model"""
-        return self._set_model_active(model_name)
+    def set_model(self, models_map: Dict[str, str]) -> Return:
+        """Set models active according to `models_map`.
 
-    def _set_model_active(self, model_name: str) -> Return:
-        """Set model with name `model_name` the active model.
+        `models_map` is a key, value pair of which models to assign in the
+        update function.  As the :class:`Trainer` can have multiple available
+        models, the names in :class:`Trainer` and :attr:`update_functions` may
+        not match. Models can be dynamically added or removed and in that case,
+        the models in :attr:`update_functions` has to reflect that.
 
-        Model name is an abstraction and a `model` can have multiple
-        :class:`torch.nn.Module` modules within it with separate criteria and
-        optimizers. It is the prerogative of the update_function to interact
-        with the model.
+        For example, consider the fact that initially available to models to
+        trainer are `['net_1', 'net_2']` and only one model is defined in the
+        :attr:`update_functions`, called `net`.
+
+        Initially no model is active, and the user calls :meth:`set_model` with
+        args `{'net': 'net_1'}`, which means to set `net` in
+        :attr:`update_functions` to `net_1`.  In this scenario, according to
+        parameters defined in :attr:`model_params`, the model `net_1` will be
+        initialized, devices allocated and further calls to the function will
+        use that model. User can later change the model in any way she likes.
 
         Args:
-            model_name: Name of the model
+            models_map: Name of the model
 
         Returns:
             An instance of :class:`Return`
 
         """
-        if model_name not in self.models:
-            return make_return(False, self._loge(f"No such model {model_name}"))
-        else:
-            for name in self._models:
-                if name != model_name:  # free only GPU resources
-                    self._models.set_device(model_name, torch.device("cpu"))
-            for x in self.update_functions:
-                self._training_steps[x]._model_name = model_name
-            return make_return(True, self._logd(f"Model {model_name} is now the current active model."))
+        diff = diff_as_sets(models_map.values(), self.models_available)
+        if diff:
+            return make_return(False, self._loge(f"Some models {diff} not available"))
+        self._load_models([*models_map.values()])
+        self._refresh_update_funcs(models_map)
+        return make_return(True, self._logd(f"Models {models_map} are active."))
 
     # TODO: This should be a given input and not an image
     @POST
@@ -2223,7 +2294,7 @@ class Trainer:
             return make_return(False,
                                self._logd(f"Check save file! Not all {model_names} " +
                                           f"in given weights {weights.keys()}"))  # type: ignore
-        if not all(x in self.models for x in model_names):
+        if not all(x in self.active_models.values() for x in model_names):
             return make_return(False, self._logd(f"Some models currently not in scope"))
         try:
             for model_name in model_names:
@@ -2489,13 +2560,7 @@ class Trainer:
         """
         state = {}
         for k in self.state_vars:
-            if k == "models":
-                if lite:
-                    state["models"] = {x: self._models[x].dict() for x in self._models}
-                else:
-                    state["models"] = {x: self._models[x].dump() for x in self._models}
-            else:
-                state[k] = getattr(self, k)
+            state[k] = getattr(self, k)
         # state["epoch"] = self.epoch
         # state["given_name"] = getattr(self, "given_name", "")
         # state["iterations"] = self.iterations
@@ -2546,10 +2611,15 @@ class Trainer:
         #         state["trainer_params"][k] = copy.deepcopy(v)
         # state["metrics"] = self._metrics
         # NOTE: Extra items for tracking required by daemon
+        if lite:
+            state["models"] = {x: self._models[x].dict() for x in self._models}
+        else:
+            state["models"] = {x: self._models[x].dump() for x in self._models}
         state["max_epochs"] = self.max_epochs
         state["max_iterations"] = self.max_iterations
         # CHECK: If there's a given_name
         state["data"] = self.data_params.name
+        state["active_models"] = self.active_models
         state["given_name"] = getattr(self, "given_name", "")
         state["mode"] = "lite" if lite else "full"  # type: ignore
         return TrainerState.parse_obj(state)
@@ -2662,7 +2732,7 @@ class Trainer:
         else:
             saved_models = saved_state.models.keys()     # type: ignore
         # TODO: Should allow extra models
-        diff = diff_as_sets(self.models, saved_models)  # type: ignore
+        diff = diff_as_sets(self.models_available, saved_models)  # type: ignore
         if diff:  # type: ignore
             return reterr(self._loge("Could not load saved_state. " +
                                      f"Some required models not in saved state {diff}"))
@@ -2689,7 +2759,7 @@ class Trainer:
                     pass
                 elif k not in {"loaded_models", "active_model", "hooks", "devices",
                                "saves", "metrics", "allocated_devices", "extra_metrics",
-                               "extra_items"}:
+                               "active_models", "extra_items"}:
                     # NOTE: state_vars
                     setattr(self, k, v)
             if saved_dict["extra_items"]:
@@ -3084,9 +3154,9 @@ class Trainer:
     @prop                       # type: ignore
     @state_var                  # type: ignore
     @property
-    def models(self) -> List[str]:
+    def models_available(self) -> List[str]:
         "Return the names of the models available with the server"
-        return [*self._models.keys()]
+        return [*self.model_params.keys()]
 
     @prop                       # type: ignore
     @property
@@ -3096,14 +3166,9 @@ class Trainer:
     @prop                       # type: ignore
     @state_var                  # type: ignore
     @property
-    def active_model(self) -> str:
-        "Active model is both get and set by setting the _update_function"
-        # NOTE: Was self.update_functions[self.trainer_params.training_steps[0]]._model_name
-        #       "train" is assumed to be present as a step
-        if self.update_functions.train is None:
-            return ""
-        else:
-            return ", ".join(self.update_functions.train.models.keys())
+    def active_models(self) -> Dict[str, str]:
+        "Active models are set and loaded by :attr:`_model_step_func`"
+        return self._models_map
 
     @prop                       # type: ignore
     @property
@@ -3315,7 +3380,7 @@ class Trainer:
             update_key = self.iterations / self._hooks_run_iter_frequency
         else:
             update_key = self.epoch
-        model_names = (given_name and (given_name + "_")) + "_".join(self.models)
+        model_names = (given_name and (given_name + "_")) + "_".join(self.models_available)
         save_name = os.path.join(self._savedir, "_".join([model_names,
                                                           "{:03}".format(update_key)]))
         return save_name
@@ -3323,7 +3388,7 @@ class Trainer:
     @property
     def _save_path_without_epoch(self):
         given_name = getattr(self, "given_name", "")
-        model_names = (given_name and (given_name + "_")) + "_".join(self.models)
+        model_names = (given_name and (given_name + "_")) + "_".join(self.models_available)
         save_name = os.path.join(self._savedir, model_names)
         return save_name
 

@@ -258,6 +258,14 @@ class Model:
                 dump["model_def"] = self._model_def
             return dump
 
+    def to_params(self):
+        return {"name": self._name,
+                "params": self._model_params,
+                "optimizer": self._optimizer_name,
+                "gpus": self._gpus,
+                "model": self._model_def,
+                "loaded": self.loaded}
+
     def load(self, state: Dict[str, Any]) -> Tuple[bool, Union[str, None]]:
         """Load the entire model state.
 
@@ -324,7 +332,8 @@ class ModelStep(abc.ABC):
     collecting data from the models with the :class:`Trainer`.
 
     Args:
-        models: A dictionary of model_names and models
+        models: A list of model names OR
+                A dictionary of model_names and models.
         criteria_map: A dictionary of model_names to criteria_names
         checks: A dictionary of model_names to validation functions
         logs: Which values to log. Can be anything in :attr:`returns`.
@@ -396,7 +405,7 @@ class ModelStep(abc.ABC):
 
     """
 
-    def __init__(self, models: Dict[str, Model],
+    def __init__(self, models: Union[List[str], Dict[str, Model]],
                  criteria_map: Dict[str, str],
                  checks: Dict[str, Callable[[Model], bool]],
                  criteria: Dict[str, Callable] = {},

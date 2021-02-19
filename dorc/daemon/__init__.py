@@ -1574,6 +1574,8 @@ if "{self.root_dir}" not in sys.path:
             Requests:
                 params:
                     name: str
+                body:
+                    config_file: bytes
 
             Schemas:
                 class Task(BaseModel):

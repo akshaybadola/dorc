@@ -35,8 +35,9 @@ def test_trainer_init_data_good_params(params_and_trainer):
 
 
 @pytest.mark.quick
-def test_trainer_init_data_good_params_dict(trainer):
+def test_trainer_init_data_good_params_dict(trainer_json_config):
     # inject custom loader  data
+    _, trainer = trainer_json_config
     trainer._init_device()
     trainer._init_models()
     trainer._init_data_and_dataloaders()
@@ -95,18 +96,25 @@ def test_trainer_init_update_functions(params_and_trainer, basic_config):
 
 
 @pytest.mark.quick
-def test_trainer_init_update_functions_dict(trainer):
+@pytest.mark.parametrize("params_and_trainer", [True, False], indirect=True)
+def test_trainer_init_update_functions_dict(params_and_trainer):
+    params, trainer = params_and_trainer
     trainer._init_device()
     trainer._init_models()
     trainer._init_data_and_dataloaders()
     trainer._init_update_funcs()
     trainer._init_training_steps()
     assert "net" in trainer._training_steps["train"][0].models
-    assert trainer._training_steps["train"][0].models['net'].loaded
-    train_iter = iter(trainer.train_loader)
-    values = trainer._training_steps["train"][0](train_iter.__next__())
-    assert isinstance(values, dict)
-    assert all(x in values for x in trainer._training_steps["train"][1])
+    if trainer._model_step_func:
+        assert trainer._training_steps["train"][0].models['net'] is None
+        assert trainer.active_models == {}
+    else:
+        assert trainer._training_steps["train"][0].models['net'].loaded
+        assert trainer.active_models == {"net": "net"}
+        train_iter = iter(trainer.train_loader)
+        values = trainer._training_steps["train"][0](train_iter.__next__())
+        assert isinstance(values, dict)
+        assert all(x in values for x in trainer._training_steps["train"][1])
 
 
 @pytest.mark.quick

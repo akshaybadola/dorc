@@ -8,6 +8,25 @@ from dorc.trainer.model import Model
 from dorc.autoloads import ClassificationStep
 
 
+class SubTrainer(Trainer):
+    def __init__(self, _cuda, *args, **kwargs):
+        self._cuda = _cuda
+        super().__init__(*args, **kwargs)
+        self.reserved_gpus = []
+        self.reserve_gpus = lambda x: [True, None]
+
+    @property
+    def have_cuda(self):
+        return self._cuda
+
+
+class FakeRequest:
+    def __init__(self):
+        self.form = {}
+        self.json = None
+        self.files = {}
+
+
 def assertIn(a, b):
     assert a in b
 

@@ -349,7 +349,7 @@ class TrainerState(BaseModel):
     saves: Union[List[str], Dict[str, str]]  # name or dict of save file
     devices: Dict[str, List[int]]
     allocated_devices: List[int]
-    active_model: str
+    active_models: Dict[str, str]
     loaded_models: Union[List[str], Dict[str, Any]]
     models: Union[List[str], Dict[str, Any]]
     metrics: Dict[str, Dict[str, Any]]

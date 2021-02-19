@@ -1,0 +1,6 @@
+.. _criteria-root:
+
+Criteria
+========
+
+

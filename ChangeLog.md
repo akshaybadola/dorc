@@ -67,3 +67,8 @@
 - Defined `TrainerState` schema and integrated with daemon.
 - Fixed trainer load, save and resume functions.
 - Changed the tests to run all of them
+
+## [2021-02-20 Sat 03:16]
+- Fixed `Trainer.set_model` and `Trainer.active_models` and added tests.
+- New docs and some adjustments.
+- Added parametrized fixtures to tests.

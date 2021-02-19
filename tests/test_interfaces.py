@@ -13,6 +13,7 @@ from dorc.util import dget
 @pytest.mark.http
 def test_iface_init(params_and_iface):
     params, iface = params_and_iface
+    iface.trainer.set_model({"net": "net"})
     host = params['host']
     response = requests.request("GET", host + "start")
     assert "start" in response.content.decode().lower()
@@ -50,6 +51,7 @@ def test_iface_get_config():
 @pytest.mark.quick
 def test_iface_update_config(params_and_iface):
     params, iface = params_and_iface
+    iface.trainer.set_model({"net": "net"})
     with open(iface.config_file) as f:
         bleh = json.load(f)
     overrides = [["trainer_params", "max_epochs", 120],

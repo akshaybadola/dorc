@@ -32,7 +32,7 @@ Being assigned to a :class:`~dorc.trainer.model.ModelStep` automatically loads a
 model into the device memory.
 
 Multiple Models can exist in the same trainer within a training
-:doc:`/session`. If the :ref:`modelstep-root` requires more than one models,
+:doc:`./session`. If the :ref:`modelstep-root` requires more than one models,
 they are loaded as they're assigned to the :ref:`modelstep-root`.
 
 To check the model names and currently allocated model call :code:`/props/active_models`.

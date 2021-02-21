@@ -1,8 +1,6 @@
 from typing import List, Dict, Callable, Iterable, Union, Any
-import torch
 from torch.utils.data import Dataset
 import numpy as np
-from collections import OrderedDict
 from .overrides import MyDataLoader
 
 
@@ -24,83 +22,115 @@ class Exposes:
         return new_func
 
 
-class HookDict:
-    def __init__(self, permanent_items: Dict[str, Callable[[], None]]):
-        self._items = OrderedDict()
-        self._permanent_items = permanent_items
-        for k, v in self._permanent_items.items():
-            self._items[k] = v
+class Artefacts:
+    def __init__(self):
+        self._artefacts: Dict[str, Callable] = {}
 
-    def add(self, k: str, v: Callable[[], None]):
-        if k not in self._permanent_items:
-            self._items[k] = v
+    def add(self, x: str, f: Callable, overwrite: bool = False):
+        if x not in self._artefacts or overwrite:
+            self._artefacts[x] = f
+        else:
+            raise AttributeError("Item already exists. Use overwrite to update")
 
-    def remove(self, k: str):
-        if k not in self._permanent_items:
-            self._items.pop(k)
+    def remove(self, x):
+        self._artefacts.pop(x)
 
-    @property
-    def keys(self) -> Iterable:
-        return self._items.keys()
+    def __iter__(self):
+        return iter(self._artefacts.items())
 
-    @property
-    def values(self) -> Iterable:
-        return self._items.values()
+    def __getitem__(self, x):
+        return self._artefacts[x]
 
-    def __len__(self):
-        return len(self._items)
-
-    def __getitem__(self, k: str):
-        return self._items[k]
-
-    def __repr__(self):
-        return self._items.__repr__()
+    def __repr__(self) -> str:
+        return str({x: y.__name__ for x, y in self._artefacts.items()})
 
 
 class Hook:
     """A list of functions.
 
-    A :class:`Hook` is a list of :class:`Callable` usually which take no
-    arguments and return nothing.
+    A :class:`Hook` is a :code:`bleh` list of :class:`Callable` usually which take no
+    arguments and return nothing.  They can be executed at arbitrary points in a
+    codebase with separate concerns.
 
-    They can be executed at arbitrary points in a codebase with separate
-    concerns.
-
-    An instance of a :class:`Hook` must be called with :func:`run_hook` and if
-    the functions in the hook require args, then :func:`run_hook_with_args`
+    Here we implement named hooks, which are :code:`{str: Callable}` mappings with
+    :attr:`permanent_items` which cannot be changed.
 
     Args:
         permanent_items: List of functions which will never be removed from the hook
 
     """
 
-    def __init__(self, permanent_items: List[Callable]):
-        self._list = []
+    def __init__(self, permanent_items: Dict[str, Callable[..., None]]):
+        self._funcs: Dict[str, Callable[..., None]] = {}
+        self._list: List[str] = []
         self._permanent_items = permanent_items
+        self._funcs.update(self._permanent_items)
         self._list = [x for x in self._permanent_items]
 
-    def append(self, item: Callable[[], None]) -> None:
-        if item not in self._list:
-            self._list.append(item)
-        else:                   # move to back
-            self.remove(item)
-            self.append(item)
+    def pop(self, name: str):
+        """Pop :code:`name` from hook.
+        """
+        self._list.remove(name)
+        self._funcs.pop(name)
 
-    def remove(self, item: Callable[[], None]) -> None:
-        if item not in self._permanent_items and item in self._list:
-            self._list.remove(item)
+    def append(self, name: str, func: Callable[..., None]) -> None:
+        """Append :code:`func` with :code:`name` to hook.
 
-    def push(self, item: Callable[[], None]) -> None:
-        self._list.insert(len(self._permanent_items), item)
+        If hook with :code:`name` already exists, then the existing hook is
+        removed and then the new one is appended.
 
-    def insert(self, i: int, item: Callable[[], None]) -> None:
-        if i >= len(self._permanent_items):
-            self._list.insert(i, item)
+        """
+        self.insert(len(self._list), name, func)
+
+    def remove(self, name: str) -> None:
+        """Remove :code:`name` from hook."""
+        if name in self._permanent_items:
+            raise ValueError(f"Cannot remove permanent item {name}")
+        if name in self._list:
+            self._list.remove(name)
+            self._funcs.pop(name)
+
+    def push(self, name: str, func: Callable[..., None]) -> None:
+        """Add hook to front.
+
+        If hook with :code:`name` already exists, then the existing hook is
+        removed and then the new one is pushed at front.
+
+        """
+        self.insert(0, name, func)
+
+    def insert(self, i: int, name: str, func: Callable[..., None]) -> None:
+        if name in self._list:
+            self.remove(name)
+        if name not in self._permanent_items:
+            if i < 0:
+                i = len(self._list) + i
+            if i >= len(self._permanent_items):
+                self._list.insert(i, name)
+                self._funcs[name] = func
+            else:
+                self._list.insert(len(self._permanent_items), name)
+                self._funcs[name] = func
         else:
-            self._list.insert(len(self._permanent_items), item)
+            raise ValueError(f"Cannot modify permanent item {name}")
 
-    def __getitem__(self, x: int) -> Callable[[], None]:
-        return self._list[x]
+    def keys(self) -> List[str]:
+        return self._list
+
+    def values(self) -> List[Callable]:
+        return [*self._funcs.values()]
+
+    def index(self, item: str) -> int:
+        return self._list.index(item)
+
+    def __iter__(self):
+        return iter(self._list)
+
+    def __getitem__(self, x: Union[int, str]) -> Callable[..., None]:
+        if isinstance(x, int):
+            return self._funcs[self._list[x]]
+        else:
+            return self._funcs[x]
 
     def __len__(self) -> int:
         return len(self._list)
@@ -198,8 +228,8 @@ def get_proxy_dataloader(dataset, params, fraction_or_number, logger=None):
     return temp_loader
 
 
-def _log_metrics_for_step(step, key_name, step_loader, metrics,
-                          update_key, log_func):
+def log_metrics_for_step(step, key_name, step_loader, metrics,
+                         update_key, log_func):
     metric_names = set(metrics.keys())
     log_func(f"Total datapoints processed for {step} step in {key_name}: {update_key}," +
              f" {metrics['num_datapoints'][update_key]}")
@@ -210,3 +240,55 @@ def _log_metrics_for_step(step, key_name, step_loader, metrics,
         else:
             log_func(f"No value recorded for {step}_step," +
                      f" metric {m} and {key_name} {update_key}")
+
+
+def log_metrics(cls):
+    if "iterations" in cls.trainer_params.training_steps:
+        update_key = cls.iterations / cls._hooks_run_iter_frequency
+        key_name = "iterations chunk"
+    else:
+        update_key = cls.epoch
+        key_name = "epoch"
+    log_func = cls._logd
+    for step in cls._metrics:
+        if getattr(cls, step + "_loader"):
+            log_metrics_for_step(step, key_name, getattr(cls, step + "_loader"),
+                                 cls._metrics[step], update_key, log_func)
+        else:
+            cls._logd(f"No dataloader for {step}")
+
+
+# TODO: A lot of these controls and methods which depend on params will
+#       have to be rewritten.
+# TODO: multiplier can be a trainer_param
+# FIXME: Annealing may depend on extra_metrics
+# TODO: Annealing can be an external function like CheckFunc
+def anneal_lr(cls, multiplier=.9):
+    cls._logi("Annealing Learning Rate")
+    check_losses = [loss[2] for loss in cls.losses if loss[0] == cls.save_on]
+    if len(check_losses) >= 2:
+        delta = check_losses[-2] - check_losses[-1]
+        if delta < .01 * check_losses[-2]:
+            for param_group in cls.optimizer.param_groups:
+                param_group['lr'] *= multiplier
+            cls._logi("Annealing...")
+
+
+# FIXME: TRAINING_STEPS
+# NOTE: For this a sample function has to be defined
+def log_samples(cls, fraction=0.01):
+    """For a few randomly selected datapoints, log the datapoint_name and
+    corresponding model output
+    """
+    if "iterations" in cls.trainer_params.training_steps:
+        raise NotImplementedError
+    for step in cls.trainer_params.training_steps:
+        dataset = getattr(cls, step + "_loader").dataset
+        loader = get_proxy_dataloader(dataset,
+                                      cls.dataloader_params[step],
+                                      10,  # seems like a good number
+                                      cls.logger)
+        step_func = getattr(cls, step + "_step_func")
+        # reset, launch each in a separate thread, wait for finish
+        # CHECK: Is this a good idea? Maybe separate runner from epoch
+        getattr(cls._epoch_runner, "run_" + step)(step_func, loader, True)

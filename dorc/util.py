@@ -41,10 +41,23 @@ def concat(list_var: Iterable[List]) -> List:
     return temp
 
 
+# def deprecated(f: Union[Callable, property]) -> Union[Callable, property]:
+#     if isinstance(f, property):
+#         return pdeprecated(f)
+#     else:
+#         return fdeprecated(f)
+
+
 def deprecated(f: Callable) -> Callable:
     warn_str = f"Function {f.__name__} is deprecated."
     warnings.warn(warn_str)
     return f
+
+
+# def pdeprecated(f: property) -> property:
+#     warn_str = f"Function {f.fget.__name__} is deprecated."
+#     warnings.warn(warn_str)
+#     return f
 
 
 def serialize_defaults(x: Any) -> str:
@@ -67,8 +80,9 @@ def make_json(x: Any, dump: bool = True) -> Response:
     return Response(_dump(x) if dump else x, 200, mimetype="application/json")
 
 
-def gen_file_logger(logdir: str, log_file_name: str) -> Tuple[str, logging.Logger]:
-    logger = logging.getLogger('default_logger')
+def gen_file_logger(logdir: str, logger_name: str,
+                    log_file_name: str) -> Tuple[str, logging.Logger]:
+    logger = logging.getLogger(logger_name)
     formatter = logging.Formatter(datefmt='%Y/%m/%d %I:%M:%S %p', fmt='%(asctime)s %(message)s')
     if not os.path.exists(logdir):
         os.mkdir(logdir)
@@ -99,11 +113,12 @@ def get_backup_num(filedir: str, filename: str) -> int:
     return cur_backup_num
 
 
-def gen_file_and_stream_logger(logdir: str, log_file_name: str,
+def gen_file_and_stream_logger(logdir: str, logger_name: str,
+                               log_file_name: str,
                                file_loglevel: Optional[str] = None,
                                stream_loglevel: Optional[str] = None,
                                logger_level: Optional[str] = None):
-    logger = logging.getLogger('default_logger')
+    logger = logging.getLogger(logger_name)
     formatter = logging.Formatter(datefmt='%Y/%m/%d %I:%M:%S %p', fmt='%(asctime)s %(message)s')
     if not os.path.exists(logdir):
         os.mkdir(logdir)

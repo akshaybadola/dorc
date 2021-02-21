@@ -13,6 +13,7 @@
    ^, for subsubsections
    ", for paragraphs
 
+.. _index-root:
 
 Welcome to DORC's documentation!
 ********************************
@@ -50,19 +51,34 @@ You can browse the api docs at :doc:`/api/modules` or, get started with :doc:`/i
 
    Test, :ref:`index-need` (#Need) :ref:`intro:Device Allocation`, :ref:`intro:Need`, :mod:`torch.optim`
 
-Contents:
-=========
+Contents
+--------
 
 .. toctree::
+   :caption: Introduction
    :maxdepth: 4
 
    intro
-   session
-   models
-   modelstep
-   Data and Dataloaders <data>
-   criteria
+   quickstart
+   concepts
+   tutorial
+
+.. toctree::
+   :caption: Components
+   :maxdepth: 4
+
    trainer
+   interface
+   configuration <config>
+   client
+   daemon
+   tasks
+   autoloads
+
+.. toctree::
+   :caption: Reference
+   :maxdepth: 4
+
    API reference <api/modules>
 
 

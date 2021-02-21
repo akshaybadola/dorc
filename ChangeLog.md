@@ -72,3 +72,13 @@
 - Fixed `Trainer.set_model` and `Trainer.active_models` and added tests.
 - New docs and some adjustments.
 - Added parametrized fixtures to tests.
+
+## [2021-02-22 Mon 05:14]
+- Changed docs theme to (customized)
+  [sphinx_rtd_theme](https://github.com/readthedocs/sphinx_rtd_theme)
+- Added new docs
+- Deleted `dorc/trainer/_checks.py`.
+- Renamed `dorc/trainer/hooks.py` -> `dorc/trainer/funcs.py`
+- Added `run_quick.sh` and `run_threaded.sh` for running tests.
+- Fixed issues related to `trainer.funcs` and `Trainer.funcs`
+- Added some tests for the above also.

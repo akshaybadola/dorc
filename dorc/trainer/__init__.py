@@ -15,17 +15,18 @@ from functools import partial
 from threading import Thread, Event
 from PIL import Image
 import numpy as np
+import logging
 from multiprocessing.pool import ThreadPool
 from torch.utils.data import Dataset, DataLoader
 
 from ..device import (init_nvml, gpu_ranking, gpu_util, gpu_name,
                       cpu_info, memory_info, DeviceMonitor)
 from ..util import gen_file_and_stream_logger, deprecated, _dump, concat, diff_as_sets, BasicType
-from ..task import Signals
+from ..task import Task, Signals
 from ..mods import Modules
 from ..overrides import MyDataLoader, default_tensorify
 from .._log import Log
-from ..helpers import (Tag, ProxyDataset, PropertyProxy, HookDict, Hook,
+from ..helpers import (Tag, ProxyDataset, PropertyProxy, Hook, Artefacts,
                        GET, POST, Exposes)
 from ..version import __version__
 
@@ -34,7 +35,7 @@ from .model import Model, ModelStep
 from .models import Return, ReturnBinary, ReturnExtraInfo, AdhocEvalParams, TrainerState, StateEnum
 from . import config
 from .config import Metric
-from . import hooks as hooks_module
+from . import funcs as funcs_module
 
 
 PathType = Union[pathlib.Path, str]
@@ -57,12 +58,6 @@ trainer/epoch_runner/batch_vars/{prop}, for some "prop" of batch_vars.
 """
 
 internals = Tag("internals")
-prop_names = {"saves", "gpus", "system_info", "devices", "models", "active_model",
-              "epoch", "max_epochs", "iterations", "max_iterations",
-              "updatable_params", "all_attrs", "all_params", "metrics",
-              "post_epoch_hooks_to_run", "all_post_epoch_hooks", "items_to_log_dict",
-              "current_run", "paused", "best_save", "props", "controls", "methods",
-              "extras"}
 
 # Protocol:
 # 1. "control" is defined as any method which changes the state of the
@@ -112,6 +107,14 @@ prop_names = {"saves", "gpus", "system_info", "devices", "models", "active_model
 
 def return_image(status: bool, image: str) -> ReturnBinary:
     return ReturnBinary(status=status, image=image)
+
+
+def make_return_or_info(status: bool, message: str, data: Optional[Dict] = None) ->\
+        Union[Return, ReturnExtraInfo]:
+    if data is None:
+        return Return(status=status, message=message)
+    else:
+        return make_info(status, message, data)
 
 
 def make_return(status: bool, message: str) -> Return:
@@ -228,7 +231,8 @@ class Trainer:
         if not os.path.exists(self._logdir):
             os.mkdir(self._logdir)
         self._logfile, self._logger = gen_file_and_stream_logger(
-            self._logdir, "trainer", self.config.log_levels.file,
+            self._logdir, "_".join(self._data_dir.split("/")[-2:]),
+            "trainer", self.config.log_levels.file,
             self.config.log_levels.stream)
         log = Log(self._logger)
         self._logd = log._logd
@@ -313,7 +317,8 @@ class Trainer:
         self._init_state_vars()
         self._init_task_runners()
         self._init_modules()
-        self._init_hooks()
+        self._init_funcs()
+        self._init_objects_requiring_funcs()
         self._dump_state()
         # self._init_extra_controls()
 
@@ -459,9 +464,6 @@ class Trainer:
         :attr:`epoch` always remains 0 if training only with iterations and
         :attr:`iterations` increase.
 
-        post_epoch_hooks are run after a specified number of iterations which is
-        :attr:`_hooks_run_iter_frequency`
-
         """
         # params and state properties
 
@@ -481,28 +483,6 @@ class Trainer:
 
         # NOTE: Default setting for tasks
         self._aborted = []  # prev_loop_aborted
-
-        # Initialize hooks. Validate test and save can never be removed, LOL
-        #
-        # TODO: Not sure if hooks are state or property vars
-        #       Maybe they're just hooks
-        # TODO: There should be a better way as I should be able to disable
-        #       validate and test That can only be if I specify order in certain
-        #       hooks.
-        self._post_epoch_hooks_to_run = Hook(["validate", "test", "update_metrics"])
-
-        if not getattr(self, "_hooks_run_iter_frequency", None):
-            self._hooks_run_iter_frequency = self.trainer_params.test_frequency
-        # FIXME: validate, test, update_metrics is mandatory for now,
-        #        unless val_loader and test_loader are none of course
-        self._post_epoch_hooks_to_run.append("save_history")
-        self._post_epoch_hooks_to_run.append("save_best")
-        self._post_epoch_hooks_to_run.append("save_checkpoint")
-        self._post_epoch_hooks_to_run.append("log")
-
-        # NOTE: _log_metrics is a function so "metrics" defines a way to log it
-        #       rather than just copying the values.
-        # self._items_to_log_dict = {"metrics": self._log_metrics}
         # CHECK: Why am I initializing device again?
         # self._init_device()
         self._epoch = 0
@@ -608,20 +588,43 @@ class Trainer:
         self._models: Dict[str, Model] = {}
         self._models_map: Dict[str, str] = {}
 
-    def _init_hooks(self):
-        """Initialize :attr:`hooks` and :attr:`hooks_with_args`.
+    def _init_funcs(self):
+        """Initialize :attr:`funcs` and :attr:`funcs_with_args`.
 
-        All initial hooks are loaded from :mod:`hooks` but can be added
+        All initial :code:`funcs` are loaded from :mod:`funcs` but more can be added
         by the user.
 
         """
-        self._hooks = {}
-        self._hooks_with_args = {}
-        for x in hooks_module.__dict__:
-            if x.endswith("_hook"):
-                self._hooks[x] = hooks_module.__dict__[x]
-            if x.endswith("_hook_with_args"):
-                self._hooks_with_args[x] = hooks_module.__dict__[x]
+        self._funcs = {}
+        self._funcs_with_args = {}
+        for x, y in funcs_module.__dict__.items():
+            if x.endswith("_func") and callable(y):
+                self._funcs[x.rstrip("_func")] = y
+            if x.endswith("_func_with_args") and callable(y):
+                self._funcs_with_args[x.rstrip("_func_with_args")] = y
+
+    def _init_objects_requiring_funcs(self):
+        """Initialize all objects which require :attr:`funcs` or :attr:`funcs_with_args`.
+        """
+        self._init_artefacts_to_log()
+        self._init_hooks()
+
+    def _init_artefacts_to_log(self):
+        self._artefacts_to_log = Artefacts()
+        self._artefacts_to_log.add("metrics", self._funcs["update_metrics"])
+
+    def _init_hooks(self):
+        """Initialize all hooks.
+
+        Only :attr:`post_epoch_hook` is initialized right now.
+        """
+        self._post_epoch_hook: Hook = Hook({x: y for x, y in self._funcs.items()
+                                            if x in ["validate", "test", "update_metrics"]})
+        self._hooks_run_iter_frequency = self.trainer_params.test_frequency
+        # self._post_epoch_hook.append("save_history_hook")
+        self._post_epoch_hook.append("save_checkpoint", funcs_module.save_checkpoint_func)
+        self._post_epoch_hook.append("save_best", funcs_module.save_best_func)
+        self._post_epoch_hook.append("log", funcs_module.log_func)
 
     def load_models_state(self, model_state: Dict) -> Return:
         """Load state of all :attr:`loaded_models` from :code:`model_state`.
@@ -637,8 +640,8 @@ class Trainer:
             status, message = self._models[model].load(model_state[model])
             if not status:
                 self._loge(f"Loading model {model} failed. Error {message}")
-                return make_return(False, message)
-        return make_return(True, "")
+                return reterr(message)
+        return retsucc("")
 
     def allocate_devices(self, load_models: Union[str, List[str]] = [],
                          unload_models: Union[str, List[str]] = []):
@@ -1090,14 +1093,14 @@ class Trainer:
                                    **{"logd": self._logd, "loge": self._loge,
                                       "logi": self._logi, "logw": self._logw})
         self._epoch_runner.name = "epoch_runner"
-        self._task_runners = {"main": self._epoch_runner,
-                              "adhoc": None,
-                              "user": None}
+        self._task_runners: Dict[str, Optional[Task]] = {"main": self._epoch_runner,
+                                                         "adhoc": None,
+                                                         "user": None}
         self._task_thread_keys = {"main": "main",
                                   "adhoc": "adhoc",
                                   "user": "user"}
         # FIXME: For val and test maybe update in separate variables
-        self._task_callbacks = {"main": self._run_post_epoch_hooks,
+        self._task_callbacks = {"main": self._run_post_epoch_hook,
                                 "adhoc": None,
                                 "user": None}
 
@@ -1114,16 +1117,10 @@ class Trainer:
         # signals = SimpleNamespace()
         if which == "main":
             signals = Signals(self._running_event, self._current_aborted_event)
-            # signals.paused = self._running_event
-            # signals.aborted = lambda: self._current_aborted_event.is_set()
         elif which == "adhoc":
             signals = Signals(self._adhoc_running_event, self._adhoc_aborted_event)
-            # signals.paused = self._adhoc_running_event
-            # signals.aborted = lambda: self._adhoc_aborted_event.is_set()
         elif which == "user":
-            signals = Signals(self._usefunc_running_event, self._userfunc_aborted_event)
-            # signals.paused = self._userfunc_running_event
-            # signals.aborted = lambda: self._userfunc_aborted_event.is_set()
+            signals = Signals(self._userfunc_running_event, self._userfunc_aborted_event)
         return device_monitor, signals
 
     def _task_runner_initialize(self, name: str, metrics: Dict[str, Dict],
@@ -1462,7 +1459,7 @@ class Trainer:
           or `{"train", "val", "test", "none"}`
 
         For a :class:`Trainer` instance the regular flow is `train_step ->
-        post_epoch_hooks` or equivalent steps. However, all those can be paused
+        post_epoch_hook` or equivalent steps. However, all those can be paused
         to run auxiliary tasks to check how trainer is doing.
 
         `run` is the state of the trainer in the sense that if some active task
@@ -1867,12 +1864,6 @@ class Trainer:
                 return make_return(False, "Unknown execution flow")
         else:
             return make_return(False, "Unknown execution flow")
-
-    @POST
-    @extras
-    def force_run_hooks(self, data: Dict[str, Any]) -> Return:
-        "Run the specified post_epoch_hooks_before the epoch is completed"
-        return make_return(False, self._logi("Does nothing for now"))
 
     # TODO: Functions like this should return a json like form to update to the server
     #       For each such endpoint, there should be a "endpoint_params" endpoint which
@@ -2517,6 +2508,13 @@ class Trainer:
                     file path to which the module is written.
         """
         return make_return(*self._modules.add_module(request, checks))
+
+    @POST
+    @methods
+    def add_funcs(self, funcs: Dict[str, Callable]) -> Return:
+        # Add hook where?
+        # Should this have a WHEN?
+        return retsucc("")
     # END: Methods
 
     # START: Objects
@@ -2526,8 +2524,17 @@ class Trainer:
         return self._epoch_runner
 
     @POST
-    @objects                    # type: ignore
-    def task_runners(self):
+    @objects
+    def task_runners(self) -> Dict[str, Optional[Task]]:
+        """Return the task runners.
+
+        See :class:`~dorc.task.Task`, :class:`~dorc.task.LoopTask` and
+        :class:`~dorc.trainer.epoch.Epoch`
+
+        The runners keep track of all tasks registered with the :class:`Trainer`
+        See :doc:`/tasks` for details.
+
+        """
         return self._task_runners
     # END: Objects
 
@@ -2549,6 +2556,7 @@ class Trainer:
 
         State is a difficult thing to serialize, retrieve and
         restore. Essentially, all of the trainer should resume given:
+
             a. initial config
             b. current state
 
@@ -2624,20 +2632,24 @@ class Trainer:
         state["mode"] = "lite" if lite else "full"  # type: ignore
         return TrainerState.parse_obj(state)
 
-    def _save(self, save_path=None, best=False):
-        if not save_path:
-            save_path = self._save_path_with_epoch
-        if best:
-            if not save_path.endswith(".pth"):
-                save_path += "_best.pth"
-            else:
-                save_path = save_path.replace(".pth", "") + "_best.pth"
-        elif not save_path.endswith(".pth"):
-            save_path += ".pth"
-        self._logd(f"Trying to save to {save_path}")
-        save_state = self._get_state()
-        self._logi(f"Saving to {save_path}")
-        torch.save(save_state, save_path)
+    def _save(self, save_path: Optional[str] = None, best: bool = False) -> Return:
+        try:
+            if not save_path:
+                save_path = self._save_path_with_epoch
+            if best:
+                if not save_path.endswith(".pth"):  # type: ignore
+                    save_path += "_best.pth"        # type: ignore
+                else:
+                    save_path = save_path.replace(".pth", "") + "_best.pth"  # type: ignore
+            elif not save_path.endswith(".pth"):                             # type: ignore
+                save_path += ".pth"  # type: ignore
+            self._logd(f"Trying to save to {save_path}")
+            save_state = self._get_state()
+            self._logi(f"Saving to {save_path}")
+            torch.save(save_state, save_path)
+            return retsucc(f"Saved to {save_path}")
+        except Exception as e:
+            return reterr(f"{e}")
         # # FIXME: If some thing is not saved, it cannot be resumed also
         # # NOTE: As I've removed callable saving from dataloader params,
         # #       this should save now
@@ -2757,7 +2769,7 @@ class Trainer:
                 elif k == "saves" and isinstance(v, dict):
                     # write the files
                     pass
-                elif k not in {"loaded_models", "active_model", "hooks", "devices",
+                elif k not in {"loaded_models", "active_model", "funcs", "devices",
                                "saves", "metrics", "allocated_devices", "extra_metrics",
                                "active_models", "extra_items"}:
                     # NOTE: state_vars
@@ -2786,21 +2798,25 @@ class Trainer:
         self._init_all()
         self._resume_from_state(self._backup_state)
 
-    def check_and_save(self):
-        if self._check_func is not None:
-            assert ("when" in self._check_func.requires and
-                    self._check_func.requires["when"]
-                    in ["train", "val", "test"]), "Not sure when to save"
-            when = self._check_func.requires["when"]
-            assert all(x in self._metrics[when] for x in self._check_func.requires["metrics"]),\
-                "self._check_func requirements not fulfilled"
-            if self._check_func(self._metrics[when]):
-                self._logi("Save check returned True.")
-                self._save(None, True)
+    def check_and_save(self) -> Return:
+        if self.trainer_params.check_func is not None:
+            if ("when" in self.trainer_params.check_func.requires and
+                self.trainer_params.check_func.requires["when"] not in
+                ["train", "val", "test"]):
+                return reterr("Not sure when to save")
             else:
-                self._logi("Save check returned False. Not saving")
+                when = self.trainer_params.check_func.requires["when"]  # type: ignore
+                if all(x in self._metrics[when]
+                       for x in self.trainer_params.check_func.requires["metrics"]):  # type: ignore
+                    return reterr(f"Some items not in metrics for {when}")
+                elif self.trainer_params.check_func(self._metrics[when]):
+                    self._logd("Save check returned True.")
+                    return self._save(None, True)
+                else:
+                    return reterr(self._loge("Save check returned False. Not saving"))
         else:
-            self._logi("Check func is None. Not saving")
+            self._logd("Check func is None. Saving unconditionally")
+            return self._save(None, True)
     # END: Save, Load and Resume
 
     # START: Controls
@@ -3013,6 +3029,7 @@ class Trainer:
         self._transition(self.current_state, "force_finshed_none")
 
     def _abort_current(self, cause: str):
+        """Flag which if true aborts the :attr:`epoch_runner`"""
         if not self._current_aborted:
             self._toggle_current_aborted()
         self._finish_if_paused_or_running()
@@ -3232,6 +3249,16 @@ class Trainer:
 
     @prop                       # type: ignore
     @property
+    @deprecated
+    def test_frequency(self):
+        return self.config.trainer_params.test_frequency
+
+    @test_frequency.setter
+    def test_frequency(self, x: int):
+        self.config.trainer_params.test_frequency = x
+
+    @prop                       # type: ignore
+    @property
     def controls(self) -> Dict[str, Callable[[], str]]:
         """Controls are primary functions through which training is controlled. They
         affect the main training loop and other functions can be run either in
@@ -3427,6 +3454,29 @@ class Trainer:
         "File and stream Log levels for the trainer"
         return self.config.log_levels
 
+    @log_levels.setter
+    def log_levels(self, x: Dict[str, str]):
+        "File and stream Log levels for the trainer"
+        if "file" in x:
+            try:
+                self.config.log_levels.file = x["file"]
+                for h in self._logger.handlers:
+                    if isinstance(h, logging.FileHandler):
+                        h.setLevel(self.config.log_levels.file.value)  # type: ignore
+            except Exception:
+                pass
+        if "stream" in x:
+            try:
+                self.config.log_levels.file = x["stream"]
+                for h in self._logger.handlers:
+                    if isinstance(h, logging.StreamHandler):
+                        h.setLevel(self.config.log_levels.stream.value)
+            except Exception:
+                pass
+        diff = diff_as_sets(x.keys(), {"file", "stream"})
+        if diff:
+            self._loge(f"Bad keys {diff}")
+
     @prop                       # type: ignore
     @state_var                  # type: ignore
     @property
@@ -3602,35 +3652,51 @@ class Trainer:
         return dict((k, v) for k, v in self._metrics["val"].items()
                     if k[0] == "sample")
 
-    # NOTE: Not sure if I want to use dir(self)
-    @prop                       # type: ignore
-    @property
-    def all_post_epoch_hooks(self) -> Dict[str, Any]:
-        """All the post epoch hooks present. All of them may not be called. See
-        `post_epoch_hooks_before`."""
-        dict_a = dict((x, y) for (x, y) in self.__class__.__dict__.items()
-                      if x.endswith("post_epoch_hook") and
-                      callable(y) and
-                      x != "add_post_epoch_hook" and
-                      x != "remove_post_epoch_hook")
-        dict_b = dict((x, y) for (x, y) in self.__dict__.items()
-                      if x.endswith("post_epoch_hook") and
-                      callable(y) and
-                      x != "add_post_epoch_hook" and
-                      x != "remove_post_epoch_hook")
-        return {**dict_a, **dict_b}
+    # # NOTE: Not sure if I want to use dir(self)
+    # @prop                       # type: ignore
+    # @property
+    # def all_post_epoch_hooks(self) -> Dict[str, Any]:
+    #     """All the post epoch funcs present. All of them may not be called. See
+    #     `post_epoch_hooks_before`."""
+    #     dict_a = dict((x, y) for (x, y) in self.__class__.__dict__.items()
+    #                   if x.endswith("post_epoch_hook") and
+    #                   callable(y) and
+    #                   x != "add_to_post_epoch_hook" and
+    #                   x != "remove_post_epoch_hook")
+    #     dict_b = dict((x, y) for (x, y) in self.__dict__.items()
+    #                   if x.endswith("post_epoch_hook") and
+    #                   callable(y) and
+    #                   x != "add_to_post_epoch_hook" and
+    #                   x != "remove_post_epoch_hook")
+    #     return {**dict_a, **dict_b}
 
     @prop                       # type: ignore
     @property
-    def post_epoch_hooks_to_run(self) -> Dict[str, Callable]:
-        """All the post epoch hooks which will be called at the end of an epoch."""
-        return self._post_epoch_hooks_to_run
+    def post_epoch_hook(self) -> Hook:
+        """All the post epoch funcs which will be called at the end of an epoch."""
+        return self._post_epoch_hook
 
     @prop                       # type: ignore
     @property
-    def items_to_log_dict(self) -> Dict[str, Any]:
-        """Which of the items will be logged."""
-        return self._items_to_log_dict
+    def artefacts_to_log(self) -> Dict[str, Any]:
+        """Which of the artefacts will be logged.
+
+        Consists of :code:`{name, method}` pairs of what to log and how to log
+        it.
+
+        The default value is :attr:`metrics`, but we can log other things
+        such as :code:`losses`, :code:`outputs` and anything else returned by
+        the :code:`update_funcs`.
+
+        Example:
+            self.artefacts_to_log.add("losses", "gather_losses")
+
+        In this case :code:`gather_losses` is the name of the function which is
+        used to collect the losses, in a user defined way from the
+        :attr:`epoch_runner`.
+
+        """
+        return self._artefacts_to_log
 
     # CHECK: Should this be a property?
     def docs(self) -> Dict[str, Dict[str, str]]:
@@ -3715,24 +3781,21 @@ class Trainer:
     #       Ensure that run returns
     # NOTE: train ONLY runs in main loop
     def train(self):
-        """If `iterations` exists in self.trainer_params, then we do iterations only
-        training and loop_type is set to iterations, else we do standard epoch
-        wise training
+        """If :attr:`iterations` exists in :attr:`trainer_params`, then we do iterations
+        only training and :attr:`loop_type` is set to iterations, else we do standard
+        :attr:`epoch` wise training
 
-        if `self._abort_current` flag is set then current main loop is
-        aborted. The same flag is also watched for in `self._epoch_runner`.
+        if :attr:`_abort_current` flag is set then current main loop is
+        aborted. The same flag is also watched for in :attr:`epoch_runner`.
 
-        post_epoch_hooks are NOT run after an abort.
-
-        :returns: None
-        :rtype: None
+        :attr:`post_epoch_hook` is *NOT* run after an abort.
 
         """
         loop_type = self.loop_type
         self._logd(f"Beginning training. Loop type is {loop_type}.")
         if loop_type == "iterations":
             self._logd(f"Total number of iterations is {self.max_iterations}")
-            self._logd(f"Will run hooks after {self._hooks_run_iter_frequency} iterations")
+            self._logd(f"Will run post_epoch_hook after {self._hooks_run_iter_frequency} iterations")
             while self.iterations < self.max_iterations:
                 self._epoch_runner.reset()
                 # NOTE: run for self._hooks_run_iter_frequency
@@ -3748,7 +3811,7 @@ class Trainer:
                     self._logd("Aborting training")
                     # import ipdb; ipdb.set_trace()
                     return
-                self._run_post_epoch_hooks()
+                self._run_post_epoch_hook()
                 self._iterations += self._hooks_run_iter_frequency
         else:
             self._logd(f"Total number of batches is {len(self.train_loader)}")
@@ -3765,7 +3828,7 @@ class Trainer:
                 if self._current_aborted:
                     self._logd("Aborting training")
                     return
-                self._run_post_epoch_hooks()
+                self._run_post_epoch_hook()
                 self.epoch += 1
         self._logi('finished training')
 
@@ -3790,60 +3853,56 @@ class Trainer:
             self._loge(f"Some weird error occured {e}\n{traceback.format_exc()}")
 
     # END: Training Steps
-    def add_post_epoch_hook(self, hook: Callable[[], None],
-                            name: str, position: Union[int, str],
-                            overwrite: bool = False):
-        if not hasattr(self, "_post_epoch_hooks_to_run"):
-            return False, "Cannot add hook without initializing"
+    def add_to_post_epoch_hook(self, name: str, position: Union[int, str],
+                               overwrite: bool = False) -> Return:
+        if not hasattr(self, "_post_epoch_hook"):
+            return reterr("Cannot add to \"post_epoch_hook\" without initializing")
         if position not in {"first", "last"} and not isinstance(position, int):
-            return False, "Invalid position"
-        if hasattr(self, name):
-            if overwrite:
-                setattr(self, name, hook)
-            else:
-                return False, "Hook already exists. Use 'overwrite=True' to overwrite"
-        else:
-            setattr(self, name, hook)
-        hook_name = name.replace("_post_epoch_hook", "")
-        if hook_name in self.post_epoch_hooks_to_run:
-            self.post_epoch_hooks_to_run.remove(hook_name)
+            return reterr("Invalid position")
+        if name not in self.funcs:
+            return reterr(f"Unknown function {name}")
+        if name in self.post_epoch_hook and not overwrite:
+            return reterr(f"Hook {name} already in post_epoch_hook. " +
+                          "Use 'overwrite=True' to overwrite")
         if position == "first":
-            self._post_epoch_hooks_to_run.insert_top(name.replace("_post_epoch_hook", ""))
+            self.post_epoch_hook.push(name, self._funcs[name])
         elif position == "last":
-            self._post_epoch_hooks_to_run.append(name.replace("_post_epoch_hook", ""))
+            self.post_epoch_hook.append(name, self._funcs[name])
         else:
-            self._post_epoch_hooks_to_run.insert(position, name.replace("_post_epoch_hook", ""))
+            self.post_epoch_hook.insert(position, name, self._funcs[name])
+        return retsucc(f"Added hook {name}")
 
-    def _run_post_epoch_hooks(self):
-        self._logd("Running post epoch hooks")
-        all_hooks = self.all_post_epoch_hooks
-        hook_prefixes = self.post_epoch_hooks_to_run
-        for hook in hook_prefixes:
-            all_hooks["_".join([hook, "post_epoch_hook"])](self)
+    def _run_post_epoch_hook(self):
+        self._logd("Running post epoch hook")
+        for func in self.post_epoch_hook:
+            self.post_epoch_hook[func](self)
 
     @prop                       # type: ignore
     @state_var                  # type: ignore
     @property
-    def hooks(self) -> List[str]:
-        return [*self._hooks.keys()]
+    def funcs(self) -> List[str]:
+        return [*self._funcs.keys()]
 
     @prop                       # type: ignore
     @state_var                  # type: ignore
     @property
-    def hooks_with_args(self) -> List[str]:
-        return [*self._hooks_with_args.keys()]
+    def funcs_with_args(self) -> List[str]:
+        return [*self._funcs_with_args.keys()]
 
-    def run_hook(self, hook_name) -> Union[Return, ReturnExtraInfo]:
-        if hook_name in self.hooks:
-            retval = self._hooks[hook_name](self)
-            return make_info(True, f"Ran hook {hook_name}", retval)
+    def call_func(self, func_name) -> Union[Return, ReturnExtraInfo]:
+        if func_name in self.funcs:
+            retval = self._funcs[func_name](self)
+            if retval is None:
+                return retsucc(self._logd(f"Called {func_name}"))
+            else:
+                return make_info(True, self._logd(f"Called {func_name}"), retval)
         else:
-            return make_return(False, f"Hook {hook_name} not found")
+            return reterr(self._loge(f"{func_name} not found"))
 
-    def run_hook_with_args(self, hook_name, *args, **kwargs) -> Union[Return, ReturnExtraInfo]:
-        if hook_name in self.hooks_with_args:
-            retval = self._hooks_with_args[hook_name](self, *args, **kwargs)
-            return make_info(True, f"Ran hook {hook_name}", retval)
+    def call_func_with_args(self, func_name, *args, **kwargs) -> Union[Return, ReturnExtraInfo]:
+        if func_name in self.funcs_with_args:
+            retval = self._funcs_with_args[func_name](self, *args, **kwargs)
+            return make_info(True, self._logd(f"Called {func_name}"), retval)
         else:
-            return make_return(False, f"Hook {hook_name} not found")
+            return make_return(False, self._loge(f"{func_name} not found"))
     # END: Stateless Functions

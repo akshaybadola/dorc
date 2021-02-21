@@ -198,6 +198,7 @@ def test_trainer_init_and_dump_state(params_and_trainer):
     trainer._init_state_vars()
     trainer._init_task_runners()
     trainer._init_modules()
+    trainer._init_funcs()
     trainer._init_hooks()
     retval = trainer._dump_state()
     assert retval.status
@@ -236,12 +237,5 @@ def test_trainer_init_state_vars(params_and_trainer):
 @pytest.mark.todo
 @pytest.mark.quick
 def test_trainer_init_resume_or_init(params_and_trainer):
-    params, trainer = params_and_trainer
-    # import pytest; pytest.set_trace()
-
-
-@pytest.mark.todo
-@pytest.mark.quick
-def test_trainer_init_hooks(params_and_trainer):
     params, trainer = params_and_trainer
     # import pytest; pytest.set_trace()

@@ -355,7 +355,7 @@ class TrainerState(BaseModel):
     metrics: Dict[str, Dict[str, Any]]
     extra_metrics: Dict[str, Dict[str, Any]]
     data: str
-    hooks: List[str]            # Dict[str, Dict[str, Any]]
+    funcs: List[str]            # Dict[str, Dict[str, Any]]
     extra_items: Optional[Dict]
 
 

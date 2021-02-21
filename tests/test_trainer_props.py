@@ -3,183 +3,254 @@ import os
 import shutil
 import time
 from datetime import datetime
-import unittest
+import re
 import sys
 from _setup_local import config
-sys.path.append("../")
 from dorc.device import all_devices, useable_devices
 from dorc.trainer import Trainer
+from dorc.util import diff_as_sets
 from util import SubTrainer
 
 
-# TODO
 @pytest.mark.todo
-class TrainerTestProps(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        """Setup a simple trainer with MNIST dataset."""
-        cls.config = config
-        if os.path.exists(".test_dir"):
-            shutil.rmtree(".test_dir")
-        os.mkdir(".test_dir")
-        os.mkdir(".test_dir/test_session")
-        time_str = datetime.now().isoformat()
-        os.mkdir(f".test_dir/test_session/{time_str}")
-        cls.data_dir = f".test_dir/test_session/{time_str}"
-        cls.params = {"data_dir": cls.data_dir, **cls.config}
-        cls.trainer = SubTrainer(False, **cls.params)
-        cls.trainer.reserved_gpus = []
-        cls.trainer.reserve_gpus = lambda x: [True, None]
-        cls.trainer._trainer_params["cuda"] = True
-
-    def test_props_all_tests_present(self):
-        props = self.trainer.props
-        funcnames = self.__class__.__dict__.keys()
-        for prop in props:
-            with self.subTest(i=prop):
-                self.assertIn("test_trainer_property_" + prop, funcnames)
-
-    def test_trainer_property_version(self):
-        pass
-
-    def test_trainer_property_unique_id(self):
-        pass
-
-    def test_trainer_property_current_state(self):
-        pass
-
-    def test_trainer_property_loop_type(self):
-        pass
-
-    def test_trainer_property_logger(self):
-        pass
-
-    def test_trainer_property_logfile(self):
-        pass
-
-    def test_trainer_property_saves(self):
-        pass
-
-    def test_trainer_property_gpus(self):
-        pass
-
-    def test_trainer_property_system_info(self):
-        pass
-
-    def test_trainer_property_devices(self):
-        pass
-
-    def test_trainer_property_models(self):
-        self.assertIsInstance(self.trainer.models, list)
-        self.assertTrue(all([isinstance(x, list) for x in self.trainer.models]))
-
-    def test_trainer_property_train_step_func(self):
-        pass
-
-    def test_trainer_property_val_step_func(self):
-        pass
-
-    def test_trainer_property_test_step_func(self):
-        pass
-
-    def test_trainer_property_active_model(self):
-        pass
-
-    def test_trainer_property_epoch(self):
-        pass
-
-    def test_trainer_property_max_epochs(self):
-        pass
-
-    def test_trainer_property_iterations(self):
-        pass
-
-    def test_trainer_property_max_iterations(self):
-        pass
-
-    def test_trainer_property_controls(self):
-        pass
-
-    def test_trainer_property_methods(self):
-        pass
-
-    def test_trainer_property_all_props(self):
-        pass
-
-    def test_trainer_property_extras(self):
-        pass
-
-    def test_trainer_property_running(self):
-        pass
-
-    def test_trainer_property_current_run(self):
-        pass
-
-    def test_trainer_property_paused(self):
-        pass
-
-    def test_trainer_property_adhoc_paused(self):
-        pass
-
-    def test_trainer_property_adhoc_aborted(self):
-        pass
-
-    def test_trainer_property_userfunc_paused(self):
-        pass
-
-    def test_trainer_property_userfunc_aborted(self):
-        pass
-
-    def test_trainer_property_best_save(self):
-        pass
-
-    def test_trainer_property_trainer_params(self):
-        pass
-
-    def test_trainer_property_model_params(self):
-        pass
-
-    def test_trainer_property_dataloader_params(self):
-        pass
-
-    def test_trainer_property_data(self):
-        pass
-
-    def test_trainer_property_updatable_params(self):
-        pass
-
-    def test_trainer_property_all_params(self):
-        pass
-
-    def test_trainer_property_train_losses(self):
-        pass
-
-    def test_trainer_property_progress(self):
-        pass
-
-    def test_trainer_property_user_funcs(self):
-        pass
-
-    def test_trainer_property_metrics(self):
-        pass
-
-    def test_trainer_property_val_samples(self):
-        pass
-
-    def test_trainer_property_all_post_epoch_hooks(self):
-        pass
-
-    def test_trainer_property_post_epoch_hooks_to_run(self):
-        pass
-
-    def test_trainer_property_items_to_log_dict(self):
-        pass
-
-    @classmethod
-    def tearDownClass(cls):
-        if os.path.exists(".test_dir"):
-            shutil.rmtree(".test_dir")
+def test_props_all_tests_present(params_and_trainer):
+    params, trainer = params_and_trainer
+    props = trainer.props
+    reg = re.compile(r'def ([a-z_]+).*')
+    with open(__file__) as f:
+        lines = f.read().split("\n")
+        lines = set([reg.sub(r'\1', x).replace("test_trainer_property_", "")
+                     for x in lines
+                     if x.startswith("def") and "all_test_present" not in x])
+    diff_a = diff_as_sets(props, lines)
+    diff_b = diff_as_sets(lines, props)
+    assert not diff_a and not diff_b
 
 
-if __name__ == '__main__':
-    unittest.main()
+@pytest.mark.todo
+def test_trainer_property_version(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_current_state(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_loop_type(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_logger(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_logfile(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_saves(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_gpus(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_system_info(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_devices(params_and_trainer):
+    pass
+
+
+
+@pytest.mark.todo
+def test_trainer_property_models(params_and_trainer):
+    params, trainer = params_and_trainer
+    assert isinstance(trainer.trainer.models, list)
+    assert all([isinstance(x, list) for x in trainer.models])
+
+
+
+@pytest.mark.todo
+def test_trainer_property_train_step_func(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_val_step_func(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_test_step_func(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_active_model(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_epoch(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_max_epochs(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_iterations(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_max_iterations(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_controls(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_methods(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_all_props(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_extras(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_running(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_current_run(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_paused(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_adhoc_paused(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_adhoc_aborted(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_userfunc_paused(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_userfunc_aborted(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_best_save(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_trainer_params(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_model_params(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_dataloader_params(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_data(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_updatable_params(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_all_params(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_train_losses(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_progress(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_user_funcs(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_metrics(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_val_samples(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_all_post_epoch_hooks(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_post_epoch_hooks_to_run(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_items_to_log_dict(params_and_trainer):
+    pass
+
+
+@pytest.mark.todo
+def test_trainer_property_log_levels(params_and_trainer):
+    pass

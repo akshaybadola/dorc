@@ -1,4 +1,4 @@
-.. _modelstep-root:
+.. _concepts-modelstep:
 
 Model Step
 ==========
@@ -11,5 +11,5 @@ Model Step
 6. And returns the :code:`losses` and any other artefacts generated during the process.
 
 
-For the implementation see :ref:`~dorc.trainer.models.ModelStep`
+For the implementation see :class:`~dorc.trainer.models.ModelStep`
 

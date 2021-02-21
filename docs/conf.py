@@ -12,6 +12,7 @@
 #
 import os
 import sys
+import sphinx_rtd_theme
 from sphinx.ext.napoleon.docstring import GoogleDocstring
 from functools import partial
 sys.path.insert(0, os.path.abspath('..'))
@@ -38,6 +39,7 @@ extensions = [
     "sphinx.ext.coverage",
     "sphinx.ext.autosectionlabel",
     "sphinx.ext.viewcode",
+    "sphinx_rtd_theme",
     # 'sphinxcontrib.fulltoc',
     'sphinx.ext.napoleon'
 ]
@@ -116,13 +118,30 @@ intersphinx_mapping = {
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = 'divio_docs_theme'
+# html_theme = 'divio_docs_theme'
+html_theme = 'sphinx_rtd_theme'
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ['_static']
 
+html_theme_options = {
+    # 'analytics_id': 'UA-XXXXXXX-1',  # Provided by Google in your dashboard
+    # 'analytics_anonymize_ip': False,
+    'logo_only': False,
+    'display_version': True,
+    # 'prev_next_buttons_location': 'bottom',
+    'style_external_links': False,
+    'vcs_pageview_mode': '',
+    'style_nav_header_background': 'white',
+    # Toc options
+    'collapse_navigation': False,
+    'sticky_navigation': True,
+    'navigation_depth': 4,
+    'includehidden': True,
+    'titles_only': False
+}
 
 # NOTE: This is the default
 # html_sidebars = ['localtoc.html', 'relations.html', 'sourcelink.html', 'searchbox.html']

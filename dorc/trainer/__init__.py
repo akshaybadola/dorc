@@ -599,9 +599,9 @@ class Trainer:
         self._funcs_with_args = {}
         for x, y in funcs_module.__dict__.items():
             if x.endswith("_func") and callable(y):
-                self._funcs[x.rstrip("_func")] = y
+                self._funcs[x.rpartition("_func")[0]] = y
             if x.endswith("_func_with_args") and callable(y):
-                self._funcs_with_args[x.rstrip("_func_with_args")] = y
+                self._funcs_with_args[x.partition("_func_with_args")[0]] = y
 
     def _init_objects_requiring_funcs(self):
         """Initialize all objects which require :attr:`funcs` or :attr:`funcs_with_args`.
@@ -923,6 +923,7 @@ class Trainer:
         # else:
         #     load_models = []
         #     # load_models = [k for k, v in self.model_params.items() if v.load]
+        # import pytest; pytest.set_trace()
         diff = diff_as_sets(self._models.keys(), load_models)
         for model in diff:
             if self._models[model] is not None:
@@ -959,6 +960,7 @@ class Trainer:
         self._logi("Initializing Update Functions")
         self._model_step_func = None
         # TODO: Hard coded models, maybe should remove this
+        # import pytest; pytest.set_trace()
         if self.update_functions.train is not None:
             for x in self.trainer_params.training_steps:
                 func = self.update_functions.__dict__[x]

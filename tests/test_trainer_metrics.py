@@ -19,8 +19,7 @@ def test_trainer_capture_metrics_epoch(trainer_json_config):
     time.sleep(2)
     trainer.pause()
     time.sleep(1)
-    retval = trainer.run_hook_with_args("gather_metrics_hook_with_args",
-                                        trainer.epoch_runner)
+    retval = trainer.call_func_with_args("gather_metrics", trainer.epoch_runner)
     assert retval.status
     metrics = retval.data
     assert "train" in metrics
@@ -49,8 +48,7 @@ def test_trainer_capture_metrics_iterations(trainer_json_config):
     trainer.start()
     time.sleep(2)
     trainer.pause()
-    result = trainer.run_hook_with_args("gather_metrics_hook_with_args",
-                                        trainer.epoch_runner)
+    result = trainer.call_func_with_args("gather_metrics", trainer.epoch_runner)
     assert(result.data["train"])
     assert "loss" in result.data["train"]
     assert "num_datapoints" in result.data["train"]

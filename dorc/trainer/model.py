@@ -580,7 +580,7 @@ class ModelStep(abc.ABC):
                 if "total" not in x[m]:
                     raise AttributeError(f"'total' must be present for {m} in {x[m]}")
             self.__returns = x
-        if isinstance(x, list):
+        if isinstance(x, (list, set)):
             if "total" not in x:
                 raise AttributeError(f"'total' must be present in returns")
             for m in self._modes:

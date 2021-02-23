@@ -106,7 +106,7 @@ class Model:
                 if backup_path == "RAM":
                     # simply backup to RAM
                     self._model = self._model.cpu()
-                    # self._optimizer = self._optimizer.cpu()
+                    self._device = torch.device("cpu")
                     self._loaded = False
                     self._backup_path = "RAM"
                     return True, f"Unloaded {self.name} to RAM"
@@ -159,7 +159,7 @@ class Model:
         :attr:`_gpus` list.
 
         """
-        if self._gpus == [-1] or self._gpus == []:
+        if self._gpus == [-1] or self._gpus == [] or not self.loaded:
             return torch.device("cpu")
         else:
             return torch.device(f"cuda:{self._gpus[0]}")
@@ -574,17 +574,19 @@ class ModelStep(abc.ABC):
         return self.__returns
 
     @_returns.setter
-    def _returns(self, x: Union[Dict[str, List[str]], List[str]]):
+    def _returns(self, x: Union[Dict[str, Iterable[str]], List[str]]):
         if isinstance(x, dict) and all(k in self._modes for k in x.keys()):
             for m in x:
                 if "total" not in x[m]:
                     raise AttributeError(f"'total' must be present for {m} in {x[m]}")
             self.__returns = x
-        if isinstance(x, (list, set)):
+        elif iter(x):
             if "total" not in x:
                 raise AttributeError(f"'total' must be present in returns")
             for m in self._modes:
-                self.__returns[m] = x
+                self.__returns[m] = [*x]
+        else:
+            raise TypeError(f"{x} is not iterable")
 
     def logs(self, mode) -> List[str]:
         """Which items to log from :meth:`returns`

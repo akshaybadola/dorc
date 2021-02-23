@@ -132,14 +132,14 @@ train_step = ClassificationStep(models={"net": model},
                                 criteria_map={"net": "criterion_ce_loss"},
                                 checks={"net": identity},
                                 logs=["loss"])
-train_step.returns = train_step.returns("train")
-train_step.logs = train_step.logs("train")
+train_step._returns = train_step.returns("train")
+train_step._logs = train_step.logs("train")
 test_step = ClassificationStep(models={"net": model},
                                criteria_map={"net": "criterion_ce_loss"},
                                checks={"net": identity},
                                logs=["loss"])
-test_step.returns = test_step.returns("test")
-test_step.logs = test_step.logs("test")
+test_step._returns = test_step.returns("test")
+test_step._logs = test_step.logs("test")
 test_step.train = False
 config["update_functions"] = {"train": train_step,
                               "val": test_step,

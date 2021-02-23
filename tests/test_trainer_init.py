@@ -1,6 +1,5 @@
 import pytest
 import os
-import sys
 import json
 import torch
 import torchvision
@@ -109,12 +108,8 @@ def test_trainer_init_update_functions_dict(params_and_trainer):
         assert trainer._training_steps["train"][0].models['net'] is None
         assert trainer.active_models == {}
     else:
-        assert trainer._training_steps["train"][0].models['net'].loaded
-        assert trainer.active_models == {"net": "net"}
-        train_iter = iter(trainer.train_loader)
-        values = trainer._training_steps["train"][0](train_iter.__next__())
-        assert isinstance(values, dict)
-        assert all(x in values for x in trainer._training_steps["train"][1])
+        assert not trainer._training_steps["train"][0].models['net'].loaded
+        assert trainer.active_models == {}
 
 
 @pytest.mark.quick

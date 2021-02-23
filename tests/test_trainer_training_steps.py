@@ -17,7 +17,7 @@ def test_train_step_no_gpu(setup_and_net, get_step):
     train_step.set_criteria({"net": config["criteria"][cname]["function"](
         **config["criteria"][cname]["params"])})
     retval = train_step(get_batch())
-    assert all(x in retval for x in train_step.returns)
+    assert all(x in retval for x in train_step.returns("train"))
 
 
 @pytest.mark.quick
@@ -31,7 +31,7 @@ def test_train_step_single_gpu(setup_and_net, get_step):
     train_step.set_criteria({"net": config["criteria"][cname]["function"](
         **config["criteria"][cname]["params"])})
     retval = train_step(get_batch())
-    assert all(x in retval for x in train_step.returns)
+    assert all(x in retval for x in train_step.returns("train"))
 
 
 @pytest.mark.quick
@@ -47,7 +47,7 @@ def test_val_step_single_gpu(setup_and_net, get_step):
     train_step.set_criteria({"net": config["criteria"][cname]["function"](
         **config["criteria"][cname]["params"])})
     retval = train_step(get_batch())
-    assert all(x in retval for x in train_step.returns)
+    assert all(x in retval for x in train_step.returns("train"))
 
 
 # NOTE: how do we test that it is actually parallelized?
@@ -63,7 +63,7 @@ def test_dataparallel(setup_and_net, get_step):
     train_step.set_criteria({"net": config["criteria"][cname]["function"](
         **config["criteria"][cname]["params"])})
     retval = train_step(get_batch())
-    assert all(x in retval for x in train_step.returns)
+    assert all(x in retval for x in train_step.returns("train"))
     assert isinstance(model._model, torch.nn.DataParallel)
     assert retval["outputs"].device == torch.device(0)
 

@@ -942,6 +942,8 @@ class Trainer:
                 status, response = self._models[model_name].load_into_memory()
                 if not status:
                     return reterr(self._loge(response))
+            else:
+                reterr("Could not initialize model")
         return retsucc(f"Loaded {load_models}")
 
     def _init_update_funcs(self):
@@ -960,21 +962,41 @@ class Trainer:
         self._logi("Initializing Update Functions")
         self._model_step_func = None
         # TODO: Hard coded models, maybe should remove this
-        # import pytest; pytest.set_trace()
         if self.update_functions.train is not None:
             for x in self.trainer_params.training_steps:
                 func = self.update_functions.__dict__[x]
                 if func is not None:
-                    if not func.criteria:
-                        criteria = {m: self.criteria[c] for m, c in func.criteria_map.items()}
-                        self.update_functions.__dict__[x].set_criteria(criteria)
+                    criteria = {m: self.criteria[c] for m, c in func.criteria_map.items()}
+                    self.update_functions.__dict__[x].set_criteria(criteria)
                     for k, v in self.update_functions.__dict__[x].models.items():
                         if k not in self.model_params:
                             self.model_params[k] = config.ModelParams(**v.to_params())
-                        self._models[k] = v
-                        self._models_map[k] = k
-                        if not v.loaded:
-                            v.load_into_memory()
+                        if v is None:
+                            if self.model_params[k].loaded:
+                                if k not in self._models or not self._models[k].loaded:
+                                    self._load_models([k])
+                                self.update_functions.__dict__[x].set_models({k: self._models[k]})
+                                self._models_map[k] = k
+                            else:
+                                self._models_map[k] = None
+                        else:
+                            if not v.loaded and self.model_params[k].loaded:
+                                if k not in self._models or not self._models[k].loaded:
+                                    self._load_models([k])
+                                self.update_functions.__dict__[x].set_models({k: self._models[k]})
+                                self._models_map[k] = k
+                            elif v.loaded and not self.model_params[k].loaded:
+                                self.update_functions.__dict__[x].models[k] = None
+                                self._models_map[k] = None
+                            elif v.loaded and self.model_params[k].loaded:
+                                if k in self._models:
+                                    if not id(self._models[k]) == id(v) and k not in self.devices:
+                                        self._load_models([k])
+                                else:
+                                    self._load_models([k])
+                                self._models_map[k] = k
+                            else:
+                                self._models_map[k] = None
         else:
             func = self.update_functions.function
             params = self.update_functions.params.__dict__.copy()
@@ -989,7 +1011,10 @@ class Trainer:
             else:
                 self._logw("No models loaded")
             # NOTE: if m is in self._models loading keys matched and loading was successful
-            models = {m: self._models.get(m, None) for m in params["models"]}
+            models = {}
+            for m in params["models"]:
+                models[m] = self._models.get(m, None)
+                self._models_map[m] = m if models[m] else None
             criteria = {m: self.criteria[c] for m, c in params["criteria_map"].items()}
             params["models"] = models
             params["criteria"] = criteria
@@ -1032,7 +1057,7 @@ class Trainer:
                                                self._model_step_func.logs(x))
                 else:
                     func = getattr(self.update_functions, x)
-                    self._training_steps[x] = func, func.returns, func.logs
+                    self._training_steps[x] = func, func.returns(x), func.logs(x)
 
     def _init_metrics(self):
         """Intializes and checks the metrics.
@@ -1055,8 +1080,7 @@ class Trainer:
                 if step not in self._metrics:
                     self._metrics[step] = {}
                 self._metrics[step][name] = {}
-                func_retvals = ((self._model_step_func and self._model_step_func.returns(step))
-                                or self.update_functions.__dict__[step].returns)
+                func_retvals = self._training_steps[step][1]
                 if metric.when == "BATCH":
                     if not all(_ in func_retvals for _ in metric.inputs):
                         raise ValueError(
@@ -3187,7 +3211,7 @@ class Trainer:
     @property
     def active_models(self) -> Dict[str, str]:
         "Active models are set and loaded by :attr:`_model_step_func`"
-        return self._models_map
+        return {x: y for x, y in self._models_map.items() if y is not None}
 
     @prop                       # type: ignore
     @property

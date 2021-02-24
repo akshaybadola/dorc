@@ -21,6 +21,7 @@ def test_train_step_no_gpu(setup_and_net, get_step):
 
 
 @pytest.mark.quick
+@pytest.mark.gpus
 @pytest.mark.skipif(not all_devices(), reason=f"Cannot run without GPUs.")
 def test_train_step_single_gpu(setup_and_net, get_step):
     config, _ = setup_and_net
@@ -35,6 +36,7 @@ def test_train_step_single_gpu(setup_and_net, get_step):
 
 
 @pytest.mark.quick
+@pytest.mark.gpus
 @pytest.mark.skipif(len(all_devices()) < 2,
                     reason=f"Cannot run without at least 2 GPUs.")
 def test_val_step_single_gpu(setup_and_net, get_step):
@@ -52,6 +54,7 @@ def test_val_step_single_gpu(setup_and_net, get_step):
 
 # NOTE: how do we test that it is actually parallelized?
 @pytest.mark.quick
+@pytest.mark.gpus
 @pytest.mark.skipif(not all_devices(), reason=f"Cannot run without GPUs.")
 def test_dataparallel(setup_and_net, get_step):
     config, _ = setup_and_net
@@ -74,6 +77,7 @@ def test_distributed_data_parallel():
 
 
 @pytest.mark.todo
+@pytest.mark.gpus
 @pytest.mark.skipif(not all_devices(), reason=f"Cannot run without GPUs.")
 def test_model_parallel():
     pass

@@ -82,3 +82,9 @@
 - Added `run_quick.sh` and `run_threaded.sh` for running tests.
 - Fixed issues related to `trainer.funcs` and `Trainer.funcs`
 - Added some tests for the above also.
+
+## [2021-02-24 Wed 16:20]
+- Fixed model loading and unloading.
+- Fixed some device allocation though conflicts are still not handled.
+- Fixed `Trainer._init_update_funcs`
+- Parametrized a lot of tests and some new marks.

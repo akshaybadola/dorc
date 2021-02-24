@@ -571,13 +571,10 @@ class Trainer:
         Models are *NOT* loaded into memory (or set active) here. But are done
         so on demand.
 
-        Devices when allocated for the models are allocated for the models in
-        alphabetical order except :code:`auto` and :code:`parallel` which are
-        allocated last. So if there's a conflict between devices priority is
-        given alphabetically. See :ref:`intro:Device Allocation` for details
-
-        Models which are to be active should have :code:`{"active": True}` in
+        Models which are to be active should have :code:`{"loaded": True}` in
         their params.
+
+        See :meth:`allocate_devices` on how device allocation is performed.
 
         """
         self._logi("Initializing Criteria and Models.")
@@ -643,20 +640,100 @@ class Trainer:
                 return reterr(message)
         return retsucc("")
 
+    def _get_device_ranking(self, auto: List[str]):
+        ranking = [*gpu_ranking(self._device_handles).items()]
+        num_params = {x: 0 for x in auto}
+        for i, model_name in enumerate(auto):
+            self.devices[model_name] = []
+            temp_model = self._model_init_helper(model_name)
+            if temp_model is not None:
+                temp_model.load_into_memory()
+            else:
+                raise ValueError()
+            num_params[model_name] = np.sum([np.prod(x.shape)
+                                             for x in temp_model.weights.values()])
+            del temp_model
+        num_params = [*num_params.items()]
+        num_params.sort(key=lambda x: x[1], reverse=True)
+        ranking = sorted(ranking, key=lambda x: (x[1]["memory"], x[1]["compute"]),
+                         reverse=True)
+        return ranking, num_params
+
+    def _spread_equally(self, models, devices):
+        if len(models) == 1:
+            self.devices[models[0]] = list(devices)
+        elif len(models) >= len(devices):
+            # parallel_devices = self.best_parallel_devices(parallel)
+            for model_name in models:
+                if model_name in self.model_params:
+                    # self.devices[name] = parallel_devices[name]
+                    pass
+                else:
+                    self._logw(f"{model_name} not in known models")
+
+    def _spread_optimally(self, models, devices):
+        if len(models) == 1:
+            self.devices[models[0]] = list(devices)
+        else:           # get ranking and assign
+            ranking, num_params = self._get_device_ranking(models)
+            # NOTE: actually batch size will also matter
+            if len(models) < len(devices):
+                # TODO: too complicated
+                raise NotImplementedError
+            elif len(models) >= len(devices):
+                # NOTE: put the bigger model on to the GPU with more ram or compute
+                for i, (model_name, _) in enumerate(num_params):
+                    if i < len(ranking):
+                        self.devices[model_name] = [ranking[i][0]]
+                    else:
+                        self.devices[model_name] = []
+            remaining = set(self.gpus) - set(self.allocated_devices)
+            return remaining
+
+    def _allocate_auto_and_parallel(self, auto: List[str], parallel: List[str],
+                                    remaining: List[str]):
+        if not auto and not parallel:
+            return              # nothing to do
+        elif not remaining:       # rest of device are []
+            for model_name in auto:
+                if model_name in self.model_params:
+                    self.devices[model_name] = []
+                else:
+                    self._logw(f"{model_name} not in known models")
+            for model_name in parallel:
+                if model_name in self.model_params:
+                    self.devices[model_name] = []
+                else:
+                    self._logw(f"{model_name} not in known models")
+        else:
+            if auto and not parallel:
+                self._spread_optimally(auto, remaining)
+            elif parallel and not auto:
+                self._spread_equally(parallel, remaining)
+            else:               # parallel and auto
+                raise NotImplementedError
+
     def allocate_devices(self, load_models: Union[str, List[str]] = [],
                          unload_models: Union[str, List[str]] = []):
-        """Spread the devices over the `load_models` models.
+        """Allocate the devices for the `load_models`.
 
         First remove the devices from :attr:`devices` and then allocate
         according to parameters.
 
         Args:
             load_models: names and params of models which should be loaded
-            into system memory
+                         into system memory
 
-        For allocation, explicitly mentioned gpus are given preference
-        first. After that :code:`auto` is given preference over
-        :code:`parallel`.
+        Devices are allocated for the models according to how they are mentioned
+        in :attr:`model_params`. If :code:`auto` or :code:`parallel` are given,
+        then explicit devices are allocated first and :code:`auto` and
+        :code:`parallel` last.  Final tie breaker is lexicographic ordering of
+        model names.
+
+        The priority then is: :code:`given_gpus` > :code:`parallel` >
+        :code:`auto` > :code:`alpha`.
+
+        See :ref:`intro:Device Allocation` for further details.
 
         """
         if isinstance(load_models, str):
@@ -697,55 +774,7 @@ class Trainer:
                 else:
                     self._logw(f"{model_name} not in known models")
             remaining = set(self.gpus) - set(self.allocated_devices)
-            if len(remaining) > 0:
-                # FIXME: NEW
-                ranking = [*gpu_ranking(self._device_handles).items()]
-                num_params = {x: 0 for x in auto}
-                for i, model_name in enumerate(auto):
-                    self.devices[model_name] = []
-                    temp_model = self._model_init_helper(model_name)
-                    if temp_model is not None:
-                        temp_model.load_into_memory()
-                    else:
-                        raise ValueError()
-                    num_params[model_name] = np.sum([np.prod(x.shape)
-                                                     for x in temp_model.weights.values()])
-                    del temp_model
-                num_params = [*num_params.items()]
-                num_params.sort(key=lambda x: x[1], reverse=True)
-                ranking = sorted(ranking, key=lambda x: (x[1]["memory"], x[1]["compute"]),
-                                 reverse=True)
-                # NOTE: `auto` takes precedence over `parallel``
-                if len(auto) < len(remaining):
-                    # FIXME: need some to be parallel and some over a single gpu
-                    raise NotImplementedError
-                elif len(auto) >= len(remaining):
-                    # NOTE: put the bigger model on to the GPU with more ram
-                    for i, (model_name, _) in enumerate(num_params):
-                        if i < len(ranking):
-                            self.devices[model_name] = [ranking[i][0]]
-                        else:
-                            self.devices[model_name] = []
-                remaining = set(self.gpus) - set(self.allocated_devices)
-                if len(parallel) >= len(remaining):
-                    # parallel_devices = self.best_parallel_devices(parallel)
-                    for model_name in parallel:
-                        if model_name in self.model_params:
-                            # self.devices[name] = parallel_devices[name]
-                            pass
-                        else:
-                            self._logw(f"{model_name} not in known models")
-            else:
-                for model_name in auto:
-                    if model_name in self.model_params:
-                        self.devices[model_name] = []
-                    else:
-                        self._logw(f"{model_name} not in known models")
-                for model_name in parallel:
-                    if model_name in self.model_params:
-                        self.devices[model_name] = []
-                    else:
-                        self._logw(f"{model_name} not in known models")
+            self._allocate_auto_and_parallel(auto, parallel, remaining)
 
     def _model_init_helper(self, model_name) -> Optional[Model]:
         model = self.model_params[model_name].model
@@ -915,7 +944,7 @@ class Trainer:
                             if isinstance(value, str) and not value.startswith("callable_"):
                                 self.dataloader_params[k][a] = value
 
-    def _load_models(self, load_models: List[str]) -> Return:
+    def _load_models(self, load_models: List[str], reload: bool = True) -> Return:
         # NOTE: if only one model load it
         # CHECK: What if the ModelStep needs two models and only two models are given? LOL
         # if len(self.model_params.keys()) == 1:
@@ -925,11 +954,14 @@ class Trainer:
         #     # load_models = [k for k, v in self.model_params.items() if v.load]
         # import pytest; pytest.set_trace()
         diff = diff_as_sets(self._models.keys(), load_models)
-        for model in diff:
-            if self._models[model] is not None:
+        for model in [*load_models]:
+            # NOTE: unload first if reloading
+            if model in self._models and self._models[model] is not None:
                 if self._models[model].loaded:
                     self._models[model].unload("RAM")
                     self.devices[model] = []
+        # NOTE: don't load already loaded
+        # load_models = list(diff_as_sets(self.active_models.keys(), load_models))
         if self.gpus and self.gpus != [-1]:
             self.allocate_devices(load_models)
         else:
@@ -945,6 +977,54 @@ class Trainer:
             else:
                 reterr("Could not initialize model")
         return retsucc(f"Loaded {load_models}")
+
+    def _init_separate_update_funcs(self, x):
+        load_models = {}
+        for k, v in self.update_functions.__dict__[x].models.items():
+            if k not in self.model_params:
+                self.model_params[k] = config.ModelParams(**v.to_params())
+            if v is None:
+                if self.model_params[k].loaded:
+                    if k not in self._models or not self._models[k].loaded:
+                        if k in load_models:
+                            load_models[k].append(x)
+                        else:
+                            load_models[k] = [x]
+                    self._models_map[k] = k
+                else:
+                    self._models_map[k] = None
+            else:
+                if not v.loaded and self.model_params[k].loaded:
+                    if k not in self._models or not self._models[k].loaded:
+                        if k in load_models:
+                            load_models[k].append(x)
+                        else:
+                            load_models[k] = [x]
+                    elif k in self._models and self._models[k].loaded:
+                        self.update_functions.__dict__[x].models[k] = self._models[k]
+                    self._models_map[k] = k
+                elif v.loaded and not self.model_params[k].loaded:
+                    self.update_functions.__dict__[x].models[k] = None
+                    self._models_map[k] = None
+                elif v.loaded and self.model_params[k].loaded:
+                    if k in self._models:
+                        if not id(self._models[k]) == id(v) and k not in self.devices:
+                            if k in load_models:
+                                load_models[k].append(x)
+                            else:
+                                load_models[k] = [x]
+                    else:
+                        if k in load_models:
+                            load_models[k].append(x)
+                        else:
+                            load_models[k] = [x]
+                    self._models_map[k] = k
+                else:
+                    self._models_map[k] = None
+        self._load_models(load_models, True)
+        for k, v in load_models.items():
+            for i in v:
+                self.update_functions.__dict__[i].set_models({k: self._models[k]})
 
     def _init_update_funcs(self):
         """Initialize the :attr:`update_functions`
@@ -963,40 +1043,14 @@ class Trainer:
         self._model_step_func = None
         # TODO: Hard coded models, maybe should remove this
         if self.update_functions.train is not None:
+            load_models = {}
             for x in self.trainer_params.training_steps:
                 func = self.update_functions.__dict__[x]
                 if func is not None:
                     criteria = {m: self.criteria[c] for m, c in func.criteria_map.items()}
                     self.update_functions.__dict__[x].set_criteria(criteria)
-                    for k, v in self.update_functions.__dict__[x].models.items():
-                        if k not in self.model_params:
-                            self.model_params[k] = config.ModelParams(**v.to_params())
-                        if v is None:
-                            if self.model_params[k].loaded:
-                                if k not in self._models or not self._models[k].loaded:
-                                    self._load_models([k])
-                                self.update_functions.__dict__[x].set_models({k: self._models[k]})
-                                self._models_map[k] = k
-                            else:
-                                self._models_map[k] = None
-                        else:
-                            if not v.loaded and self.model_params[k].loaded:
-                                if k not in self._models or not self._models[k].loaded:
-                                    self._load_models([k])
-                                self.update_functions.__dict__[x].set_models({k: self._models[k]})
-                                self._models_map[k] = k
-                            elif v.loaded and not self.model_params[k].loaded:
-                                self.update_functions.__dict__[x].models[k] = None
-                                self._models_map[k] = None
-                            elif v.loaded and self.model_params[k].loaded:
-                                if k in self._models:
-                                    if not id(self._models[k]) == id(v) and k not in self.devices:
-                                        self._load_models([k])
-                                else:
-                                    self._load_models([k])
-                                self._models_map[k] = k
-                            else:
-                                self._models_map[k] = None
+                    load_models.update(self.update_functions.__dict__[x].models.items())
+                    self._init_separate_update_funcs(x)
         else:
             func = self.update_functions.function
             params = self.update_functions.params.__dict__.copy()
@@ -1006,7 +1060,7 @@ class Trainer:
                     load_models.append(m)
             if load_models:
                 # NOTE: Error occurred in loading
-                if not self._load_models(load_models).status:
+                if not self._load_models(load_models, False).status:
                     return self._logw("No models loaded")
             else:
                 self._logw("No models loaded")
@@ -1032,9 +1086,8 @@ class Trainer:
                     self.update_functions.__dict__[x].set_models(models)
         else:
             self._model_step_func.set_models(models)  # type: ignore
+        # import pytest; pytest.set_trace()
         self._models_map.update(models_map)
-        self._models_map = {k: v for k, v in self._models_map.items()
-                            if k in models}
         return retsucc("Loaded models")
 
     def _init_training_steps(self):
@@ -2131,7 +2184,6 @@ class Trainer:
                 params[x] = kwargs[x]
         output = func(**params)
         return True, {"success": output}
-
     # END: Extras
 
     # START: Methods
@@ -2167,9 +2219,13 @@ class Trainer:
         diff = diff_as_sets(models_map.values(), self.models_available)
         if diff:
             return make_return(False, self._loge(f"Some models {diff} not available"))
-        self._load_models([*models_map.values()])
-        self._refresh_update_funcs(models_map)
-        return make_return(True, self._logd(f"Models {models_map} are active."))
+        if models_map != self.active_models:
+            self._load_models([*models_map.values()], True)
+            # import pytest; pytest.set_trace()
+            self._refresh_update_funcs(models_map)
+            return make_return(True, self._logd(f"Models {models_map} are active."))
+        else:
+            return make_return(True, self._logw(f"Models {models_map} were already active."))
 
     # TODO: This should be a given input and not an image
     @POST
@@ -3189,6 +3245,7 @@ class Trainer:
     @state_var                  # type: ignore
     @property
     def allocated_devices(self) -> List[int]:
+        """Return the currently allocated devices for each model."""
         devices: List[int] = []
         for x in self._devices.values():
             devices.extend(x)

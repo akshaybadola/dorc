@@ -74,7 +74,11 @@ def trainer_json_config(json_config):
     tlayer = TranslationLayer(config, extra_opts)
     test_config = tlayer.from_json()
     test_config.pop("model_step_params")
-    yield (test_config, Trainer(**test_config))
+    trainer = Trainer(**test_config)
+    yield (test_config, trainer)
+    # for handler in trainer._logger.handlers:
+    #     handler.close()
+    #     trainer._logger.removeHandler(handler)
 
 
 @pytest.fixture
@@ -113,15 +117,23 @@ def params_old_config(setup_and_net):
     data_dir = os.path.abspath(f".test_dir/test_session/{time_str}")
     params = {"data_dir": data_dir, "global_modules_dir": gmods_dir,
               "global_datasets_dir": gdata_dir, **config}
-    yield (params, Trainer(**params))
+    trainer = Trainer(**params)
+    yield (params, trainer)
+    # for handler in trainer._logger.handlers:
+    #     handler.close()
+    #     trainer._logger.removeHandler(handler)
 
 
 @pytest.fixture
 def params_and_trainer(request, trainer_json_config, params_old_config):
     if hasattr(request, "param") and request.param:
-        yield trainer_json_config
+        params, trainer = trainer_json_config
     else:
-        yield params_old_config
+        params, trainer = params_old_config
+    yield (params, trainer)
+    # for handler in trainer._logger.handlers:
+    #     handler.close()
+    #     trainer._logger.removeHandler(handler)
     shutil.rmtree(".test_dir")
 
 

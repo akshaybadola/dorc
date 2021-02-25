@@ -5,6 +5,7 @@ import functools
 import flask
 import re
 import sys
+import warnings
 import pathlib
 import pydantic
 from pydantic import BaseConfig
@@ -266,7 +267,14 @@ def infer_response_from_annotations(func: Callable) ->\
         class Annot(BaseModel):
             default: annot["return"]  # type: ignore
         return mt.json, Annot
-    else:
+    elif isinstance(annot["return"], type) and not issubclass(annot["return"], pydantic.BaseModel):
+        # import ipdb; ipdb.set_trace()
+        print(f"\nWARNING: {annot['return']} is a class but not pydantic.BaseModel." +
+              "\nWill use default schema `Dict`", file=sys.stderr)
+        class Annot(BaseModel):
+            default: Dict
+        return mt.json, Annot
+    else:                       # something returning property or Union[_, property]
         annot_ret = str(annot["return"])
         # NOTE: Substitute property with Callable. property is not json
         #       serializable Doesn't make a difference though. pydantic exports
@@ -473,20 +481,17 @@ def get_request_params(lines: List[str]) -> List[Dict[str, Any]]:
 
 
 def join_subsection(lines: List[str]) -> List[str]:
-    """Join indented subsection to a single line.
+    """Join indented subsection to a single line for execution.
 
     Args:
         lines: List of lines to (possibly) join
 
-
-    For example:
-
-    The following line will be parsed as two lines:
+    For example, the following line will be parsed as two lines::
 
         bleh: Union[List[Dict], None, str, int, bool,
                     Dict[List[str]], List[List[str]]]
 
-    It will be joined to:
+    It will be joined to::
 
         bleh: Union[List[Dict], None, str, int, bool, Dict[List[str]], List[List[str]]]
 
@@ -799,7 +804,7 @@ def get_specs_for_path(name: str, rule: werkzeug.routing.Rule,
     tags = get_tags(method_func)
     # if name == "/sessions":
     #     import ipdb; ipdb.set_trace()
-    # if "archive_session" in name:
+    # if "post_epoch_hook" in name:
     #     import ipdb; ipdb.set_trace()
     parameters: List[Dict[str, Any]] = get_params_in_path(name)
     if redirect:

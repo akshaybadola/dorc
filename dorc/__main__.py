@@ -59,12 +59,12 @@ def generate_spec(arglist):
     excludes = [r"^/_devices", r"/.*\<.*?filename\>", r"/static/.*", r"^/$"]
     if args.excludes:
         excludes.extend(args.excludes.split(","))
+    print(f"Exclude patterns are: {excludes}")
 
     # yaml.Dumper.ignore_aliases = lambda *args: True
     if args.daemon:
         fname = args.daemon_spec
-        print(f"Exclude patterns are: {excludes}")
-        print(f"\n\nWill Output to: {fname}")
+        print(f"\nWill Output to: {fname}")
         dmn = util.make_test_daemon()
         if args.gen_opid:
             try:
@@ -90,11 +90,15 @@ def generate_spec(arglist):
         out_str = fix_yaml_references(yaml.safe_dump(out))
         with open(fname, "w") as f:
             f.write(out_str)
-        print("\n\nErrors:\n", "\n".join(map(str, err)), file=sys.stderr)
-        print("\n\nExcluded rules:\n", ex, file=sys.stderr)
+        if err:
+            print("\nErrors:\n", "\n".join(map(str, err)), file=sys.stderr)
+        else:
+            print("\nNo errors!")
+        print("\nExcluded rules:\n", ex, file=sys.stderr)
         util.stop_test_daemon()
     if args.interface:
         fname = args.interface_spec
+        print(f"\nWill Output to: {fname}")
         setup_path = os.path.join(os.path.dirname(
             os.path.abspath(__file__)), "../tests/_setup.py")
         autoloads_path = os.path.join(os.path.dirname(
@@ -121,8 +125,11 @@ def generate_spec(arglist):
         out_str = fix_yaml_references(yaml.safe_dump(out))
         with open(fname, "w") as f:
             f.write(out_str)
-        print("\n\nErrors:\n", "\n".join(map(str, err)), file=sys.stderr)
-        print("\n\nExcluded rules:\n", ex, file=sys.stderr)
+        if err:
+            print("\nErrors:\n", "\n".join(map(str, err)), file=sys.stderr)
+        else:
+            print("\nNo errors!")
+        print("\nExcluded rules:\n", ex, file=sys.stderr)
         util.stop_test_interface()
 
 
@@ -142,7 +149,7 @@ def load_or_create_config(arglist):
                help="Port range to which trainers will bind start")
     parser.add("--daemon-name", default="dorc_" + os.environ.get("HOSTNAME"),
                help="Name of the server.")
-    parser.add("-v", help="verbose", action="store_true")
+    parser.add("-v", dest="verbose", help="verbose", action="store_true")
     opts = parser.parse_args(arglist)
     opts.config_file = opts.config_file or parser._default_config_files[0]
     if not os.path.exists(opts.config_file):
@@ -155,7 +162,12 @@ def load_or_create_config(arglist):
 
 def run(arglist):
     config = load_or_create_config(arglist)
-    print(config)
+    dmn = daemon.Daemon(config.daemon_host,
+                        int(config.daemon_port),
+                        config.root_dir,
+                        config.daemon_name,
+                        int(config.trainer_port_start))
+    dmn.start()
 
 
 def main():

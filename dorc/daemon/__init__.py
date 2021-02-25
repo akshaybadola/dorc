@@ -60,12 +60,13 @@ class Daemon:
     __version__ = __version__
 
     def __init__(self, hostname: str, port: int, root_dir: Path,
-                 daemon_name: str):
+                 daemon_name: str, trainer_port_start: int = 20202):
         self.ctx = mp.get_context("spawn")
         self._hostname = hostname
         self._port = port
         # self._trackers = trackers
         self.daemon_name = daemon_name
+        self.trainer_port_start = trainer_port_start
         # self.register = register
         # FIXME: have_internet shouldn't be here
         # NOTE: fwd_hosts and fwd_ports are hard coded
@@ -144,7 +145,7 @@ if "{self.root_dir}" not in sys.path:
         self.app.secret_key = __unti__("_sxde#@_")
         self.use_https = False
         self.verify_user = True
-        self._last_free_port = self.port
+        self._last_free_port = self.trainer_port_start
 
     def _init_resources(self):
         self._threads = {}
@@ -273,7 +274,7 @@ if "{self.root_dir}" not in sys.path:
 
     def _find_open_port(self):
         if not self._last_free_port:
-            self._last_free_port = 1
+            self._last_free_port = 5000  # default port in case something happens
         flag = True
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         while flag:

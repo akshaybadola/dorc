@@ -3333,7 +3333,7 @@ class Trainer:
     @prop                       # type: ignore
     @property
     @deprecated
-    def test_frequency(self):
+    def test_frequency(self) -> int:
         return self.config.trainer_params.test_frequency
 
     @test_frequency.setter
@@ -3752,6 +3752,12 @@ class Trainer:
     #                   x != "add_to_post_epoch_hook" and
     #                   x != "remove_post_epoch_hook")
     #     return {**dict_a, **dict_b}
+
+    @prop                       # type: ignore
+    @property
+    def all_hooks(self) -> Dict[str, Dict[str, Callable]]:
+        """Mapping of all the hooks."""
+        return {"post_epoch_hook": self.post_epoch_hook._funcs}
 
     @prop                       # type: ignore
     @property

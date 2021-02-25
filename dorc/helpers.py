@@ -46,17 +46,19 @@ class Artefacts:
 
 
 class Hook:
-    """A list of functions.
+    """A mapping of functions.
 
-    A :class:`Hook` is a :code:`bleh` list of :class:`Callable` usually which take no
+    A :code:`hook` is usually a list of functions with no arguments. Here we augment
+    that so that it's a mapping of type :code:`Dict[str, Callable]`. The :class:`Hook`
+    is then, a :class:`dict` of :class:`Callable` which may or may not take
     arguments and return nothing.  They can be executed at arbitrary points in a
     codebase with separate concerns.
 
-    Here we implement named hooks, which are :code:`{str: Callable}` mappings with
-    :attr:`permanent_items` which cannot be changed.
+    We refer to these as named hooks, with :attr:`permanent_items` which cannot
+    be changed.
 
     Args:
-        permanent_items: List of functions which will never be removed from the hook
+        permanent_items: A dictionary of functions which will never be removed from the hook
 
     """
 

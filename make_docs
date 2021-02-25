@@ -1,5 +1,23 @@
 #! /bin/bash
 
 cd docs
-sphinx-apidoc -f -M -e -o api ../dorc /*meh* /*bleh* /*_daemon* /*_trainer* /*flycheck*
-make html
+
+if [[ ${#@} > 0 ]]
+then
+    if [ $1 = "clean" ]
+    then echo "Removing previous sources"
+         rm api/*
+    elif [ $1 = "htmlclean" ]
+    then echo "Removing previous sources"
+         rm api/*
+         sphinx-apidoc -f -M -e -o api ../dorc /*meh* /*bleh* /*_daemon* /*_trainer* /*flycheck*
+         make html
+    else
+        sphinx-apidoc -f -M -e -o api ../dorc /*meh* /*bleh* /*_daemon* /*_trainer* /*flycheck*
+        make $1
+    fi
+else
+    sphinx-apidoc -f -M -e -o api ../dorc /*meh* /*bleh* /*_daemon* /*_trainer* /*flycheck*
+    make html
+fi
+

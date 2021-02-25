@@ -22,6 +22,7 @@ def train_one_batch(train_step, batch):
 @pytest.mark.threaded
 def test_epoch_loop_run_task(params_and_trainer):
     _, trainer = params_and_trainer
+    trainer.config.model_params['net'].loaded = True
     trainer._init_all()
     signals = trainer._epoch_runner.signals
     signals.paused.clear()
@@ -44,6 +45,9 @@ def test_epoch_loop_run_task(params_and_trainer):
     signals.paused.set()
     time.sleep(.5)
     assert train_loop.finished
+    for handler in trainer._logger.handlers:
+        handler.close()
+        trainer._logger.removeHandler(handler)
 
 
 # NOTE: Consumer
@@ -54,6 +58,7 @@ def test_epoch_loop_run_task_have_gpus(params_and_trainer):
     trainer.config.trainer_params.cuda = True
     trainer.reserved_gpus = []
     trainer.reserve_gpus = lambda x: [True, None]
+    trainer.config.model_params['net'].loaded = True
     trainer._init_all()
     signals = trainer._epoch_runner.signals
     signals.paused.clear()
@@ -78,12 +83,16 @@ def test_epoch_loop_run_task_have_gpus(params_and_trainer):
     signals.paused.set()
     time.sleep(.5)
     assert train_loop.finished
+    for handler in trainer._logger.handlers:
+        handler.close()
+        trainer._logger.removeHandler(handler)
 
 
 # NOTE: Producer
 @pytest.mark.threaded
 def test_epoch_loop_fetch_data(params_and_trainer):
     _, trainer = params_and_trainer
+    trainer.config.model_params['net'].loaded = True
     trainer._init_all()
     signals = trainer._epoch_runner.signals
     signals.paused.clear()
@@ -104,3 +113,6 @@ def test_epoch_loop_fetch_data(params_and_trainer):
     train_loop._init = False
     train_loop.finish()
     assert train_loop.finished
+    for handler in trainer._logger.handlers:
+        handler.close()
+        trainer._logger.removeHandler(handler)

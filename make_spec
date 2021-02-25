@@ -4,25 +4,28 @@ if [ ! -d openapi ]
 then mkdir openapi
 fi
 
+echo "Generating daemon spec"
+echo ""
 python -W ignore -m dorc generate_spec -t [_%C%r%n]_%h --gen-opid --no-interface --excludes '/trainer/.*' -df openapi/daemon.yml
+
+echo "Generating interface spec"
+echo ""
 python -W ignore -m dorc generate_spec  -t [_%C%r%n]_%h --gen-opid --no-daemon -if openapi/iface.yml
 
+echo -n "Validating daemon spec .."
 openapi-spec-validator openapi/daemon.yml
-if [ $? -eq 0 ]
-then echo "Validated interface spec"
-     # java -jar swagger-codegen-cli.jar generate --lang javascript -o openapi/iface -i openapi/iface.yml
-     java -jar openapi-generator-cli-5.0.0.jar generate -g javascript-flowtyped -o openapi/iface -i openapi/iface.yml -t out
-     echo "Generated interface client API"
-else echo "Validation failed for interface"
-     exit 1
+if [ ${#@} -eq 0 ]
+then
+    echo "Generating daemon client API"
+    # java -jar swagger-codegen-cli.jar generate --lang javascript -o openapi/daemon -i openapi/daemon.yml
+    java -jar openapi-generator-cli-5.0.0.jar generate -g javascript-flowtyped -o openapi/daemon -i openapi/daemon.yml -t out
 fi
 
+echo -n "Validating interface spec .."
 openapi-spec-validator openapi/iface.yml
-if [ $? -eq 0 ]
-then echo "Validated daemon spec"
-     # java -jar swagger-codegen-cli.jar generate --lang javascript -o openapi/daemon -i openapi/daemon.yml
-     java -jar openapi-generator-cli-5.0.0.jar generate -g javascript-flowtyped -o openapi/daemon -i openapi/daemon.yml -t out
-     echo "Generating daemon client API"
-else echo "Validation failed for daemon"
-     exit 1
+if [ ${#@} -eq 0 ]
+then echo "Generated interface client API"
+     # java -jar swagger-codegen-cli.jar generate --lang javascript -o openapi/iface -i openapi/iface.yml
+     java -jar openapi-generator-cli-5.0.0.jar generate -g javascript-flowtyped -o openapi/iface -i openapi/iface.yml -t out
 fi
+

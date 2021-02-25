@@ -9,6 +9,8 @@ from functools import partial
 from six import string_types, u
 from six.moves import range
 
+from sphinx.locale import _
+
 from pockets import modify_iter, UnicodeMixin
 
 

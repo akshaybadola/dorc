@@ -75,6 +75,7 @@ class ClassificationStep(ModelStep):
         loss = criterion(outputs, labels)
         if self.train:
             loss.backward()
+            model.optimizer.step()
         return {"loss": loss.detach().item(), "outputs": outputs.detach(),
                 "labels": labels.detach(), "total": len(labels)}
 

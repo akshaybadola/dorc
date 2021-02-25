@@ -49,6 +49,7 @@ session_get = Tag("session_get")
 session_post = Tag("session_post")
 
 
+path = pathlib.Path
 Path = Union[str, pathlib.Path]
 
 
@@ -462,6 +463,19 @@ if "{self.root_dir}" not in sys.path:
             os.mkdir(mods_dir)
         raise NotImplementedError
 
+    def remove_empty_directories(self, dirnames: List[str]):
+        """Remove empty directories if any.
+
+        Args:
+            dirnames: List of directories
+        """
+        tmp = dirnames.copy()
+        for x in tmp:
+            files_in_dir = glob.glob(os.path.join(self._root_dir, x, "**"), recursive=True)
+            if not any(path(y).is_file() for y in files_in_dir):
+                shutil.rmtree(os.path.join(self._root_dir, x))
+                dirnames.remove(x)
+
     def scan_sessions(self):
         """Scan the :attr:`data_dir` for existing :class:`Trainer` sessions.
 
@@ -475,6 +489,7 @@ if "{self.root_dir}" not in sys.path:
         session_names = [x for x in os.listdir(self._root_dir) if
                          os.path.isdir(os.path.join(self._root_dir, x))
                          and x not in self._exclude_dirs]
+        self.remove_empty_directories(session_names)
         for s in session_names:
             self._sessions[s] = {}
             self._sessions[s]["path"] = os.path.join(self._root_dir, s)
@@ -736,6 +751,7 @@ if "{self.root_dir}" not in sys.path:
                 val["loaded"] = "process" in session and session["process"].poll() is None
                 val["port"] = session["port"] if val["loaded"] else None
                 val["state"] = session["state"]
+                print(f"Getting session finished for {key}")
                 val["finished"] = self._session_finished_p(session["state"])
                 retval[key] = models.Session.parse_obj(val)
         return retval
@@ -1274,15 +1290,15 @@ if "{self.root_dir}" not in sys.path:
                 userid = int(userid)
             return self._users[self._ids[userid]]
 
-        @self.app.route("/", methods=["GET"])
-        def __index():
-            """
+        # @self.app.route("/", methods=["GET"])
+        # def __index():
+        #     """
 
-            Responses:
-                success: ResponseSchema(200, "Index page", MimeTypes.text, "")
+        #     Responses:
+        #         success: ResponseSchema(200, "Index page", MimeTypes.text, "")
 
-            """
-            return render_template("index.html")
+        #     """
+        #     return render_template("index.html")
 
         # if self._template_dir:
         #     @self.app.route("/<filename>", methods=["GET"])

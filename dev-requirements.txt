@@ -1,19 +1,9 @@
-alabaster==0.7.12
-Babel==2.9.0
+# test requirements
+pytest==6.2.1
+pytest-openfiles==0.5.0
 coverage==5.3
+# if a cython bundle needs to be built
 Cython==0.29.21
-docutils==0.16
-imagesize==1.2.0
-packaging==20.4
-pockets==0.9.1
-pytz==2020.4
-snowballstemmer==2.0.0
-Sphinx==3.3.1
-sphinxcontrib-applehelp==1.0.2
-sphinxcontrib-devhelp==1.0.2
-sphinxcontrib-fulltoc==1.2.0
-sphinxcontrib-htmlhelp==1.0.3
-sphinxcontrib-jsmath==1.0.1
-sphinxcontrib-napoleon==0.7
-sphinxcontrib-qthelp==1.0.3
-sphinxcontrib-serializinghtml==1.1.4
+# docs requirements
+sphinx==3.5.1
+git+https://github.com/readthedocs/sphinx_rtd_theme@master

@@ -9,6 +9,7 @@ from . import trainer
 
 
 def generate_spec(arglist):
+    """Generate OpenAPI spec."""
     from typing import Dict
     import os
     import sys

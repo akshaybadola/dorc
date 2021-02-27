@@ -107,22 +107,20 @@ class Daemon:
         os.mkdir(self.tmp_dir)
         # FIXME: Code duplication here
         # NOTE: Append data_dir path
-        self.env_str = f"""
-import sys
-if "{self._root_dir}" not in sys.path:
-    sys.path.append("{self._root_dir}")
+        self.lib_env_str = f"""import sys
+if "{os.path.dirname(self._lib_dir)}" not in sys.path:
+    sys.path.append("{os.path.dirname(self._lib_dir)}")
 """
-        self.root_env_str = f"""
-import sys
-if "{self.root_dir}" not in sys.path:
-    sys.path.append("{self.root_dir}")
+        self.root_env_str = f"""import sys
+if "{os.path.dirname(self.root_dir)}" not in sys.path:
+    sys.path.append("{os.path.dirname(self.root_dir)}")
 """
         # NOTE: init modules_dir
         self.modules_dir = os.path.join(self._root_dir, "global_modules")
         create_module(self.modules_dir,
                       [os.path.join(self._lib_dir, x)
                        for x in ["autoloads.py"]],
-                      env_str=self.root_env_str)
+                      env_str=self.lib_env_str)
         # NOTE: init datasets_dir
         self.datasets_dir = os.path.join(self._root_dir, "global_datasets")
         create_module(self.datasets_dir)

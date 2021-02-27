@@ -2,6 +2,10 @@ import torch
 from dorc.trainer.model import ModelStep
 
 
+def identity(*args):
+    return True
+
+
 class ClassificationStep(ModelStep):
     """Standard Classification training step.
 

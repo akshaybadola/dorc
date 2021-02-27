@@ -178,6 +178,8 @@ def test_trainer_models_init_two_models_no_gpus(params_and_trainer,
 
 
 @pytest.mark.quick
+@pytest.mark.gpus
+@pytest.mark.skipif(len(all_devices()) < 2, reason=f"Cannot run without two GPUs.")
 @pytest.mark.parametrize("params_and_trainer", [True, False], indirect=True)
 @pytest.mark.parametrize("loaded", [True, False])
 @pytest.mark.parametrize("cuda_given", [True, False])

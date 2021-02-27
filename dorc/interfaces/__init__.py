@@ -1,8 +1,9 @@
-from typing import Optional, Dict, Union, Any, Iterable, List, Callable
+from typing import Optional, Dict, Union, Any, Iterable, List, Callable, Tuple
 import os
 import re
 import sys
 import ssl
+import copy
 import glob
 import json
 import atexit
@@ -70,6 +71,9 @@ class FlaskInterface:
         self.data_dir = data_dir
         self.bare = bare
         self.config_overrides = config_overrides
+        self.config_extra_opts = {"data_dir": self.data_dir,
+                                  "global_modules_dir": self.gmods_dir,
+                                  "global_datasets_dir": self.gdata_dir}
         self.app = Flask(__name__)
         CORS(self.app, supports_credentials=True)
         self.app.config['TEMPLATES_AUTO_RELOAD'] = True
@@ -113,13 +117,26 @@ class FlaskInterface:
 
     @property
     def config_file(self) -> str:
-        return os.path.join(self.data_dir, "config.json")
+        if self._config_json_file:
+            return os.path.join(self.data_dir, "config.json")
+        else:
+            if os.path.exists(os.path.join(self.data_dir, "session_config")):
+                return os.path.join(self.data_dir, "session_config", "__init__.py")
+            else:
+                return os.path.join(self.data_dir, "session_config.py")
+
+    @property
+    def _config_json_file(self) -> bool:
+        return os.path.exists(os.path.join(self.data_dir, "config.json"))
+
+    @property
+    def _config_py_file(self) -> bool:
+        return (os.path.exists(os.path.join(self.data_dir, "session_config")) or
+                os.path.exists(os.path.join(self.data_dir, "session_config.py")))
 
     @property
     def config_exists(self) -> bool:
-        return os.path.exists(self.config_file)
-        # return (os.path.exists(os.path.join(self.data_dir, "session_config")) or
-        #         os.path.exists(os.path.join(self.data_dir, "session_config.py")))
+        return self._config_json_file or self._config_py_file
 
     @property
     def state_exists(self) -> bool:
@@ -146,10 +163,7 @@ class FlaskInterface:
         return result
 
     def get_tlayer(self, config):
-        extra_opts = {"data_dir": self.data_dir,
-                      "global_modules_dir": self.gmods_dir,
-                      "global_datasets_dir": self.gdata_dir}
-        return TranslationLayer(config, extra_opts)
+        return TranslationLayer(config, self.config_extra_opts)
 
     @classmethod
     def update_config(cls, config: Dict, overrides: List[Union[int, float, str]]):
@@ -193,9 +207,43 @@ class FlaskInterface:
             if _check(config, o[:-1]):
                 _set(config, o)
 
+    @classmethod
+    def read_config(cls, data_dir: str, conf_type: str) ->\
+            Tuple[bool, Union[Dict, str]]:
+        if conf_type == "json":
+            with open(os.path.join(data_dir, "config.json")) as f:
+                config = json.load(f)
+        elif conf_type == "python":
+            try:
+                if data_dir not in sys.path:
+                    sys.path.append(data_dir)
+                    from session_config import config
+                    sys.path.remove(data_dir)
+                else:
+                    from session_config import config
+            except Exception as e:
+                return False, f"{e}" + "\n" + traceback.format_exc()
+        return True, config
+
+    def _read_config(self):
+        if self._config_json_file:
+            status, config = self.read_config(self.data_dir, "json")
+            if status:
+                self._orig_config = copy.deepcopy(config)
+            else:
+                config = None
+        elif self._config_py_file:
+            status, config = self.read_config(self.data_dir, "python")
+            if status:
+                self._orig_config = json.loads(_dump(config))
+            else:
+                self._loge(f"Error rading config {config}.")
+                config = None
+        return config
+
     def _write_overrides(self, overrides_files, overrides):
         overrides_files.sort()
-        if overrides_files:
+        if not overrides_files:
             suffix = int(overrides_files[-1].split(".")[-1])
             with open(os.path.join(self.data_dir, f"overrides.json.{suffix:02}"), "w") as f:
                 json.dump(overrides, f)
@@ -203,27 +251,78 @@ class FlaskInterface:
             with open(os.path.join(self.data_dir, f"overrides.json.00"), "w") as f:
                 json.dump(overrides, f)
 
+    # def old_overrides_load_and_create_trainer():
+    #     if self.config_overrides is not None:
+    #         self._logd(f"Config Overrides given: \n{self.config_overrides}" +
+    #                    "\nWill write to file")
+    #         self.update_config(config, self.config_overrides)
+    #         with open(overrides_file, "w") as f:
+    #             json.dump(self.config_overrides, f)
+    #     if os.path.exists(overrides_file):
+    #         self._logd(f"Config Overrides File exists. Loading")
+    #         with open(overrides_file, "r") as f:
+    #             config_overrides = json.load(f)
+    #             self.update_config(config, config_overrides)
+    #     else:
+    #         config_overrides = None
+    #     self._current_config = config
+    #     self._current_overrides = config_overrides
+    #     self.trainer = Trainer(**{"data_dir": self.data_dir, "production": self.production,
+    #                               **config})
+    #     self.trainer.reserved_gpus = lambda: self.reserved_gpus
+    #     self.trainer.reserve_gpus = self.reserve_gpus
+    #     self.trainer._init_all()
+    #     return True, "Created Trainer"
+
+    # @classmethod
+    # def config_with_overrides(cls, conf_type: str,
+    #                           data_dir: Optional[str] = None,
+    #                           config: Optional[Dict] = None):
+    #     overrides_files = [x for x in os.listdir(data_dir)
+    #                        if "config_overrides" in x]
+    #     overrides_files.sort()
+    #     status, config = cls.read_config(data_dir, conf_type)
+    #     if not status:
+    #         raise ValueError(config)
+    #     for ovf in overrides_files:
+    #         with open(ovf) as f:
+    #             overrides = json.load(f)
+    #             cls.update_config(config, overrides)
+    #     return config
+
     def _get_overrides(self):
         overrides_files = [x for x in os.listdir(self.data_dir)
                            if "config_overrides" in x]
         overrides_files.sort()
-        with open(self.config_file) as f:
-            config = json.load(f)
+        config = self._read_config()
+        if config is None:
+            raise ValueError("Config after reading should not be None")
+        if overrides_files:
+            self._logd(f"Config Overrides files exist. Loading")
         for ovf in overrides_files:
             with open(ovf) as f:
                 overrides = json.load(f)
                 self.update_config(config, overrides)
         if self.config_overrides is not None:
+            self._logd(f"Config Overrides given. Loading")
             self.update_config(config, self.config_overrides)
         self._write_overrides(overrides_files, self.config_overrides)
         self._current_config = config
 
-    def _create_trainer_helper(self, tlayer: Optional[TranslationLayer] = None):
-        if tlayer is None:
+    def _create_trainer_helper(self):
+        if self._config_json_file:
             with open(self.config_file) as f:
                 tlayer = self.get_tlayer(json.load(f))
-        config = tlayer.from_json()
-        config.pop("model_step_params", None)
+            config = tlayer.from_json()
+            config.pop("model_step_params", None)
+        else:
+            if self.data_dir not in sys.path:
+                sys.path.append(self.data_dir)
+                from session_config import config
+                sys.path.remove(self.data_dir)
+            else:
+                from session_config import config
+            config.update(self.config_extra_opts)
         try:
             self.trainer = Trainer(**config)
             self.trainer.reserved_gpus = lambda: self.reserved_gpus
@@ -232,58 +331,22 @@ class FlaskInterface:
             return True, "Created Trainer"
         except Exception as e:
             return False, f"{e}" + "\n" + traceback.format_exc()
-        # try:
-        #     if self.data_dir not in sys.path:
-        #         sys.path.append(self.data_dir)
-        #         from session_config import config
-        #         sys.path.remove(self.data_dir)
-        #     else:
-        #         from session_config import config
-        #     self._orig_config = json.loads(_dump(config))  # self._orig_config is now serializable
-        #     overrides_file = os.path.join(self.data_dir, "config_overrides.json")
-        #     if self.config_overrides is not None:
-        #         self._logd(f"Config Overrides given: \n{self.config_overrides}" +
-        #                    "\nWill write to file")
-        #         self.update_config(config, self.config_overrides)
-        #         with open(overrides_file, "w") as f:
-        #             json.dump(self.config_overrides, f)
-        #     if os.path.exists(overrides_file):
-        #         self._logd(f"Config Overrides File exists. Loading")
-        #         with open(overrides_file, "r") as f:
-        #             config_overrides = json.load(f)
-        #             self.update_config(config, config_overrides)
-        #     else:
-        #         config_overrides = None
-        #     self._current_config = config
-        #     self._current_overrides = config_overrides
-        #     self.trainer = Trainer(**{"data_dir": self.data_dir, "production": self.production,
-        #                               **config})
-        #     self.trainer.reserved_gpus = lambda: self.reserved_gpus
-        #     self.trainer.reserve_gpus = self.reserve_gpus
-        #     self.trainer._init_all()
-        #     return True, "Created Trainer"
-        # except Exception as e:
-        #     return False, f"{e}" + "\n" + traceback.format_exc()
 
-    def create_trainer(self, config: Dict[str, Any] = None):
+    def create_trainer(self):
         if self.config_exists:
             return self._create_trainer_helper()
-        elif not self.config_exists and config is None:
+        elif not self.config_exists:
             return False, "No existing config"
-        elif not self.config_exists and config is not None:
-            try:
-                tlayer = self.get_tlayer(config)
-                status = True
-                with open(self.config_file, "w") as f:
-                    json.dump(config, f)
-                result = "Valid Config"
-            except Exception as e:
-                status = False
-                result = f"Error occurred {e}"
-            if status:
-                return self._create_trainer_helper(tlayer)
-            else:
-                return status, result
+        # elif not self.config_exists and config is not None:
+        #     try:
+        #         self._read_config()
+        #     except Exception as e:
+        #         status = False
+        #         result = f"Error occurred {e}"
+        #     if status:
+        #         return self._create_trainer_helper()
+        #     else:
+        #         return status, result
 
     # TODO: I might have to give the names for various thingies while generating
     #       certificates for it to work correctly.

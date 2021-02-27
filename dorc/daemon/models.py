@@ -25,19 +25,22 @@ class Sessions(BaseModel):
 
 
 class CreateSessionModel(BaseModel):
-    """Session creation spec.
+    """Session creation specification.
 
     Args:
         name: Name of the session
         overrides: Configuration overrides over the primary session config
-        config: A :class:`dict` (parsed from json) object conforming to :class:`~config.Config`
+        config: A :class:`dict` object conforming to :class:`~config.Config`
         saves: A :class:`dict` of save file names to copy in the savedir
                The value of the saves is a base64 encoded bytes object.
+
+    :code:`config` can be either parsed from json or dynamically loaded from a
+    given python or zip file.
 
     """
     name: str
     overrides: Optional[Dict]
-    config: Dict
+    config: Union[Dict, str]
     load: bool
     saves: Optional[Dict[str, str]]
 

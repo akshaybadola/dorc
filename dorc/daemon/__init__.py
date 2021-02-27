@@ -3,6 +3,7 @@ import os
 import sys
 import ssl
 import glob
+import base64
 import json
 import time
 import socket
@@ -12,6 +13,7 @@ import atexit
 import requests
 import datetime
 import logging
+import base64
 import hashlib
 import traceback
 import zipfile
@@ -255,23 +257,97 @@ if "{self.root_dir}" not in sys.path:
         while not self._task_q.empty():
             self._results.append(self._task_q.get())
 
-    def _check_config(self, data_dir: Path, config: Dict[str, Any],
-                      overrides: Dict[str, Any] = {}) -> Tuple[bool, str]:
-        if os.path.exists(os.path.join(data_dir, "config.json")):
-            status, result = True, "Config exists"
+    def _check_config_exists(self, data_dir: Path) -> Optional[str]:
+        if os.path.exists(os.path.join(data_dir, "session_config")) or\
+           os.path.exists(os.path.join(data_dir, "session_config.py")):
+            return "python"
+        elif os.path.exists(os.path.join(data_dir, "config.json")):
+            return "json"
         else:
+            return None
+
+    def _check_config_create_if_required(self, data_dir: Path, config: Optional[Dict[str, Any]],
+                                         overrides: Dict[str, Any] = {}):
+        conf_type = self._check_config_exists(data_dir)
+        if conf_type == "python":
+            return True, "Python config found"
+        elif conf_type == "json":
+            try:
+                with open(os.path.join(data_dir, "config.json")) as f:
+                    json.load(f)
+                return True, "json config found"
+            except Exception as e:
+                return False, f"Could not read config {e}" + "\n" + traceback.format_exc()
+        elif conf_type is None and config is not None:
+            if isinstance(config, str):
+                return self._write_python_config(data_dir, base64.b64decode(config),
+                                                 overrides)
+            elif isinstance(config, dict):
+                return self._write_json_config(data_dir, config, overrides)
+            else:
+                return False, "Unknown Config type"
+        else:
+            return False, "Invalid params"
+
+    def _write_python_config(self, data_dir: Path, config: Dict[str, Any],
+                             overrides: Dict[str, Any] = {}):
+        """Write the python config to disk.
+
+        We prepend the `session_config.py` or `session_config/__init__.py` with
+        :code:`env_str` which appends :attr:`global_modules_dir` and
+        :attr:`global_datasets_dir` to the files so that they can be loaded easily.
+
+        Args:
+            data_dir: The directory of the training session
+            config: Trainer config
+            overrides: Any configuration overrides given
+
+        """
+        env_str = f"import sys\n" +\
+            "sys.path.append('{os.path.dirname(self.modules_dir)}')\n" +\
+            "sys.path.append('{os.path.dirname(self.datasets_dir)}')\n"
+        status, message = self._module_loader.add_config(data_dir, config, env_str=env_str)
+        if status:
             try:
                 self._logd(f"Checking config")
-                iface = FlaskInterface(None, None, data_dir,
-                                       self.modules_dir,
-                                       self.datasets_dir,
-                                       config_overrides=overrides,
-                                       no_start=True)
-                status, result = iface.create_trainer(config)
-                del iface
+                status, result = FlaskInterface.read_config(str(data_dir), "python")
             except Exception as e:
                 status, result = False, f"{e}" + "\n" + traceback.format_exc()
+        else:
+            result = message
+        if status:
+            result = "Valid python config"
         return status, result
+
+    def _write_json_config(self, data_dir: Path, config: Dict[str, Any],
+                           overrides: Dict[str, Any] = {}) -> Tuple[bool, str]:
+        """Write the json config to disk.
+
+        In this case it's easier as the dumping json requires less complications.
+
+        Args:
+            data_dir: The directory of the training session
+            config: Trainer config
+            overrides: Any configuration overrides given
+
+        """
+        with open(os.path.join(data_dir, "config.json"), "w") as f:
+            json.dump(config, f)
+        try:
+            self._logd(f"Checking config")
+            status, result = FlaskInterface.read_config(str(data_dir), "json")
+        except Exception as e:
+            status, result = False, f"{e}" + "\n" + traceback.format_exc()
+        if status:
+            result = "Valid json config"
+        return status, result   # type: ignore
+
+    def _dump_trainer_state(self, data_dir):
+        iface = FlaskInterface(None, None, data_dir,
+                               self.modules_dir, self.datasets_dir,
+                               no_start=True)
+        iface.create_trainer()
+        del iface
 
     def _find_open_port(self):
         if not self._last_free_port:
@@ -508,8 +584,7 @@ if "{self.root_dir}" not in sys.path:
                             "\n" + traceback.format_exc()
         self._already_scanned = True
 
-    # FIXME: data should be pydantic type
-    def create_session(self, task_id: int, data: dict):
+    def create_session(self, task_id: int, data: models.CreateSessionModel):
         """Creates a new training session from given data
 
         Args:
@@ -517,26 +592,23 @@ if "{self.root_dir}" not in sys.path:
             data: session properties and config
 
         Schemas:
-            data:
-                name: str
-                config: trainer.config.Config
-                overrides: Optional[dict]
-                load: Optional[bool]
-                saves: Optional[Dict[str, bytes]]
+            data: daemon.models.CreateSessionModel
 
-        A session has a structure `session[key]` where `key` in `{"path",
-        "sessions", "modules"}` Modules are loaded from the module path which is
-        appended to `sys.path` for that particular session. Each module has a
-        separate namespace as such and since each trainer instance is separate,
-        it should be easy to separate. The modules are shared among all the
-        subsessions.
+        A session consists of :code:`path`, :code:`sessions` and
+        :code:`modules`. :code:`modules` are loaded from the module path which
+        is appended to :code:`sys.path` for that particular session. Each module
+        has a separate namespace as such and since each trainer instance is
+        separate, it should be easy to separate. The modules are shared among
+        all the subsessions.
 
-        For example, if the sessions directory is `sessions` then a session with
-        the name of `funky_session` can have a directory structure like
-        `/sessions/funky_session/2020-02-17T10:53:06.458827`.
+        The subdirectory for each session instance is the timestamp at which it
+        is created, so that all session instances are unique.  For example, if
+        the sessions directory is :code:`sessions` then a session with the name
+        of :code:`funky_session` can have a directory structure like
+        :code:`/sessions/funky_session/2020-02-17T10:53:06.458827`.
 
         """
-        session_name = data["name"]
+        session_name = data.name
         if session_name not in self._sessions:
             self._sessions[session_name] = {}
             self._sessions[session_name]["path"] = os.path.join(self._root_dir, session_name)
@@ -553,30 +625,23 @@ if "{self.root_dir}" not in sys.path:
         data_dir = os.path.join(self._sessions[session_name]["path"], time_str)
         os.mkdir(data_dir)
         self._sessions[session_name]["sessions"][time_str] = {}
-        overrides = None
-        if "overrides" in data:
-            overrides = data["overrides"]
-        if "load" in data:
-            load = data["load"]
-        else:
-            load = False
         # FIXME: Why does wait_for_task succeed and then session_state is dead?
         if self._wait_for_task(self._create_trainer, task_id,
                                args=[session_name, time_str, data_dir,
-                                     data["config"], overrides, load]):
+                                     data.config, data.overrides, data.load]):
             with open(os.path.join(self._sessions[session_name]["path"], time_str,
                                    "session_state")) as f:
                 self._logd(f"Loading sessions state")
                 self._sessions[session_name]["sessions"][time_str]["state"] = json.load(f)
             # NOTE: For cloning/migrating sessions
-            if "saves" in data and data["saves"]:
+            if data.saves:
                 self._logd(f"Copying save files: {data['saves'].keys()}")
                 savedir = os.path.join(data_dir, "savedir")
                 if not os.path.exists(savedir):
                     os.mkdir(savedir)
-                for fname, fbytes in data["saves"].items():
+                for fname, fbytes in data.saves.items():
                     with open(os.path.join(savedir, fname), "wb") as f:
-                        f.write(fbytes)
+                        f.write(base64.b64decode(fbytes))
         else:
             self._logd(f"Failed task {task_id}. Cleaning up")
             self._sessions[session_name]["sessions"].pop(time_str)
@@ -606,28 +671,14 @@ if "{self.root_dir}" not in sys.path:
         self._logd(f"Trying to create trainer with data_dir {data_dir}")
         if not os.path.isabs(data_dir):
             data_dir = os.path.abspath(data_dir)
-        if config is None:
-            try:
-                with open(os.path.join(data_dir, "config.json")) as f:
-                    config = json.load(f)
-                status = True
-            except Exception as e:
-                self._error_and_put(task_id, False, f"Could not read config {e}" +
-                                    "\n" + traceback.format_exc())
-                return
-        else:
-            status, result = self._check_config(data_dir, config, overrides)
+        status, result = self._check_config_create_if_required(data_dir, config, overrides)
         if status:
             if load:
                 try:
                     self._logd(f"Config valid")
                     port = self._find_open_port()
-                    self._sessions[name]["sessions"][time_str]["config"] = config
                     self._sessions[name]["sessions"][time_str]["port"] = port
                     self._sessions[name]["sessions"][time_str]["data_dir"] = data_dir
-                    if overrides:
-                        with open(os.path.join(data_dir, "config_overrides.json")) as f:
-                            json.dump(overrides, f)
                     cmd = f"python {self.if_run_file} {self.hostname} {port} {data_dir} " +\
                         f"{self.modules_dir} {self.datasets_dir} --config-overrides=True"
                     cwd = os.path.dirname(self._lib_dir)
@@ -642,6 +693,7 @@ if "{self.root_dir}" not in sys.path:
                 except Exception as e:
                     self._error_and_put(task_id, False, f"{e}" + "\n" + traceback.format_exc())
             else:
+                self._dump_trainer_state(data_dir)
                 self._info_and_put(task_id, True, result)
         else:
             self._error_and_put(task_id, False, result)
@@ -879,8 +931,6 @@ if "{self.root_dir}" not in sys.path:
             if "process" in self._sessions[name]["sessions"][time_str]:
                 self._sessions[name]["sessions"][time_str]["process"].terminate()
                 self._sessions[name]["sessions"][time_str].pop("process")
-            self._sessions[name]["sessions"][time_str]["config"] = None
-            self._sessions[name]["sessions"][time_str].pop("config")
             if "port" in self._sessions[name]["sessions"][time_str]:
                 port = self._sessions[name]["sessions"][time_str].pop("port")
                 if port in self._devices:
@@ -1576,6 +1626,10 @@ if "{self.root_dir}" not in sys.path:
             data = load_json(request.json)
             if data is None:
                 return f"Invalid data {request.json}"
+            try:
+                models.CreateSessionModel(**data)
+            except Exception as e:
+                return f"Errors validating data. {e}"
             task_id = self._get_task_id_launch_func(self.create_session, data)
             return sess_response(True, "Creating session with whatever data given", task_id)
 

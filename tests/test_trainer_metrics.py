@@ -12,7 +12,7 @@ def test_trainer_capture_metrics_epoch(trainer_json_config):
     trainer.reserved_gpus = []
     trainer.reserve_gpus = lambda x: [True, None]
     trainer.trainer_params.cuda = True
-
+    print(id(trainer))
     trainer._init_all()
     trainer.set_model({"net": "net"})
     trainer.start()
@@ -35,6 +35,7 @@ def test_trainer_capture_metrics_epoch(trainer_json_config):
 @pytest.mark.threaded
 def test_trainer_capture_metrics_iterations(trainer_json_config):
     _, trainer = trainer_json_config
+    print(id(trainer))
     bleh = trainer.trainer_params.dict()
     new_config = {}
     new_config["training_type"] = "iterations"

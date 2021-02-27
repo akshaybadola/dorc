@@ -6,6 +6,7 @@ import zipfile
 import sys
 sys.path.append("../")
 from dorc.mods import Modules
+from dorc.daemon.util import create_module
 
 
 @pytest.mark.quick
@@ -106,6 +107,24 @@ module_exports = {"A": A, "B": B, "f": f, "g": g}
         self.assertTrue(status)
         self.assertTrue("optimizers" in result)
         self.assertTrue("criteria" in result)
+        with open("_setup_py.py", "rb") as f:
+            meh = f.read()
+        gm_dir = os.path.abspath("_some_modules_dir/global_modules")
+        tc_dir = "test_config_dir"
+        os.makedirs(gm_dir)
+        create_module(gm_dir, [os.path.join("../dorc/", x)
+                               for x in ["autoloads.py"]])
+        os.mkdir(tc_dir)
+        env_str = f"import sys\nsys.path.append('{os.path.dirname(gm_dir)}')\n"
+        status, msg = self._modules.add_config(tc_dir, meh, env_str=env_str)
+        self.assertTrue(status)
+        self.assertTrue("optimizers" in result)
+        self.assertTrue("criteria" in result)
+        try:
+            shutil.rmtree("test_config_dir")
+            shutil.rmtree(gm_dir)
+        except:
+            pass
 
     @pytest.mark.todo
     def test_add_module(self):

@@ -135,7 +135,8 @@ class Modules:
 
     @classmethod
     def _load_python_file(cls, module: bytes, checks: Iterable[Callable[[str], bool]],
-                          write_path: Union[str, pathlib.Path], exec_cmd: str, return_key: str) ->\
+                          write_path: Union[str, pathlib.Path], exec_cmd: str,
+                          return_key: str, env_str: str = "") ->\
             Tuple[bool, List[str], Optional[Dict]]:
         """Load a python file containing a module.
 
@@ -152,8 +153,10 @@ class Modules:
         msgs: List[str] = []
         msgs.append("Detected python file")
         with open(write_path, "w") as f:
-            msgs.append(f"Written to {write_path}")
+            if env_str:
+                f.write(env_str)
             f.write(module.decode())
+            msgs.append(f"Written to {write_path}")
         try:
             ldict: Dict[str, Any] = {}
             msgs.append("Checking functions")
@@ -180,7 +183,8 @@ class Modules:
 
     @classmethod
     def _load_zip_file(cls, module: bytes, checks: Iterable[Callable[[str], bool]],
-                       write_path: Union[str, pathlib.Path], exec_cmd: str, return_key: str) ->\
+                       write_path: Union[str, pathlib.Path], exec_cmd: str,
+                       return_key: str, env_str: str = "") ->\
             Tuple[bool, List[str], Optional[Dict]]:
         """Load a zip file containing a module.
 
@@ -208,6 +212,11 @@ class Modules:
             # zf.extractall(os.path.join(cls._mods_dir, write_path))
             msgs.append(f"Extracting to {write_path}")
             zf.extractall(write_path)
+            if env_str:
+                with open(os.path.join(write_path, "__init__.py"), "+") as f:
+                    f_str = f.read()
+                    f.write(env_str)
+                    f.write(f_str)
             try:
                 ldict: Dict[str, Any] = {}
                 exec(exec_cmd, globals(), ldict)
@@ -392,6 +401,45 @@ class Modules:
                                           excludes=[lambda x: x.startswith(".")],
                                           preds=[lambda x: isinstance(x, type)])
 
+    @classmethod
+    def add_config(cls, config_dir: Union[str, pathlib.Path], module: bytes,
+                   env: Optional[str] = None, env_str: str = ""):
+        """Load a :class:`Trainer` configuration
+
+        Args:
+            config_dir: The directory where the config resides.
+                        It's appended to the :attr:`sys.path`
+            module: Config file bytes
+            env: Additional commands to prepend to the commad for loading the config
+        Returns:
+            A tuple of status, and message if fails or the config
+
+        """
+        test_py_file = cls._check_file_magic(module, "python")
+        return_key = "config"
+        checks: List[Callable] = []
+        if config_dir not in sys.path:
+            sys.path.append(str(config_dir))
+        tmp_name = "session_config"
+        if env:
+            exec_cmd = env + "\n" + f"from session_config import config"
+        else:
+            exec_cmd = f"from session_config import config"
+        if test_py_file:
+            tmp_file = os.path.join(os.path.abspath(config_dir), tmp_name + ".py")
+            status, msgs, retval = cls._load_python_file(module, checks, tmp_file,
+                                                         exec_cmd, return_key,
+                                                         env_str=env_str)
+        else:
+            tmp_path = os.path.join(os.path.abspath(config_dir), tmp_name)
+            status, msgs, retval = cls._load_zip_file(module, checks, tmp_path,
+                                                      exec_cmd, return_key,
+                                                      env_str=env_str)
+        if not status:
+            return status, "\n".join(msgs)
+        else:
+            return status, retval
+
     # def add_module(self, module: bytes, name: Optional[str],
     #                checks: Iterable[Callable[[str], bool]]) ->\
     #         Tuple[bool, Union[str, Dict]]:
@@ -536,42 +584,6 @@ class Modules:
         else:
             return False, "Failed to add module"
 
-    def add_config(self, config_dir: Union[str, pathlib.Path], module: bytes,
-                   env: None = None):
-        """Load a :class:`Trainer` configuration
-
-        Args:
-            config_dir: The directory where the config resides. It's append to the :attr:`sys.path`
-            module: Config file bytes
-            env: Additional commands to prepend to the commad for loading the config
-        Returns:
-            A tuple of status, and message if fails or the config
-
-        """
-        test_py_file = self._check_file_magic(module, "python")
-        return_key = "config"
-        checks: List[Callable] = []
-        if config_dir not in sys.path:
-            sys.path.append(str(config_dir))
-        tmp_dir = tmp_name = "session_config"
-        if env:
-            exec_cmd = env + "\n" + f"from session_config import config"
-        else:
-            exec_cmd = f"from session_config import config"
-        if test_py_file:
-            tmp_file = os.path.join(os.path.abspath(config_dir), tmp_name + ".py")
-            status, msgs, retval = self._load_python_file(module, checks, tmp_file,
-                                                          exec_cmd, return_key)
-        else:
-            tmp_path = os.path.join(os.path.abspath(config_dir), tmp_dir)
-            status, msgs, retval = self._load_zip_file(module, checks, tmp_path,
-                                                       exec_cmd, return_key)
-        for msg in msgs:
-            self._logd(msg)
-        if not status:
-            return status, msgs[-1]
-        else:
-            return status, retval
 
     # # FIXME: This is redundant with just a name added
     # def add_named_module(self, mods_dir: Union[str, pathlib.Path], module: bytes,

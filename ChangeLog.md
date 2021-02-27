@@ -88,3 +88,16 @@
 - Fixed some device allocation though conflicts are still not handled.
 - Fixed `Trainer._init_update_funcs`
 - Parametrized a lot of tests and some new marks.
+
+## [2021-02-27 Sat 18:38]
+- Added and fixed python file config.
+- config writing and checks are in `daemon.Daemon` now. Interface only reads
+  it. Functions `Daemon._write_python_config` and `Daemon._write_json_config`
+  handle that.
+- classmethod `FlaskInterface.read_config` and instance method
+  `FlaskInterface._read_config` now read configs.
+- Fixed a bug in `TranslationLayer.patch_config`.
+- `dorc.mods.Modules.add_config` is now a classmethod.
+- Changes to tests accordingly and a new `_setup_py.py` file for testing python
+  config.
+

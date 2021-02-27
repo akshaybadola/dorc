@@ -1,4 +1,5 @@
 import sys
+import base64
 import random
 import shutil
 import datetime
@@ -15,6 +16,7 @@ from dorc.trainer import config as trainer_config
 from dorc.interfaces import FlaskInterface
 from dorc.interfaces.translation import TranslationLayer
 from dorc.trainer import Trainer
+import util
 import _setup
 
 
@@ -55,6 +57,39 @@ def json_config():
     # return Trainer(**test_config)
 
 
+@pytest.fixture(scope="module")
+def indirect_config(request):
+    gm_dir = os.path.abspath("_some_modules_dir/global_modules")
+    tc_dir = "test_config_dir"
+    if os.path.exists(gm_dir):
+        shutil.rmtree(os.path.dirname(gm_dir))
+    if os.path.exists(tc_dir):
+        shutil.rmtree(tc_dir)
+    os.makedirs(gm_dir)
+    create_module(gm_dir, [os.path.join("../dorc/", x)
+                           for x in ["autoloads.py"]])
+    os.mkdir(tc_dir)
+    if hasattr(request, "param") and request.param:
+        param = request.param
+    else:
+        param = "json"
+    if param == "pybytes":
+        with open("_setup_py.py", "rb") as f:
+            conf_bytes = f.read()
+        yield conf_bytes
+    elif param == "pystr":
+        with open("_setup_py.py", "rb") as f:
+            conf_bytes = f.read()
+        yield base64.b64encode(conf_bytes)
+    else:
+        importlib.reload(_setup)
+        yield _setup.config
+    if os.path.exists(gm_dir):
+        shutil.rmtree(os.path.dirname(gm_dir))
+    if os.path.exists(tc_dir):
+        shutil.rmtree(tc_dir)
+
+
 @pytest.fixture
 def trainer_json_config(json_config):
     config = json_config
@@ -62,8 +97,11 @@ def trainer_json_config(json_config):
     gdata_dir = os.path.abspath(".test_dir/global_datasets")
     if not os.path.exists(".test_dir"):
         os.mkdir(".test_dir")
+    if not os.path.exists(".test_dir/test_session"):
         os.mkdir(".test_dir/test_session")
+    if not os.path.exists(gmods_dir):
         os.mkdir(gmods_dir)
+    if not os.path.exists(gdata_dir):
         os.mkdir(gdata_dir)
     time_str = datetime.datetime.now().isoformat()
     data_dir = f".test_dir/test_session/{time_str}"
@@ -76,9 +114,6 @@ def trainer_json_config(json_config):
     test_config.pop("model_step_params")
     trainer = Trainer(**test_config)
     yield (test_config, trainer)
-    # for handler in trainer._logger.handlers:
-    #     handler.close()
-    #     trainer._logger.removeHandler(handler)
 
 
 @pytest.fixture
@@ -154,9 +189,12 @@ def params_and_iface():
     create_module(gmods_dir, [os.path.abspath("../dorc/autoloads.py")])
     create_module(gdata_dir)
     sys.path.append(os.path.abspath(root_dir))
+    with open("_setup_py.py", "rb") as f:
+        conf_bytes = f.read()
+    util.write_py_config(conf_bytes, data_dir, gmods_dir, gdata_dir)
     iface = FlaskInterface(hostname, port, data_dir, gmods_dir, gdata_dir, no_start=True)
     # from global_modules import autoloads
-    status, message = iface.create_trainer(config)
+    status, message = iface.create_trainer()
     iface_thread = Thread(target=iface.start)
     iface_thread.start()
     time.sleep(1)

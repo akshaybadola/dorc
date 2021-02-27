@@ -29,20 +29,22 @@ def test_trainer_hooks_add_to_post_epoch_hook(params_and_trainer):
 
 
 @pytest.mark.quick
+@pytest.mark.todo
 def test_trainer_hooks_delete_from_post_epoch_hook(params_and_trainer):
     params, trainer = params_and_trainer
     # delete hook and ensure it's deleted from hooks_to_run
     # and doesn't run on next loop
 
 
-
 @pytest.mark.quick
+@pytest.mark.todo
 def test_trainer_hooks_modify_post_epoch_hook(params_and_trainer):
     params, trainer = params_and_trainer
     # adding or deleting hook ensures it runs or doesn't run in next loop
 
 
 @pytest.mark.quick
+@pytest.mark.todo
 def test_trainer_hooks_dump_and_restore(params_and_trainer):
     params, trainer = params_and_trainer
     # as they're stateless functions they should be dumpable

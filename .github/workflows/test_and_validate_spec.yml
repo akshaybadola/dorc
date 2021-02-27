@@ -31,7 +31,7 @@ jobs:
         python -m pip install openapi-spec-validator==0.2.9
     - name: Test spec generation
       run: |
-        cd tests && pytest -m 'spec and not todo' && cd ..
+        cd tests && pytest -m 'spec and not todo and not bug' && cd ..
     - name: Validate OpenAPI spec generation
       run: |
         bash make_spec

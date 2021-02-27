@@ -52,9 +52,11 @@ class TranslationLayer:
         return copy.deepcopy(self.patched.copy())
 
     def patch_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        _model = config["model_params"]["net"].pop("model")
-        config["model_params"]["net"]["model"] = _model["function"]
-        config["model_params"]["net"]["params"] = _model["params"]
+        for m in config["model_params"]:
+            if "model" in config["model_params"][m]:
+                _model = config["model_params"][m].pop("model")
+                config["model_params"][m]["model"] = _model["function"]
+                config["model_params"][m]["params"] = _model["params"]
         update_func_params = trainer_config.UpdateFunctionsParams(
             **config["model_step_params"]["params"])
         update_functions = trainer_config.UpdateFunctions(
@@ -117,42 +119,49 @@ class TranslationLayer:
         else:
             return self.encoder(obj)
 
-    def pred_shift_up(self, key: str, k: str, v: Any) -> str:
+    @classmethod
+    def pred_shift_up(cls, key: str, k: str, v: Any) -> str:
         if isinstance(v, dict) and key in v:
             return key + "_shift_up"
         else:
             return ""
 
-    def pred_shift_down(self, key: str, k: str, v: Any) -> str:
+    @classmethod
+    def pred_shift_down(cls, key: str, k: str, v: Any) -> str:
         if isinstance(v, dict) and key in v:
             return key + "_shift_down"
         else:
             return ""
 
-    def pred_function(self, k: str, v: Any) -> str:
+    @classmethod
+    def pred_function(cls, k: str, v: Any) -> str:
         if k == "function" and isinstance(v, dict):
             return "function"
         else:
             return ""
 
-    def pred_module(self, k: str, v: Any) -> str:
+    @classmethod
+    def pred_module(cls, k: str, v: Any) -> str:
         if k == "module" and isinstance(v, str):
             return "module"
         else:
             return ""
 
     # certain heuristics like "transform" is an expression
-    def pred_expression(self, k: str, v: str) -> str:
+    @classmethod
+    def pred_expression(cls, k: str, v: str) -> str:
         if k in {"expression", "expr"} and isinstance(v, str):
             return "expression"
         else:
             return ""
 
-    def repl_shift_up(self, key: str, v: Dict[str, Any],
+    @classmethod
+    def repl_shift_up(cls, key: str, v: Dict[str, Any],
                       transform: Callable[[Dict], Any] = identity) -> Any:
         return transform(v[key])
 
-    def repl_shift_down(self, key: str, v: Dict[str, Any],
+    @classmethod
+    def repl_shift_down(cls, key: str, v: Dict[str, Any],
                         transform: Callable[[Dict], Any] = identity) -> Any:
         return {key: transform(v)}
 

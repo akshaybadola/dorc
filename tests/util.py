@@ -1,8 +1,11 @@
 import pytest
 import sys
 import copy
+import os
 import torch
 sys.path.append("../")
+from dorc.daemon import models
+from dorc.mods import Modules
 from dorc.trainer import Trainer
 from dorc.trainer.model import Model, ModelStep
 from dorc.autoloads import ClassificationStep
@@ -89,6 +92,7 @@ def terminate_live_sessions(daemon):
 
 def _create_session(daemon, config, load=False):
     data = {"name": "test_session", "config": copy.deepcopy(config), "load": load}
+    data = models.CreateSessionModel(**data)
     daemon.create_session(0, data)
     result = daemon._check_result(0)
     return result
@@ -135,3 +139,10 @@ def get_step(models, config, train_or_test):
     else:
         step.train = False
     return step
+
+
+def write_py_config(py_file_bytes, data_dir, gmods_dir, gdata_dir=""):
+    env_str = f"import sys\n" +\
+        "sys.path.append('{os.path.dirname(gmods_dir)}')\n" +\
+        "sys.path.append('{os.path.dirname(gdata_dir)}')\n" if gdata_dir else ""
+    return Modules.add_config(data_dir, py_file_bytes, env_str=env_str)

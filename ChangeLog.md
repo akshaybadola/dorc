@@ -107,3 +107,13 @@
 - Randomized test_dir generation for trainer tests.
 - Timeout for `test_trainer_metrics.py`.
 - Changed workflows to use bash scripts instead. Fixed `test_and_validate_spec.yml`.
+
+## [2021-03-01 Mon 02:35]
+- Added `Daemon.url`.
+- Daemon starts up before scanning for sessions is finished now.
+- There's an intermediate state for each session `scan_state` which keeps track
+  of the session scanning during startup.
+- Added debug route `_get_param` to `Daemon`.
+- Fixed issues with gpu reservation in daemon and interface.
+- Fixed start trainer without loading models.
+

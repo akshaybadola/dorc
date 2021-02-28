@@ -51,7 +51,7 @@ class Trainer(MethodView):
             See :meth:`call_trainer`
 
         """
-        sess_list = self.daemon._sessions_list
+        sess_list = self.daemon.sessions_list
         if port not in [x["port"] for x in sess_list.values()]:
             # return make_response(f"Unloaded or invalid trainer {port}", 405)
             return Response(_dump([False, f"Unloaded or invalid trainer {port}"]))

@@ -227,7 +227,8 @@ def make_test_interface(setup_path, autoloads_path):
                   [os.path.abspath(autoloads_path)])
     create_module(gdata_dir)
     sys.path.append(os.path.abspath(data_dir))
-    iface = FlaskInterface(hostname, port, data_dir, gmods_dir, gdata_dir, no_start=True)
+    iface = FlaskInterface(hostname, port, data_dir, gmods_dir, gdata_dir,
+                           f"http://{hostname}:{port}/", no_start=True)
     setup_dir = os.path.dirname(setup_path)
     sys.path.append(setup_dir)
     sfile = setup_path.split("/")[-1].replace(".py", "")

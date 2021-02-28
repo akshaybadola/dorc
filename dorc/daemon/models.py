@@ -13,10 +13,14 @@ class BaseModel(SpecModel):
             add_nullable(schema, model)
 
 
+class NotScanned(BaseModel):
+    state: str
+
+
 class Session(BaseModel):
     loaded: bool
     port: Optional[int]
-    state: TrainerState
+    state: Union[TrainerState, NotScanned]
     finished: bool
 
 

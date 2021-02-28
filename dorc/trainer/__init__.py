@@ -379,17 +379,20 @@ class Trainer:
             self.gpus = [-1]
         if self.gpus != [-1]:
             available_gpus = [x for x in self.gpus if x not in self.reserved_gpus]
-            unvailable_gpus = set(available_gpus) - set(self.gpus)
+            unavailable_gpus = set(available_gpus) - set(self.gpus)
             self.gpus = available_gpus
-            if not self.reserve_gpus(self.gpus)[0]:
+            response = self.reserve_gpus(self.gpus)
+            print(self._logd(f"Got response for reserve_gpus {response}"))
+            if not response[0]:
                 self._loge(f"Could not reserve gpus {self.gpus}")
                 self.gpus = [-1]
             else:
                 self._logd(f"Reserved gpus {self.gpus}")
             try:
                 self._device_handles, removed = init_nvml(self.gpus)
-                self._loge(f"Devices {unvailable_gpus} are already in use. " +
-                           f"Will only set {available_gpus}")
+                if unavailable_gpus:
+                    self._loge(f"Devices {unavailable_gpus} are already in use. " +
+                               f"Will only set {available_gpus}")
                 self._logd(f"Initialized devices {[*self._device_handles.keys()]} with names:\n" +
                            f"{[gpu_name(x) for x in self._device_handles.values()]}")
                 if removed:
@@ -1053,6 +1056,7 @@ class Trainer:
         self._logi("Initializing Update Functions")
         self._model_step_func = None
         # TODO: Hard coded models, maybe should remove this
+        print(self.criteria, self.criteria_params)
         if self.update_functions.train is not None:
             load_models = {}
             for x in self.trainer_params.training_steps:
@@ -2957,8 +2961,19 @@ class Trainer:
 
     @control
     def start(self) -> str:
-        self._start_if_not_running()
-        return self._logi("Starting")
+        if self.active_models:
+            self._start_if_not_running()
+            return self._logi("Starting")
+        else:
+            step_models = self._training_steps["train"][0].models
+            if len(self.models_available) == 1 and len(step_models) == 1:
+                a = [*step_models][0]
+                b = self.models_available[0]
+                self.set_model({a: b})
+                self._start_if_not_running()
+                return self._logi("Starting")
+            else:
+                return self._loge("Need to set models first.")
 
     # # CHECK: Can we resume after stop?
     # @control

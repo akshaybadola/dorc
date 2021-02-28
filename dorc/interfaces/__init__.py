@@ -51,7 +51,7 @@ class FlaskInterface:
     """
 
     def __init__(self, hostname, port, data_dir, gmods_dir, gdata_dir,
-                 bare=True, no_start=False,
+                 daemon_url, bare=True, no_start=False,
                  config_overrides: Dict[str, Any] = {}):
         """
         :param hostname: :class:`str` host over which to serve
@@ -62,7 +62,11 @@ class FlaskInterface:
         :rtype: None
 
         """
-        self._daemon_url = "http://localhost:20202/"
+        if not daemon_url.endswith("/"):
+            daemon_url = daemon_url + "/"
+        if not (daemon_url.startswith("http:") or daemon_url.startswith("https:")):
+            daemon_url = "http://" + daemon_url
+        self._daemon_url = daemon_url
         self.api_host = hostname
         self.api_port = port
         self.logger = None
@@ -147,10 +151,12 @@ class FlaskInterface:
         return requests.get(self._daemon_url + "_devices").json()
 
     def reserve_gpus(self, gpus: List[int]) -> List[Union[bool, None, str]]:
+        self._logd(f"Asked to reserve {gpus}")
         response = requests.post(self._daemon_url + "_devices",
                                  json={"action": "reserve",
                                        "gpus": gpus,
                                        "port": self.api_port})
+        print(self._logd(str(response.content)))
         result = json.loads(response.content)
         return result
 

@@ -223,3 +223,8 @@ def test_daemon_scan_sessions(daemon_and_cookies, indirect_config):
     # for k, v in daemon._sessions["test_session"]["sessions"].items():
     #     assert isinstance(v, dict)
     #     assert not "process" in v
+
+
+@pytest.mark.todo
+def test_daemon_should_handle_multiple_reserve_devices_calls():
+    pass

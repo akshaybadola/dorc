@@ -153,7 +153,7 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
         self._threads = {}
         self._task_q = Queue()
         self._sessions = {}
-        self._devices = {}
+        self._devices: Dict[str, List[int]] = {}
         self._modules = {}
         self._datasets: Dict[str, Dict] = {}
         self._init_context()
@@ -229,10 +229,14 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
         Used by trainers to manage GPUs among themselves.
 
         """
-        devices = []
+        devices: List[int] = []
         for x in self._devices.values():
             devices.extend(x)
         return devices
+
+    @property
+    def url(self) -> str:
+        return ("https://" if self.use_https else "http://") + f"{self.hostname}:{self.port}/"
 
     def _init_context(self):
         """Initialize the flask SSL context."""
@@ -345,7 +349,7 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
         print(self._logd(f"Dumping trainer state to {data_dir}"))
         iface = FlaskInterface(None, None, data_dir,
                                self.modules_dir, self.datasets_dir,
-                               no_start=True)
+                               self.url, no_start=True)
         iface.create_trainer()
         del iface
 
@@ -562,6 +566,7 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
         should raise error (or atleast warn) unless testing
 
         """
+        self._scan_state: Dict[str, str] = {}
         if self._already_scanned and not self._testing:
             self._logw("Scanning sessions again!")
         self._logd("Scanning Sessions")
@@ -577,6 +582,7 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                 if d not in self._session_exclude_dirs:
                     try:
                         data_dir = os.path.join(self._sessions[s]["path"], d)
+                        self._scan_state[s + "/" + d] = "scan_start"
                         self._sessions[s]["sessions"][d] = {}
                         self._sessions[s]["sessions"][d]["data_dir"] = data_dir
                         state_path = os.path.join(self._sessions[s]["path"], d, "session_state")
@@ -587,6 +593,9 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                     except Exception as e:
                         self._sessions[s]["sessions"][d] = "Error " + str(e) +\
                             "\n" + traceback.format_exc()
+                        self._scan_state[s] = "scan_error"
+                    if not self._scan_state[s + "/" + d] == "scan_error":
+                        self._scan_state[s + "/" + d] = "scan_done"
         self._already_scanned = True
 
     def create_session(self, task_id: int, data: models.CreateSessionModel):
@@ -689,7 +698,8 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                     self._sessions[name]["sessions"][time_str]["port"] = port
                     self._sessions[name]["sessions"][time_str]["data_dir"] = data_dir
                     cmd = f"python {self.if_run_file} {self.hostname} {port} {data_dir} " +\
-                        f"{self.modules_dir} {self.datasets_dir} --config-overrides=True"
+                        f"{self.modules_dir} {self.datasets_dir} {self.url} " +\
+                        "--config-overrides=True"
                     cwd = os.path.dirname(self._lib_dir)
                     self._logd(f"Running command {cmd} in {cwd}")
                     p = Popen(shlex.split(cmd), env=os.environ, cwd=cwd)
@@ -714,6 +724,7 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
             session_key: Session Key
 
         """
+        self._logd(f"Refreshing state")
         name, time_str = session_key.split("/")
         with open(os.path.join(self._sessions[name]["path"], time_str,
                                "session_state"), "r") as f:
@@ -740,11 +751,13 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                 if "process" in sess:
                     self._refresh_state("/".join([name, time_str]))
 
+    # FIXME: Trainer crash here
     def load_unfinished_sessions(self):
         self._logd("Loading Unfinished Sessions")
         for name, session in self._sessions.items():
             try:
                 for sub_name, sub_sess in session["sessions"].items():
+                    print(session, sub_sess)
                     state = sub_sess["state"]
                     if not self._session_finished_p(state):
                         self._load_session_helper(0, name, sub_name)
@@ -807,12 +820,20 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
             session_stamps = v["sessions"].keys()
             for ts in session_stamps:
                 key = k + "/" + ts
-                session = v["sessions"][ts]
-                val = {}
-                val["loaded"] = "process" in session and session["process"].poll() is None
-                val["port"] = session["port"] if val["loaded"] else None
-                val["state"] = session["state"]
-                val["finished"] = self._session_finished_p(session["state"])
+                val: Dict[str, Any] = {}
+                scan_state = self._scan_state.get(key, "scan_not_started")
+                if not scan_state == "scan_done":
+                    val["loaded"] = False
+                    val["port"] = None
+                    val["state"] = models.NotScanned(state=scan_state)
+                    val["finished"] = False
+                else:
+                    session = v["sessions"][ts]
+                    val["loaded"] = scan_state == "scan_done" and\
+                        "process" in session and session["process"].poll() is None
+                    val["port"] = session["port"] if val["loaded"] else None
+                    val["state"] = session["state"]
+                    val["finished"] = self._session_finished_p(session["state"])
                 retval[key] = models.Session.parse_obj(val)
         return retval
 
@@ -1334,13 +1355,17 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
         #     self._have_internet.kill()
         # self._logi("Killed have_internet process")
 
+    def scan_and_load_sessions(self):
+        self.scan_sessions()
+        self.load_unfinished_sessions()
+
     # NOTE: Main entry point for the server
     def start(self):
         # FIXME: Cache isn't used as of now
         self._cache = {}
         self._logi(f"Initializing Server on {self.hostname}:{self.port}")
-        self.scan_sessions()
-        self.load_unfinished_sessions()
+        scan_thread = Thread(target=self.scan_and_load_sessions)
+        scan_thread.start()
 
         @self.login_manager.user_loader
         def load_user(userid):
@@ -1769,24 +1794,37 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
             """
             return self.__version__
 
+        @self.app.route("/_get_param", methods=["GET"])
+        def __get_param():
+            if "param" in request.args:
+                param = request.args["param"]
+                if param in self.__dict__:
+                    return _dump(self.__dict__[param])
+                else:
+                    return f"Unknown param{param}"
+            else:
+                return f"No param in args"
+
         # FIXME: We're not checking overlap
-        # FIXME: Should only be available to interfaces
+        # TODO: Should only be available to interfaces
         @self.app.route("/_devices", methods=["GET", "POST"])
         def __devices():
             if request.method == "POST":
                 try:
-                    data = request.json
-                    if "action" == "reserve":
+                    data = load_json(request.json)
+                    if data["action"] == "reserve":
                         reserved = self.reserved_devices
                         available = [x for x in data["gpus"] if x not in reserved]
                         if data["port"] not in self._devices:
                             self._devices[data["port"]] = []
                         self._devices[data["port"]].extend(available)
                         return _dump([True, self._devices[data["port"]]])
-                    elif "action" == "free":
+                    elif data["action"] == "free":
                         self._devices[data["port"]] = list(set(self._devices[data["port"]])
                                                            - set(data["gpus"]))
                         return _dump([True, self._devices[data["port"]]])
+                    else:
+                        return _dump([False, f"Unknown action {data['action']}"])
                 except Exception as e:
                     return _dump([False, f"{e}"])
             elif request.method == "GET":

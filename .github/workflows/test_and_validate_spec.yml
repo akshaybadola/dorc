@@ -29,7 +29,6 @@ jobs:
         if [ -f requirements-${{ matrix.python-version }}.txt ]; then python -m pip install -r requirements-${{ matrix.python-version }}.txt; fi
         python -m pip install pytest==6.2.1
         python -m pip install pytest-timeout==1.4.2
-        python -m pip install sphinx==3.5.1
         python -m pip install openapi-spec-validator==0.2.9
     - name: Test spec generation
       run: |

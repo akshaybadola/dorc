@@ -63,7 +63,7 @@ class SubTrainer(Trainer):
     def __init__(self, _cuda, *args, **kwargs):
         self._cuda = _cuda
         super().__init__(*args, **kwargs)
-        self.reserved_gpus = []
+        self._reserved_gpus = lambda *x: []
         self.reserve_gpus = lambda x: [True, None]
 
     @property

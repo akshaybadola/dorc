@@ -8,8 +8,6 @@ import os
 @pytest.mark.threaded
 def test_trainer_capture_metrics_epoch(trainer_json_config):
     _, trainer = trainer_json_config
-    trainer.reserved_gpus = []
-    trainer.reserve_gpus = lambda x: [True, None]
     trainer.trainer_params.cuda = True
     print(id(trainer))
     trainer._init_all()

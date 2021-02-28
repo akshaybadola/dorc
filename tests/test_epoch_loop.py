@@ -3,9 +3,9 @@ from functools import partial
 from threading import Thread
 import sys
 import time
-sys.path.append("../")
 from dorc.trainer.epoch import EpochLoop
 from dorc.device import all_devices
+from util import SubTrainer
 
 
 def train_one_batch(train_step, batch):
@@ -21,7 +21,8 @@ def train_one_batch(train_step, batch):
 # NOTE: Consumer
 @pytest.mark.threaded
 def test_epoch_loop_run_task(params_and_trainer):
-    _, trainer = params_and_trainer
+    params, trainer = params_and_trainer
+    trainer = SubTrainer(False, **params)
     trainer.config.model_params['net'].loaded = True
     trainer._init_all()
     signals = trainer._epoch_runner.signals
@@ -53,11 +54,10 @@ def test_epoch_loop_run_task(params_and_trainer):
 # NOTE: Consumer
 @pytest.mark.threaded
 def test_epoch_loop_run_task_have_gpus(params_and_trainer):
-    _, trainer = params_and_trainer
+    params, trainer = params_and_trainer
+    trainer = SubTrainer(False, **params)
     trainer.config.trainer_params.gpus = [0]
     trainer.config.trainer_params.cuda = True
-    trainer.reserved_gpus = []
-    trainer.reserve_gpus = lambda x: [True, None]
     trainer.config.model_params['net'].loaded = True
     trainer._init_all()
     signals = trainer._epoch_runner.signals

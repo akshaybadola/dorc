@@ -11,8 +11,6 @@ from util import SubTrainer, FakeRequest, Net, Net2
 def test_trainer_load_saves_bad_params(params_and_trainer):
     params, _trainer = params_and_trainer
     trainer = SubTrainer(False, **params)
-    trainer.reserved_gpus = []
-    trainer.reserve_gpus = lambda x: [True, None]
     trainer.trainer_params.cuda = True
     data = {}
     with pytest.raises(TypeError):
@@ -36,8 +34,7 @@ def test_trainer_load_saves_bad_params(params_and_trainer):
 def test_trainer_load_saves_good_params(params_and_trainer):
     params, _trainer = params_and_trainer
     trainer = SubTrainer(False, **params)
-    trainer.reserved_gpus = []
-    trainer.reserve_gpus = lambda x: [True, None]
+
     # trainer.trainer_params.cuda = True
     trainer._init_all()
     trainer._save("_save.pth")
@@ -73,8 +70,7 @@ def test_trainer_load_weights_no_gpu(params_and_trainer, loaded):
                                         "params": {},
                                         "gpus": "auto"}}
     trainer = SubTrainer(False, **params)
-    trainer.reserved_gpus = []
-    trainer.reserve_gpus = lambda x: [True, None]
+
     trainer.trainer_params.gpus = []
     trainer.trainer_params.cuda = True
     trainer._init_device()
@@ -123,8 +119,7 @@ def test_trainer_load_weights_two_models_no_gpus(params_and_trainer, loaded):
                                         "params": {}, "loaded": loaded,
                                         "gpus": "auto"}}
     trainer = SubTrainer(False, **params)
-    trainer.reserved_gpus = []
-    trainer.reserve_gpus = lambda x: [True, None]
+
     trainer.trainer_params.gpus = []
     trainer.trainer_params.cuda = True
     trainer._init_device()
@@ -165,8 +160,7 @@ def test_trainer_load_weights_two_models_two_gpus(params_and_trainer):
                               "net_2": {"model": Net, "optimizer": "Adam",
                                         "params": {}, "gpus": [1]}}
     trainer = SubTrainer(False, **params)
-    trainer.reserved_gpus = []
-    trainer.reserve_gpus = lambda x: [True, None]
+
     trainer.trainer_params.cuda = True
     trainer.trainer_params.gpus = [0, 1]
     trainer._init_device()

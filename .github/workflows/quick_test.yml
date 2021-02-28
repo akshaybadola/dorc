@@ -32,7 +32,4 @@ jobs:
     - name: Test with pytest
       run: |
         export IN_GITHUB_WORKFLOW=1
-        cd tests && bash quick_test.sh &&\
-        bash threaded_test.sh &&\
-        bash http_test.sh &&\
-        bash devices_test.sh
+        cd tests && bash full_test.sh

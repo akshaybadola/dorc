@@ -6,7 +6,7 @@ from dorc.trainer import Trainer
 from util import SubTrainer
 
 
-@pytest.mark.timeout(5)
+@pytest.mark.timeout(5, method="signal")
 @pytest.mark.threaded
 def test_trainer_capture_metrics_epoch(trainer_json_config):
     _, trainer = trainer_json_config
@@ -33,7 +33,7 @@ def test_trainer_capture_metrics_epoch(trainer_json_config):
     trainer.abort_loop()
 
 
-@pytest.mark.timeout(5)
+@pytest.mark.timeout(5, method="signal")
 @pytest.mark.threaded
 def test_trainer_capture_metrics_iterations(trainer_json_config):
     _, trainer = trainer_json_config

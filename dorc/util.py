@@ -169,8 +169,9 @@ def stop_test_daemon(port=23232):
             cookies = requests.request("POST", host + "login",
                                        data={"username": "admin",
                                              "password": "AdminAdmin_33"}).cookies
-            requests.get(host + "_shutdown", cookies=cookies)
+            response = requests.get(host + "_shutdown", cookies=cookies)
             time.sleep(1)
+        return response
     except requests.ConnectionError:
         pass
 

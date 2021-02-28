@@ -209,7 +209,7 @@ def params_and_iface():
     shutil.rmtree(".test_dir")
 
 
-@pytest.fixture(scope="package")
+@pytest.fixture(scope="module")
 def daemon_and_cookies():
     import time
     import requests
@@ -220,7 +220,7 @@ def daemon_and_cookies():
         shutil.rmtree(data_dir)
     if not os.path.exists(data_dir):
         os.mkdir(data_dir)
-    port = 23232
+    port = random.randint(23232, 24000)
     hostname = "127.0.0.1"
     daemon = Daemon(hostname, port, ".test_dir", "test_name")
     daemon._testing = True
@@ -232,7 +232,11 @@ def daemon_and_cookies():
                                data={"username": "admin",
                                      "password": "AdminAdmin_33"}).cookies
     yield (daemon, cookies)
-    requests.get(host + "_shutdown", cookies=cookies)
+    try:
+        requests.get(host + "_shutdown", cookies=cookies)
+    except Exception:
+        # in case shutdown in the test
+        pass
 
 
 @pytest.fixture

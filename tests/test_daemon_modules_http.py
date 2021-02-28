@@ -114,7 +114,7 @@ def hack_param():
 
 
 @pytest.mark.http
-def test_list_modules(daemon_and_cookies, json_config):
+def test_daemon_list_modules(daemon_and_cookies, json_config):
     daemon, cookies = daemon_and_cookies
     time.sleep(1)
     host = f"http://{daemon.hostname}:{daemon.port}/"
@@ -125,6 +125,7 @@ def test_list_modules(daemon_and_cookies, json_config):
     expected = {"autoloads": ["torch", "ModelStep", "sys",
                               "ClassificationStep",
                               "accuracy", "CheckFunc",
+                              "identity",
                               "CheckGreater",
                               "CheckGreaterName",
                               "CheckLesserName",
@@ -135,7 +136,7 @@ def test_list_modules(daemon_and_cookies, json_config):
 
 
 @pytest.mark.http
-def test_add_delete_global_module(daemon_and_cookies, json_config):
+def test_daemon_add_delete_global_module(daemon_and_cookies, json_config):
     daemon, cookies = daemon_and_cookies
     host = f"http://{daemon.hostname}:{daemon.port}/"
     with open("./._test_py_file.py", "w") as f:
@@ -180,7 +181,7 @@ def test_add_delete_global_module(daemon_and_cookies, json_config):
 
 @pytest.mark.http
 @pytest.mark.skipif("IN_GITHUB_WORKFLOW" in os.environ, reason="Don't run in Github workflow")
-def test_add_delete_dataset(daemon_and_cookies, json_config):
+def test_daemon_add_delete_dataset(daemon_and_cookies, json_config):
     py_string = """
 class MnistDataset:
     def __init__(self, pt_file):

@@ -1635,7 +1635,7 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
             if data is None:
                 return f"Invalid data {request.json}"
             try:
-                models.CreateSessionModel(**data)
+                data = models.CreateSessionModel(**data)
             except Exception as e:
                 return f"Errors validating data. {e}"
             task_id = self._get_task_id_launch_func(self.create_session, data)

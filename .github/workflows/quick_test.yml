@@ -28,7 +28,7 @@ jobs:
         export SKIP_CYTHON=1
         if [ -f requirements-${{ matrix.python-version }}.txt ]; then python -m pip install -r requirements-${{ matrix.python-version }}.txt; fi
         python -m pip install pytest==6.2.1
-        python -m pip install pytest-timeout-1.4.2
+        python -m pip install pytest-timeout==1.4.2
     - name: Test with pytest
       run: |
         export IN_GITHUB_WORKFLOW=1

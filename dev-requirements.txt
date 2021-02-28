@@ -1,7 +1,7 @@
 # test requirements
 pytest==6.2.1
 pytest-openfiles==0.5.0
-pytest-timeout-1.4.2
+pytest-timeout==1.4.2
 coverage==5.3
 # if a cython bundle needs to be built
 Cython==0.29.21

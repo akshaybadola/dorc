@@ -143,6 +143,6 @@ def get_step(models, config, train_or_test):
 
 def write_py_config(py_file_bytes, data_dir, gmods_dir, gdata_dir=""):
     env_str = f"import sys\n" +\
-        "sys.path.append('{os.path.dirname(gmods_dir)}')\n" +\
-        "sys.path.append('{os.path.dirname(gdata_dir)}')\n" if gdata_dir else ""
+        f"sys.path.append('{os.path.dirname(gmods_dir)}')\n" +\
+        f"sys.path.append('{os.path.dirname(gdata_dir)}')\n" if gdata_dir else ""
     return Modules.add_config(data_dir, py_file_bytes, env_str=env_str)

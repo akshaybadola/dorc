@@ -101,3 +101,9 @@
 - Changes to tests accordingly and a new `_setup_py.py` file for testing python
   config.
 
+## [2021-02-28 Sun 05:34]
+- Fixed `Daemon._create_trainer` and `Daemon.create_session` when trainer state
+  is missing.
+- Randomized test_dir generation for trainer tests.
+- Timeout for `test_trainer_metrics.py`.
+- Changed workflows to use bash scripts instead. Fixed `test_and_validate_spec.yml`.

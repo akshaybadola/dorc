@@ -98,6 +98,21 @@ def test_daemon_create_and_then_load_session(daemon_and_cookies, indirect_config
 
 @pytest.mark.quick
 @pytest.mark.parametrize("indirect_config", ["json", "pystr"], indirect=True)
+def test_daemon_load_session_without_state(daemon_and_cookies, indirect_config):
+    daemon, cookies = daemon_and_cookies
+    result = _create_session(daemon, indirect_config)
+    assert result[1]
+    time_str = [*daemon._sessions["test_session"]["sessions"].keys()][-1]
+    state_path = os.path.join(".test_dir", "test_session", time_str, "session_state")
+    assert os.path.exists(state_path)
+    os.remove(state_path)
+    daemon._testing = True
+    daemon.scan_sessions()
+    assert os.path.exists(state_path)
+
+
+@pytest.mark.quick
+@pytest.mark.parametrize("indirect_config", ["json", "pystr"], indirect=True)
 def test_daemon_create_and_load_session_with_overrides(daemon_and_cookies, indirect_config):
     daemon, cookies = daemon_and_cookies
     result = _create_session(daemon, indirect_config)
@@ -142,9 +157,10 @@ def test_daemon_create_and_load_session_with_overrides(daemon_and_cookies, indir
 @pytest.mark.parametrize("indirect_config", ["json", "pystr"], indirect=True)
 def test_daemon_list_sessions(daemon_and_cookies, indirect_config):
     daemon, _ = daemon_and_cookies
-    result = _create_session(daemon, indirect_config)
-    assert result[1]
-    assert "test_session" in [*daemon.sessions_list.keys()][-1]
+    if not daemon._sessions:
+        result = _create_session(daemon, indirect_config)
+        assert result[1]
+    assert any("test_session" in x for x in daemon.sessions_list.keys())
 
 
 @pytest.mark.http
@@ -174,9 +190,8 @@ def test_daemon_load_and_unload_session(daemon_and_cookies, indirect_config):
 @pytest.mark.parametrize("indirect_config", ["json", "pystr"], indirect=True)
 def test_daemon_purge_sessions(daemon_and_cookies, indirect_config):
     daemon, cookies = daemon_and_cookies
-    if not daemon.sessions_list:
-        _create_session(daemon, indirect_config)
-    key = [*daemon.sessions_list.keys()][0]
+    _create_session(daemon, indirect_config)
+    key = [*daemon.sessions_list.keys()][-1]
     assert os.path.exists(os.path.join(daemon.root_dir, key))
     daemon._purge_session_helper(0, *key.split("/"))
     assert key not in daemon.sessions_list

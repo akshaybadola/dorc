@@ -28,12 +28,11 @@ jobs:
         export SKIP_CYTHON=1
         if [ -f requirements-${{ matrix.python-version }}.txt ]; then python -m pip install -r requirements-${{ matrix.python-version }}.txt; fi
         python -m pip install pytest==6.2.1
+        python -m pip install pytest-timeout-1.4.2
     - name: Test with pytest
       run: |
         export IN_GITHUB_WORKFLOW=1
-        cd tests && pytest -m 'quick and not todo' test_trainer_training_steps.py && \
-        pytest -m 'quick and not todo' test_trainer_models.py && \
-        pytest -m 'quick and not todo' -k 'not test_trainer_models and not test_trainer_training_steps' && \
-        python -m pytest -m 'threaded and not todo' && \
-        python -m pytest -m 'http and not todo' -k 'not daemon_modules_http' && \
-        python -m pytest -m 'not todo' test_daemon_modules_http.py
+        cd tests && bash quick_test.sh &&\
+        bash threaded_test.sh &&\
+        bash http_test.sh &&\
+        bash devices_test.sh

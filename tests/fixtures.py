@@ -93,18 +93,22 @@ def indirect_config(request):
 @pytest.fixture
 def trainer_json_config(json_config):
     config = json_config
-    gmods_dir = os.path.abspath(".test_dir/global_modules")
-    gdata_dir = os.path.abspath(".test_dir/global_datasets")
-    if not os.path.exists(".test_dir"):
-        os.mkdir(".test_dir")
-    if not os.path.exists(".test_dir/test_session"):
-        os.mkdir(".test_dir/test_session")
+    string = list("abcdefghijklmnop")
+    random.shuffle(string)
+    string = "".join(string)
+    test_dir = os.path.abspath(f".test_{string}")
+    gmods_dir = os.path.abspath(f"{test_dir}/global_modules")
+    gdata_dir = os.path.abspath(f"{test_dir}/global_datasets")
+    if not os.path.exists(f"{test_dir}"):
+        os.mkdir(f"{test_dir}")
+    if not os.path.exists(f"{test_dir}/test_session"):
+        os.mkdir(f"{test_dir}/test_session")
     if not os.path.exists(gmods_dir):
         os.mkdir(gmods_dir)
     if not os.path.exists(gdata_dir):
         os.mkdir(gdata_dir)
     time_str = datetime.datetime.now().isoformat()
-    data_dir = f".test_dir/test_session/{time_str}"
+    data_dir = f"{test_dir}/test_session/{time_str}"
     os.mkdir(data_dir)
     extra_opts = {"data_dir": data_dir,
                   "global_modules_dir": gmods_dir,
@@ -114,6 +118,7 @@ def trainer_json_config(json_config):
     test_config.pop("model_step_params")
     trainer = Trainer(**test_config)
     yield (test_config, trainer)
+    shutil.rmtree(f"{test_dir}")
 
 
 @pytest.fixture
@@ -140,23 +145,25 @@ def get_step(setup_and_net):
 @pytest.fixture
 def params_old_config(setup_and_net):
     config, _ = setup_and_net
-    gmods_dir = os.path.abspath(".test_dir/global_modules")
-    gdata_dir = os.path.abspath(".test_dir/global_datasets")
-    if not os.path.exists(".test_dir"):
-        os.mkdir(".test_dir")
-        os.mkdir(".test_dir/test_session")
+    string = list("abcdefghijklmnop")
+    random.shuffle(string)
+    string = "".join(string)
+    test_dir = os.path.abspath(f".test_{string}")
+    gmods_dir = os.path.abspath(f"{test_dir}/global_modules")
+    gdata_dir = os.path.abspath(f"{test_dir}/global_datasets")
+    if not os.path.exists(f"{test_dir}"):
+        os.mkdir(f"{test_dir}")
+        os.mkdir(f"{test_dir}/test_session")
         os.mkdir(gmods_dir)
         os.mkdir(gdata_dir)
     time_str = datetime.datetime.now().isoformat()
-    os.mkdir(f".test_dir/test_session/{time_str}")
-    data_dir = os.path.abspath(f".test_dir/test_session/{time_str}")
+    os.mkdir(f"{test_dir}/test_session/{time_str}")
+    data_dir = os.path.abspath(f"{test_dir}/test_session/{time_str}")
     params = {"data_dir": data_dir, "global_modules_dir": gmods_dir,
               "global_datasets_dir": gdata_dir, **config}
     trainer = Trainer(**params)
     yield (params, trainer)
-    # for handler in trainer._logger.handlers:
-    #     handler.close()
-    #     trainer._logger.removeHandler(handler)
+    shutil.rmtree(f"{test_dir}")
 
 
 @pytest.fixture
@@ -165,11 +172,7 @@ def params_and_trainer(request, trainer_json_config, params_old_config):
         params, trainer = trainer_json_config
     else:
         params, trainer = params_old_config
-    yield (params, trainer)
-    # for handler in trainer._logger.handlers:
-    #     handler.close()
-    #     trainer._logger.removeHandler(handler)
-    shutil.rmtree(".test_dir")
+    return (params, trainer)
 
 
 @pytest.fixture(scope="module")
@@ -213,12 +216,14 @@ def daemon_and_cookies():
     from dorc.daemon import Daemon
     data_dir = ".test_dir"
     if os.path.exists(data_dir):
+        print("removed test dir again")
         shutil.rmtree(data_dir)
     if not os.path.exists(data_dir):
         os.mkdir(data_dir)
     port = 23232
     hostname = "127.0.0.1"
     daemon = Daemon(hostname, port, ".test_dir", "test_name")
+    daemon._testing = True
     thread = Thread(target=daemon.start)
     thread.start()
     host = "http://" + ":".join([hostname, str(port) + "/"])

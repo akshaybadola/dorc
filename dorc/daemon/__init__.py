@@ -9,6 +9,7 @@ import time
 import socket
 import shutil
 import shlex
+import random
 import atexit
 import requests
 import datetime
@@ -302,8 +303,8 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
 
         """
         env_str = f"import sys\n" +\
-            "sys.path.append('{os.path.dirname(self.modules_dir)}')\n" +\
-            "sys.path.append('{os.path.dirname(self.datasets_dir)}')\n"
+            f"sys.path.append('{os.path.dirname(self.modules_dir)}')\n" +\
+            f"sys.path.append('{os.path.dirname(self.datasets_dir)}')\n"
         status, message = self._module_loader.add_config(data_dir, config, env_str=env_str)
         if status:
             try:
@@ -341,6 +342,7 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
         return status, result   # type: ignore
 
     def _dump_trainer_state(self, data_dir):
+        print(self._logd(f"Dumping trainer state to {data_dir}"))
         iface = FlaskInterface(None, None, data_dir,
                                self.modules_dir, self.datasets_dir,
                                no_start=True)
@@ -353,7 +355,10 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
         flag = True
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         while flag:
-            self._last_free_port = (self._last_free_port + 1) % 65532
+            if self._testing:
+                self._last_free_port = random.randint(2000, 65532)
+            else:
+                self._last_free_port = (self._last_free_port + 1) % 65532
             flag = s.connect_ex(('localhost', self._last_free_port)) == 0
         s.close()
         return self._last_free_port
@@ -574,8 +579,10 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                         data_dir = os.path.join(self._sessions[s]["path"], d)
                         self._sessions[s]["sessions"][d] = {}
                         self._sessions[s]["sessions"][d]["data_dir"] = data_dir
-                        with open(os.path.join(self._sessions[s]["path"], d, "session_state"),
-                                  "r") as f:
+                        state_path = os.path.join(self._sessions[s]["path"], d, "session_state")
+                        if not os.path.exists(state_path):
+                            self._dump_trainer_state(os.path.dirname(state_path))
+                        with open(state_path) as f:
                             self._sessions[s]["sessions"][d]["state"] = json.load(f)
                     except Exception as e:
                         self._sessions[s]["sessions"][d] = "Error " + str(e) +\
@@ -627,6 +634,10 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
         if self._wait_for_task(self._create_trainer, task_id,
                                args=[session_name, time_str, data_dir,
                                      data.config, data.overrides, data.load]):
+            state_path = os.path.join(self._sessions[session_name]["path"], time_str,
+                                   "session_state")
+            if not os.path.exists(state_path):
+                self._dump_trainer_state(os.path.dirname(state_path))
             with open(os.path.join(self._sessions[session_name]["path"], time_str,
                                    "session_state")) as f:
                 self._logd(f"Loading sessions state")
@@ -801,7 +812,6 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                 val["loaded"] = "process" in session and session["process"].poll() is None
                 val["port"] = session["port"] if val["loaded"] else None
                 val["state"] = session["state"]
-                print(f"Getting session finished for {key}")
                 val["finished"] = self._session_finished_p(session["state"])
                 retval[key] = models.Session.parse_obj(val)
         return retval

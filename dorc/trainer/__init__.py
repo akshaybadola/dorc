@@ -203,6 +203,8 @@ class Trainer:
                                     data_dir=data_dir,
                                     global_modules_dir=global_modules_dir,
                                     global_datasets_dir=global_datasets_dir)
+        # Will be overwritten by interface
+        self._reserved_gpus: Callable = lambda: None
         # static attributes
         self._data_dir = data_dir
         # logging is started first of all
@@ -798,6 +800,15 @@ class Trainer:
         except Exception as e:
             self._loge(f"Error occured {e}")
             return None
+
+    @property
+    def reserved_gpus(self) -> List[int]:
+        """Return gpus which are reserved by other sessions.
+
+        :code:`_reserved_gpus` is hooked in by the interface.
+
+        """
+        return self._reserved_gpus()
 
     @prop                       # type: ignore
     @state_var                  # type: ignore

@@ -325,7 +325,7 @@ class FlaskInterface:
             config.update(self.config_extra_opts)
         try:
             self.trainer = Trainer(**config)
-            self.trainer.reserved_gpus = lambda: self.reserved_gpus
+            self.trainer._reserved_gpus = lambda: self.reserved_gpus
             self.trainer.reserve_gpus = self.reserve_gpus
             self.trainer._init_all()
             return True, "Created Trainer"

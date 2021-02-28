@@ -2,7 +2,7 @@ from typing import Union, List, Callable, Dict, Tuple, Optional, Any, Type, Iter
 import flask
 
 from ..util import recurse_dict, pop_if
-from .parser import make_paths, global_modules
+from .parser import global_modules
 
 
 def _init(modules):
@@ -141,6 +141,7 @@ def openapi_spec(app: flask.Flask, excludes: List[str] = [],
         :func:`fix_yaml_references`
 
     """
+    from .parser import make_paths
     global global_modules
     global_modules.update(modules)
     paths, errors, excluded = make_paths(app, excludes, gen_opid, opid_template, aliases)

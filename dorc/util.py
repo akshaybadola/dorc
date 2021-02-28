@@ -234,7 +234,9 @@ def make_test_interface(setup_path, autoloads_path):
     exec(f"from {sfile} import config", globals(), ldict)
     config = ldict["config"]
     sys.path.remove(setup_dir)
-    status, message = iface.create_trainer(config)
+    with open(data_dir + "/config.json", "w") as f:
+        json.dump(config, f)
+    status, message = iface.create_trainer()
     if status:
         iface_thread = Thread(target=iface.start)
     else:

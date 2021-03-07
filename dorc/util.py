@@ -11,6 +11,22 @@ import torch
 from threading import Thread
 import requests
 from flask import Response
+from enum import Enum
+
+
+class StatusCodes(int, Enum):
+    success = 200
+    bad_params = 400
+    bad_request = 400
+    unauthorized = 401
+    forbidden = 403
+    not_found = 404
+    method_not_allowed = 405
+    unsupported_media_type = 415
+    sever_error = 500
+    not_implemented = 501
+    service_unavailable = 503
+    unavailable = 503
 
 
 BasicType = Union[str, int, bool]
@@ -76,8 +92,12 @@ def _dump(x: Any) -> str:
     # return json.dumps(x, default=lambda o: f"<<non-serializable: {type(o).__qualname__}>>")
 
 
-def make_json(x: Any, dump: bool = True) -> Response:
-    return Response(_dump(x) if dump else x, 200, mimetype="application/json")
+def json_resp(x: Any, status: int = 200, dump: bool = True) -> Response:
+    return Response(_dump(x) if dump else x, status, mimetype="application/json")
+
+
+def text_resp(x: Any, status: int = 200) -> Response:
+    return Response(f"{x}", status, mimetype="text/plain")
 
 
 def gen_file_logger(logdir: str, logger_name: str,
@@ -167,7 +187,7 @@ def stop_test_daemon(port=23232):
         response = requests.get(host + "_ping", timeout=.5)
         if response.status_code == 200:
             cookies = requests.request("POST", host + "login",
-                                       data={"username": "admin",
+                                       json={"username": "admin",
                                              "password": "AdminAdmin_33"}).cookies
             response = requests.get(host + "_shutdown", cookies=cookies)
             time.sleep(1)
@@ -187,7 +207,7 @@ def make_test_daemon(hostname="127.0.0.1", port=23232,
         response = requests.get(host + "_ping", timeout=.5)
         if response.status_code == 200:
             cookies = requests.request("POST", host + "login",
-                                       data={"username": "admin",
+                                       json={"username": "admin",
                                              "password": "AdminAdmin_33"}).cookies
             requests.get(host + "_shutdown", cookies=cookies)
             time.sleep(1)
@@ -203,7 +223,7 @@ def make_test_daemon(hostname="127.0.0.1", port=23232,
     time.sleep(.5)
     if get_cookies:
         cookies = requests.request("POST", host + "login",
-                                   data={"username": "admin",
+                                   json={"username": "admin",
                                          "password": "AdminAdmin_33"}).cookies
         return daemon, cookies
     else:

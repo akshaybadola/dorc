@@ -10,6 +10,7 @@ from ..util import _dump
 
 class Trainer(MethodView):
     decorators = [login_required]
+    __login_required__ = True
 
     def __init__(self, daemon):
         self.daemon = daemon

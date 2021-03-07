@@ -7,6 +7,7 @@ from flask_login import login_required
 
 class CheckTask(MethodView):
     decorators = [login_required]
+    __login_required__ = True
 
     def __init__(self, daemon):
         self.daemon = daemon

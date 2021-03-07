@@ -36,7 +36,7 @@ from ..version import __version__
 from ..mods import Modules
 from ..helpers import Tag
 from ..interfaces import FlaskInterface
-from ..util import _dump, diff_as_sets, make_json
+from ..util import _dump, diff_as_sets, json_resp, text_resp, StatusCodes as ST
 from .._log import Log
 
 from .auth import __unti__, __inti__, User
@@ -44,19 +44,18 @@ from .util import load_json, create_module
 
 from . import views
 from . import models
-from .sessions import Sessions
+# from .sessions import Sessions
 from .trainer_views import Trainer
 from .check_task import CheckTask
 
 session_get = Tag("session_get")
 session_post = Tag("session_post")
 
-
 path = pathlib.Path
 Path = Union[str, pathlib.Path]
 
 
-def sess_response(status, msg, tid=0) -> models.SessionMethodResponseModel:
+def sess_response(status, msg, tid=-1) -> models.SessionMethodResponseModel:
     return models.SessionMethodResponseModel(task_id=tid, message=msg, status=status)
 
 
@@ -197,6 +196,10 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                            "joe": User(1, "joe")}
         self._passwords = lambda x: __inti__(x)     # {"admin": "admin", "joe": "admin"}
 
+    def login_required(self, func: Callable) -> Callable:
+        func.__login_required__ = True
+        return flask_login.login_required(func)
+
     def _init_flags(self):
         self._already_scanned = False
         self._testing = False
@@ -260,7 +263,8 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
         while not self._task_q.empty():
             self._results.append(self._task_q.get())
 
-    def _check_config_exists(self, data_dir: Path) -> Optional[str]:
+    @classmethod
+    def _check_config_exists(cls, data_dir: Path) -> Optional[str]:
         if os.path.exists(os.path.join(data_dir, "session_config")) or\
            os.path.exists(os.path.join(data_dir, "session_config.py")):
             return "python"
@@ -401,7 +405,8 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
             result = self._check_result(task_id)
         return result[1]
 
-    def _update_init_file(self, init_file: Path, module_names: List[str]):
+    @classmethod
+    def _update_init_file(cls, init_file: Path, module_names: List[str]):
         """Update the `init_file` with the `module_names`.
 
         Each module is inserted as an import statement at the top of file.
@@ -467,7 +472,8 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
             # else:
             #     return True, f"Added dataset {mod_name}"
 
-    def _get_with_prefix(self, name, prefix):
+    @classmethod
+    def _get_with_prefix(cls, name, prefix):
         name = name.lstrip("_")
         return f"_{prefix}_" + name.lstrip(prefix).lstrip("_")
 
@@ -644,7 +650,7 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                                args=[session_name, time_str, data_dir,
                                      data.config, data.overrides, data.load]):
             state_path = os.path.join(self._sessions[session_name]["path"], time_str,
-                                   "session_state")
+                                      "session_state")
             if not os.path.exists(state_path):
                 self._dump_trainer_state(os.path.dirname(state_path))
             with open(os.path.join(self._sessions[session_name]["path"], time_str,
@@ -1263,15 +1269,15 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
             session_key: str
 
         Responses:
-            Invalid data: ResponseSchema(405, "Invalid Data", MimeTypes.text,
-                                        "Invalid data {some: json}")
-            bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
-                                       "Session key not in params")
+            bad params: ResponseSchema(400, "Bad Params", MimeTypes.text,
+                                            "Session key not in params")
             Success: ResponseSchema(200, "Initiated Task", MimeTypes.json,
                                          "SessionMethodResponseModel")
         """
+        if not flask_login.current_user.is_authenticated:
+            return self.login_manager.unauthorized()
         if "session_key" not in request.args:
-            return f"'session_key' must be in request"
+            return text_resp(f"'session_key' must be in request", 400)
         else:
             data = request.args
             task_id = self._get_task_id_launch_func(self._session_method_check, func_name, data)
@@ -1307,10 +1313,8 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                 data: :meth:`daemon.Daemon._<func_name>_helper`:<_>Model
 
         Responses:
-            Invalid data: ResponseSchema(405, "Invalid Data", MimeTypes.text,
-                                        "Invalid data {some: json}")
-            bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
-                                       "Session key not in params")
+            bad params: ResponseSchema(400, "Bad Params", MimeTypes.text,
+                                                      "Session key not in params")
             Success: ResponseSchema(200, "Initiated Task", MimeTypes.json,
                                          "SessionMethodResponseModel")
 
@@ -1429,7 +1433,7 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
         #       Although a better way would be to get the function
         #       for the url rule and return value from it
         # @self.app.route("/trainer/<int:port>/<endpoint>", methods=["GET", "POST"])
-        # @flask_login.login_required
+        # @self.login_required
         # def __trainer(port=None, endpoint=None):
         #     sess_list = self.sessions_list
         #     if port not in [x["port"] for x in sess_list.values()]:
@@ -1459,7 +1463,7 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
         #         return Response(_dump([False, f"Error occured {e}"]))
 
         # @self.app.route("/trainer/<int:port>/<category>/<endpoint>", methods=["GET", "POST"])
-        # @flask_login.login_required
+        # @self.login_required
         # def __trainer_one(port=None, category=None, endpoint=None):
         #     sess_list = self.sessions_list
         #     if port not in [x["port"] for x in sess_list.values()]:
@@ -1489,7 +1493,7 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
         #         return Response(_dump([False, f"Error occured {e}"]))
 
         # @self.app.route("/sessions", methods=["GET"])
-        # @flask_login.login_required
+        # @self.login_required
         # def __list_sessions():
         #     """Returns a dictionary of sessions, their ports if they're alive and the
         #     state. Rest of the communication can be done with session
@@ -1515,51 +1519,50 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
         #     else:
         #         return _dump([True, self.sessions_list])
 
-        # @self.app.route("/sessions", methods=["GET"])
-        # @validate()
-        # @flask_login.login_required
-        # def __sessions() -> Union[str, Dict[str, models.Session]]:
-        #     """GET the sessions list.
+        @self.app.route("/sessions", methods=["GET"])
+        @validate(query=None, body=None)
+        @self.login_required
+        def __sessions() -> Union[str, Dict[str, models.Session]]:
+            """GET the sessions list.
 
-        #     See :attr:`~daemon.Daemon.sessions_list`
+            See :attr:`~daemon.Daemon.sessions_list`
 
-        #     Tags:
-        #         daemon
+            Tags:
+                daemon
 
-        #     Requests:
-        #         params:
-        #             name: Optional[str]
+            Requests:
+                params:
+                    name: Optional[str]
 
-        #     Schemas:
-        #         class Success(BaseModel):
-        #             default: :attr:`daemon.Daemon.sessions_list`.returns
+            Schemas:
+                class Success(BaseModel):
+                    default: :attr:`daemon.Daemon.sessions_list`.returns
 
-        #     Responses:
-        #         failure: ResponseSchema(404, "No such session", MimeTypes.text,
-        #                                 "No Session with key: some_key")
-        #         Success: ResponseSchema(200, "Check Successful", MimeTypes.json, "Success")
+            Responses:
+                failure: ResponseSchema(404, "No such session", MimeTypes.text,
+                                                      "No Session with key: some_key")
+                Success: ResponseSchema(200, "Sessions", MimeTypes.json, "Success")
 
-        #     """
-        #     try:
-        #         name = request.args.get("name")
-        #     except Exception:
-        #         name = None
-        #     sess_list = self.sessions_list
-        #     if name:
-        #         name = name.strip()
-        #         sessions = {k: v  # models.Session.parse_obj(v)
-        #                     for k, v in sess_list.items()
-        #                     if k.startswith(name)}
-        #         if sessions:
-        #             return sessions
-        #         else:
-        #             return f"No session found with name: {name}"
-        #     else:
-        #         return sess_list
+            """
+            try:
+                name = request.args.get("name")
+            except Exception:
+                name = None
+            sess_list = self.sessions_list
+            if name:
+                name = name.strip()
+                sessions = {k: v.dict() for k, v in sess_list.items()
+                            if k.startswith(name)}
+                if sessions:
+                    return json_resp(sessions)
+                else:
+                    return Response(f"No session found with name: {name}", 404)
+            else:
+                return json_resp({k: v.dict() for k, v in sess_list.items()})
 
         @self.app.route("/current_user", methods=["GET"])
-        @flask_login.login_required
-        def __current_user():
+        @self.login_required
+        def __current_user() -> Response:
             """Return the name of the current user.
 
             Tags:
@@ -1576,12 +1579,12 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                 Success: ResponseSchema(200, "Current logged in user", MimeTypes.json, "Success")
 
             """
-            return _dump([True, {"user": flask_login.current_user.name}])
+            return json_resp({"user": flask_login.current_user.name})
 
         # CHECK: Why's this function so complicated?
         @self.app.route("/update_given_name", methods=["POST"])
-        @flask_login.login_required
-        def __update_given_name():
+        @self.login_required
+        def __update_given_name() -> Response:
             """Update the name of a given trainer.
 
             Tags:
@@ -1595,8 +1598,10 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                     session_key: str
 
             Responses:
-                bad params: ResponseSchema(400, "Bad params", MimeTypes.text, "given_name not in params")
-                Success: ResponseSchema(200, "Current logged in user", MimeTypes.text, "Successfully assigned name")
+                bad params: ResponseSchema(404, "Bad params", MimeTypes.text,
+                                                                       "given_name not in params")
+                Success: ResponseSchema(200, "Current logged in user", MimeTypes.text,
+                                                                       "Successfully assigned name")
 
             """
             data = load_json(request.json)
@@ -1635,7 +1640,7 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
 
         @self.app.route("/create_session", methods=["POST"])
         @validate()
-        @flask_login.login_required
+        @self.login_required
         def __create_session() -> Union[str, models.SessionMethodResponseModel]:
             """Create a new session.
 
@@ -1668,8 +1673,8 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
 
         # FIXME: How's this different from create_session?
         @self.app.route("/upload_session", methods=["POST"])
-        @flask_login.login_required
-        def __upload_session():
+        @self.login_required
+        def __upload_session() -> Union[str, models.SessionMethodResponseModel]:
             """Upload an archived session and create it.
 
             Tags:
@@ -1720,9 +1725,10 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
             return _dump([True, {"task_id": task_id,
                                  "message": "Creating session with whatever data given"}])
 
+        # TODO: fetch doc for a single function
         @self.app.route("/docs", methods=["GET"])
-        @flask_login.login_required
-        def __docs():
+        @self.login_required
+        def __docs() -> Dict[str, str]:
             """Returns all the docs for all the endpoints in the server.
 
             The trainer docs can be fetched from the trainer itself.
@@ -1746,10 +1752,10 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
             calls and return values can also be added. In that sense the
             functions should become self documenting soon.
             """
-            return _dump({"preamble": preamble, **docs})
+            return json_resp({"preamble": preamble, **docs})
 
         # @self.app.route("/check_task", methods=["GET"])
-        # @flask_login.login_required
+        # @self.login_required
         # def __check_task():
         #     """Check and return the status of a task submitted earlier.
 
@@ -1783,7 +1789,7 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
         #             return _dump([True, result])
 
         @self.app.route("/_version", methods=["GET"])
-        def __version():
+        def __version() -> str:
             """Return version of the current server.
 
             Tags:
@@ -1795,20 +1801,38 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
             return self.__version__
 
         @self.app.route("/_get_param", methods=["GET"])
-        def __get_param():
+        @self.login_required
+        def __get_param() -> Dict:
+            """Get an arbitrary paramter.
+
+            Requests:
+                params:
+                    name: str
+
+            Schemas:
+                class DaemonParam(BaseModel):
+                    name: str
+                    value: Any
+
+            Responses:
+                success: ResponseSchema(200, "{'name': 'value'}", MimeTypes.json, "DaemonParam")
+                not found: ResponseSchema(404, "Not found", MimeTypes.text, "Unknown param foo")
+
+            """
             if "param" in request.args:
                 param = request.args["param"]
                 if param in self.__dict__:
-                    return _dump(self.__dict__[param])
+                    # return DaemonParam(name=param, value=self.__dict__[param])
+                    return _dump({"name": param, "value": self.__dict__[param]})
                 else:
-                    return f"Unknown param{param}"
+                    return f"Unknown param {param}"
             else:
                 return f"No param in args"
 
         # FIXME: We're not checking overlap
         # TODO: Should only be available to interfaces
         @self.app.route("/_devices", methods=["GET", "POST"])
-        def __devices():
+        def __devices() -> List[int]:
             if request.method == "POST":
                 try:
                     data = load_json(request.json)
@@ -1830,44 +1854,48 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
             elif request.method == "GET":
                 return _dump(self.reserved_devices)
 
-        # @flask_login.login_required
+        # @self.login_required
         # @self.app.route("/api", methods=["GET"])
         # def __api():
         #     bleh = self
         #     import ipdb; ipdb.set_trace()
         #     return _dump("")
 
-        # I think I have to update the user.id on each login
         @self.app.route("/login", methods=["POST"])
-        def __login():
+        def __login() -> str:
             """Login to the server
 
             Tags:
                 daemon, user
 
             Requests:
+                Content-Type: application/json
                 body:
                     username: str
                     password: str
 
             Responses:
                 logged_in: ResponseSchema(200, "Logged in", MimeTypes.text, "Logged in")
-                not logged in: ResponseSchema(400, "not logged in", MimeTypes.text, "Could not log in")
+                bad params: ResponseSchema(400, "username or password not in data", MimeTypes.text,
+                                                          "Bad params")
+                bad creds: ResponseSchema(401, "Invalid credentials", MimeTypes.text,
+                                                           "Invalid credentials")
 
             """
-            if "username" not in request.form or "password" not in request.form:
-                return _dump([False, "Username or Password not provided"])
+            data = load_json(request.json)
+            if "username" not in data or "password" not in data:
+                return text_resp("Username or Password not provided", 400)
             else:
-                status, user = self._check_username_password(request.form)
+                status, user = self._check_username_password(data)
                 if status:
                     flask_login.login_user(user, remember=False)
-                    return _dump([True, "Login Successful"])
+                    return text_resp("Login Successful")
                 else:
-                    return _dump([False, "Invalid Credentials"])
+                    return text_resp("Invalid Credentials", 401)
 
         # I think I have to update the user.id on each login
         @self.app.route("/logged_in", methods=["GET"])
-        def __logged_in():
+        def __logged_in() -> str:
             """Check if the user is logged in
 
             Tags:
@@ -1875,30 +1903,32 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
 
             Responses:
                 logged_in: ResponseSchema(200, "Logged in", MimeTypes.text, "Logged in")
-                not logged in: ResponseSchema(400, "not logged in", MimeTypes.text, "Could not log in")
+                not logged in: ResponseSchema(401, "not logged in",
+                                              MimeTypes.text, "Unauthorized")
 
             """
             if flask_login.current_user.is_authenticated:
-                return "Logged in"
+                return text_resp("Logged in")
             else:
-                return "Could not Login"
+                return text_resp("Not Logged in", 401)
 
         @self.app.route("/logout", methods=["GET"])
-        @flask_login.login_required
-        def __logout():
+        @self.login_required
+        def __logout() -> str:
             """Logout from the server.
 
             Tags:
                 daemon, user
 
             Responses:
-                logged out: ResponseSchema(400, "Logged out", MimeTypes.text, "Logged out")
+                logged out: ResponseSchema(200, "Logged out", MimeTypes.text, "Logged out")
+
             """
             flask_login.logout_user()
-            return "Logged Out"
+            return text_resp("Logged Out")
 
         @self.app.route("/list_session_modules", methods=["GET"])
-        @flask_login.login_required
+        @self.login_required
         def __list_session_modules():
             """NOT IMPLEMENTED: This feature isn't implemented yet and should not be called.
 
@@ -1908,13 +1938,14 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                 daemon, session
 
             Responses:
-                not implemented: ResponseSchema(400, "Not Implemented", MimeTypes.text, "Not Implemented")
+                not implemented: ResponseSchema(501, "Not Implemented",
+                                                MimeTypes.text, "Not Implemented")
 
             """
             return "Not Implemented yet"
 
         @self.app.route("/add_session_module", methods=["POST"])
-        @flask_login.login_required
+        @self.login_required
         def __add_session_module():
             """NOT IMPLEMENTED: This feature isn't implemented yet and should not be called.
 
@@ -1923,7 +1954,8 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
             {session_key} has to be provided.
 
             Responses:
-                not implemented: ResponseSchema(400, "Not Implemented", MimeTypes.text, "Not Implemented")
+                not implemented: ResponseSchema(501, "Not Implemented",
+                                                MimeTypes.text, "Not Implemented")
 
             """
             return "Not implemented yet"
@@ -1942,8 +1974,8 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                                  "message": "Adding global data"}])
 
         @self.app.route("/delete_session_module", methods=["POST"])
-        @flask_login.login_required
-        def __delete_session_module():
+        @self.login_required
+        def __delete_session_module() -> str:
             """NOT IMPLEMENTED: This feature isn't implemented yet and should not be called.
 
             Delete the module in the given session. Expects args {module_name, session_key}
@@ -1954,7 +1986,8 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                 daemon, session
 
             Responses:
-                not implemented: ResponseSchema(400, "Not Implemented", MimeTypes.text, "Not Implemented")
+                not implemented: ResponseSchema(501, "Not Implemented",
+                                                MimeTypes.text, "Not Implemented")
 
             """
             return "Not implemented yet"
@@ -1973,8 +2006,8 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                                   "message": "Adding global data"}])
 
         @self.app.route("/list_global_modules", methods=["GET"])
-        @flask_login.login_required
-        def __list_global_modules():
+        @self.login_required
+        def __list_global_modules() -> Dict[str, Any]:
             """Returns the list of global modules available.
 
             Tags:
@@ -1987,11 +2020,12 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                 Success: ResponseSchema(200, "Sucess", MimeTypes.json, "Success")
 
             """
-            return _dump([True, self._modules])
+            return self._modules
+
 
         @self.app.route("/add_global_module", methods=["POST"])
         @validate()
-        @flask_login.login_required
+        @self.login_required
         def __add_global_module() -> models.SessionMethodResponseModel:
             """Add a module to the global modules.
 
@@ -2005,8 +2039,10 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                 daemon, modules
 
             Requests:
+                Content-Type: MimeTypes.multipart
                 params:
                     name: str
+                    file: bytes
 
             Schemas:
                 class Task(BaseModel):
@@ -2025,14 +2061,14 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                     data = json.loads(request.form["name"])
                     file_bytes = request.files["file"].read()
                 except Exception as e:
-                    return sess_response(False, f"{e}" + "\n" + traceback.format_exc(), 0)
+                    return sess_response(False, f"{e}" + "\n" + traceback.format_exc())
             data = {"name": data, "data_file": file_bytes}
             task_id = self._get_task_id_launch_func(self._load_module, data)
             return sess_response(True, "Adding global module", task_id)
 
         @self.app.route("/delete_global_module", methods=["POST"])
-        @flask_login.login_required
-        def __delete_global_module():
+        @self.login_required
+        def __delete_global_module() -> str:
             """Delete the given module from the list of global modules.
 
             The module is immediately unavailable for all future running
@@ -2047,9 +2083,12 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                     name: str
 
             Responses:
-                not such module: ResponseSchema(404, "No such module", MimeTypes.text, "No such module mode_name")
-                bad params: ResponseSchema(400, "Name not in params", MimeTypes.text, "Name of module required")
-                Success: ResponseSchema(200, "Deleted Dataset", MimeTypes.text, "Deleted module MNIST")
+                not such module: ResponseSchema(404, "No such module",
+                                                MimeTypes.text, "No such module mode_name")
+                bad params: ResponseSchema(400, "Name not in params",
+                                           MimeTypes.text, "Name of module required")
+                Success: ResponseSchema(200, "Deleted Dataset", MimeTypes.text,
+                                             "Deleted module MNIST")
 
             """
             # TODO: Make sure that the imports are reloaded if there's an update
@@ -2084,8 +2123,8 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                 return f"Error occured {e}" + "\n" + traceback.format_exc()
 
         @self.app.route("/list_datasets", methods=["GET"])
-        @flask_login.login_required
-        def __list_datasets():
+        @self.login_required
+        def __list_datasets() -> Dict[str, Dict]:
             """Return the list of global datasets available.
 
             Tags:
@@ -2099,11 +2138,11 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                 Success: ResponseSchema(200, "Datasets", MimeTypes.json, "Dataset")
 
             """
-            return make_json(self.datasets)
+            return json_resp(self.datasets)
 
         @self.app.route("/upload_dataset", methods=["POST"])
         @validate()
-        @flask_login.login_required
+        @self.login_required
         def __upload_dataset() -> models.SessionMethodResponseModel:
             """Upload a dataset which would be globally available to the server.
 
@@ -2130,12 +2169,12 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                     type: str
 
             Responses:
-                bad params: ResponseSchema(405, "Bad Params", MimeTypes.text,
-                            "name not in request")
-                Error: ResponseSchema(405, "Error Occurred", MimeTypes.text,
-                            "Some error occured: error while parsing file")
+                bad params: ResponseSchema(400, "Bad Params", MimeTypes.text,
+                                                          "name not in request")
+                Error: ResponseSchema(500, "Error Occurred", MimeTypes.text,
+                                           "Some error occured: error while parsing file")
                 Success: ResponseSchema(200, "Uploaded Successfully", MimeTypes.text,
-                            "Uploaded Dataset MNIST successfully")
+                                             "Uploaded Dataset MNIST successfully")
 
             """
             if "name" not in request.form or ("name" in request.form
@@ -2163,8 +2202,8 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
             return sess_response(True, "Adding global data", task_id)
 
         @self.app.route("/delete_dataset", methods=["POST"])
-        @flask_login.login_required
-        def __delete_dataset():
+        @self.login_required
+        def __delete_dataset() -> str:
             """Delete a given dataset
 
             Tags:
@@ -2179,7 +2218,8 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                                            "No such dataset mode_name")
                 bad params: ResponseSchema(400, "Name not in params", MimeTypes.text,
                                            "Name of dataset required")
-                Success: ResponseSchema(200, "Deleted Dataset", MimeTypes.text, "Deleted dataset MNIST")
+                Success: ResponseSchema(200, "Deleted Dataset", MimeTypes.text,
+                                             "Deleted dataset MNIST")
 
             """
             # TODO: Check if dataset is in use by some session
@@ -2207,7 +2247,7 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                 return f"Error occured {e}" + "\n" + traceback.format_exc()
 
         @self.app.route("/_ping", methods=["GET"])
-        def __ping():
+        def __ping() -> str:
             """Return Pong.
 
             Tags:
@@ -2224,7 +2264,7 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
             return "pong"
 
         @self.app.route("/_name", methods=["GET"])
-        def __name():
+        def __name() -> str:
             """Return Daemon Name.
 
             Tags:
@@ -2255,6 +2295,8 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
 
         # NOTE: Add session_get and session_post.  Routes are added by removing
         #       "_" prefix and "_helper" suffix from self._session_methods
+        self._session_check_get.__dict__["__login_required__"] = True
+        self._session_check_post.__dict__["__login_required__"] = True
         for x in self._session_get:
             self.app.add_url_rule("/" + x, x, partial(self._session_check_get, x),
                                   methods=["GET"])
@@ -2263,26 +2305,23 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                                   methods=["POST"])
 
         trainer_view = Trainer.as_view("trainer", self)
-        self.app.add_url_rule("/trainer/<int:port>/<endpoint>",
-                              view_func=trainer_view)
+        self.app.add_url_rule("/trainer/<int:port>/<endpoint>", view_func=trainer_view)
         self.app.add_url_rule("/trainer/<int:port>/<category>/<endpoint>",
                               view_func=trainer_view)
 
         check_task = CheckTask.as_view("check_task", self)
-        self.app.add_url_rule("/check_task",
-                              view_func=check_task)
+        self.app.add_url_rule("/check_task", view_func=check_task)
 
-        sessions = Sessions.as_view("sessions", self)
-        self.app.add_url_rule("/sessions",
-                              view_func=sessions)
+        # sessions = Sessions.as_view("sessions", self)
+        # self.app.add_url_rule("/sessions", view_func=sessions)
 
         @atexit.register
         def cleanup():
             self.stop()
 
         @self.app.route("/_shutdown", methods=["GET"])
-        @flask_login.login_required
-        def __shutdown_server():
+        @self.login_required
+        def __shutdown_server() -> str:
             """Shutdown the machine
 
             Tags:

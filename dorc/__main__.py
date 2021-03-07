@@ -6,6 +6,35 @@ import dorc
 from . import daemon
 from . import interfaces
 from . import trainer
+from .version import __version__
+
+
+def update_security_schemes(spec):
+    """Patch OpenAPI spec to include security schemas.
+
+    Args:
+        spec: OpenAPI spec dictionary
+
+    Returns:
+        Patched spec
+
+    """
+    login_headers = {'Set-Cookie':
+                     {'schema':
+                      {'type': 'string',
+                       'example': 'session=abcde12345; Path=/; HttpOnly'}}}
+    security_schemes = {'cookieAuth': {'description': 'Session Cookie',
+                                       'type': 'apiKey',
+                                       'in': 'cookie',
+                                       'name': 'session'}}
+    unauthorized_schema = {'UnauthorizedError':
+                           {'description': "The auth cookie isn't present",
+                            'properties':
+                            {'schema': {'type': 'string', 'example': 'Unauthorized'}}}}
+    spec["components"]["securitySchemes"] = security_schemes
+    spec["security"] = [{"cookieAuth": []}]
+    spec["paths"]["/login"]["post"]["responses"][200]["headers"] = login_headers.copy()
+    return spec
 
 
 def generate_spec(arglist):
@@ -16,7 +45,7 @@ def generate_spec(arglist):
     import yaml
 
     from . import util
-    from .spec import openapi_spec, fix_yaml_references, fix_redundancies
+    from flask_docspec import openapi_spec, fix_yaml_references
 
     parser = argparse.ArgumentParser("OpenAPI Spec Generator",
                                      formatter_class=argparse.RawTextHelpFormatter)
@@ -75,22 +104,27 @@ def generate_spec(arglist):
                 AttributeError(f"Failed to parse aliases {args.aliases}. Error {e}")
         else:
             aliases = {}
-        out, err, ex = openapi_spec(dmn.app, excludes, args.gen_opid,
-                                    args.opid_template, {"dorc": dorc,
-                                                         "trainer": trainer,
-                                                         "daemon": daemon,
-                                                         "interfaces": interfaces},
-                                    [trainer.models.Return,
-                                     trainer.models.ReturnBinary,
-                                     trainer.models.ReturnExtraInfo,
-                                     trainer.models.TrainerState,
-                                     dorc.daemon.models.Session,
-                                     dorc.daemon.models.SessionMethodResponseModel,
-                                     dorc.daemon.models.CreateSessionModel],
-                                    aliases)
-        out_str = fix_yaml_references(yaml.safe_dump(out))
+        spec_dict, err, ex = openapi_spec(dmn.app, excludes, args.gen_opid,
+                                          args.opid_template, {"dorc": dorc,
+                                                               "trainer": trainer,
+                                                               "daemon": daemon,
+                                                               "interfaces": interfaces},
+                                          [trainer.models.Return,
+                                           trainer.models.ReturnBinary,
+                                           trainer.models.ReturnExtraInfo,
+                                           trainer.models.TrainerState,
+                                           dorc.daemon.models.Session,
+                                           dorc.daemon.models.SessionMethodResponseModel,
+                                           dorc.daemon.models.CreateSessionModel],
+                                          aliases)
+        spec_dict["info"] = {'title': 'DORC Server Daemon',
+                             'description': 'API specification for Deep Learning ORChestrator',
+                             'license': {'name': 'MIT'},
+                             'version': __version__}
+        spec_dict = update_security_schemes(spec_dict)
+        spec_str = fix_yaml_references(yaml.safe_dump(spec_dict))
         with open(fname, "w") as f:
-            f.write(out_str)
+            f.write(spec_str)
         if err:
             print("\nErrors:\n", "\n".join(map(str, err)), file=sys.stderr)
         else:
@@ -113,19 +147,23 @@ def generate_spec(arglist):
                 AttributeError(f"Failed to parse aliases {args.aliases}. Error {e}")
         else:
             aliases = {}
-        out, err, ex = openapi_spec(iface.app, excludes, args.gen_opid,
-                                    args.opid_template, {"dorc": dorc,
-                                                         "trainer": trainer,
-                                                         "daemon": daemon,
-                                                         "interfaces": interfaces},
-                                    [trainer.models.Return,
-                                     trainer.models.ReturnBinary,
-                                     trainer.models.TrainerState,
-                                     trainer.models.ReturnExtraInfo],
-                                    aliases)
-        out_str = fix_yaml_references(yaml.safe_dump(out))
+        spec_dict, err, ex = openapi_spec(iface.app, excludes, args.gen_opid,
+                                          args.opid_template, {"dorc": dorc,
+                                                               "trainer": trainer,
+                                                               "daemon": daemon,
+                                                               "interfaces": interfaces},
+                                          [trainer.models.Return,
+                                           trainer.models.ReturnBinary,
+                                           trainer.models.TrainerState,
+                                           trainer.models.ReturnExtraInfo],
+                                          aliases)
+        spec_dict["info"] = {'title': 'DORC Server Iface',
+                             'description': 'API specification for Deep Learning ORChestrator',
+                             'license': {'name': 'MIT'},
+                             'version': __version__}
+        spec_str = fix_yaml_references(yaml.safe_dump(spec_dict))
         with open(fname, "w") as f:
-            f.write(out_str)
+            f.write(spec_str)
         if err:
             print("\nErrors:\n", "\n".join(map(str, err)), file=sys.stderr)
         else:

@@ -5,13 +5,14 @@ from flask.views import MethodView
 from flask_login import login_required
 from flask_pydantic import validate
 
-from ..util import make_json
+from ..util import json_resp
 
 
 class Sessions(MethodView):
     "Get the sessions list"
 
     decorators = [login_required]
+    __login_required__ = True
 
     def __init__(self, daemon):
         self.daemon = daemon
@@ -49,8 +50,8 @@ class Sessions(MethodView):
             sessions = {k: v.dict() for k, v in sess_list.items()
                         if k.startswith(name)}
             if sessions:
-                return make_json(sessions)
+                return json_resp(sessions)
             else:
                 return Response(f"No session found with name: {name}", 404)
         else:
-            return make_json({k: v.dict() for k, v in sess_list.items()})
+            return json_resp({k: v.dict() for k, v in sess_list.items()})

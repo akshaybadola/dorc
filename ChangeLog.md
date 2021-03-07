@@ -117,3 +117,7 @@
 - Fixed issues with gpu reservation in daemon and interface.
 - Fixed start trainer without loading models.
 
+## [2021-03-07 Sun 17:11]
+- Separated `spec` as a separate package.
+  See [flask-docspec](https://github.com/akshaybadola/flask-docspec)
+- Some minor refactorings of `Daemon` responses.

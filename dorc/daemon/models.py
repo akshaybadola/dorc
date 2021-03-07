@@ -1,5 +1,5 @@
 from typing import List, Dict, Iterable, Any, Union, Tuple, Callable, Optional
-from ..spec.models import add_nullable, remove_prop_titles, BaseModel as SpecModel
+from flask_docspec.models import add_nullable, remove_prop_titles, BaseModel as SpecModel
 from ..trainer.models import TrainerState
 
 

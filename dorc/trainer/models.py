@@ -4,8 +4,8 @@ import torch
 from enum import Enum
 from numbers import Number
 import numpy
+from flask_docspec.models import add_nullable, remove_attr, remove_prop_titles
 
-from ..spec.models import add_nullable, remove_attr, remove_prop_titles
 from . import model
 
 

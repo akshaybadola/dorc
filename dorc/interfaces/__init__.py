@@ -17,8 +17,8 @@ from pathlib import Path
 from flask import Flask, render_template, request, Response
 from flask_cors import CORS
 from werkzeug import serving
+from flask_docspec.models import BaseModel
 
-from ..spec.models import BaseModel
 from ..util import _dump, deprecated
 from ..trainer import Trainer
 from ..trainer.models import Return

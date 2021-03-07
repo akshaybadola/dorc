@@ -355,7 +355,7 @@ class Modules:
     @classmethod
     def read_modules_from_dir(cls, mods_dir,
                               excludes: Iterable[Callable[[str], bool]] = [],
-                              preds: Iterable[Callable[[str], bool]] = []) -> Dict:
+                              preds: Iterable[Callable[[str], bool]] = []) -> Dict[str, Any]:
         """Read all the symbols from available modules in the module directory `mods_dir`.
 
         Args:

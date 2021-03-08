@@ -119,8 +119,7 @@ def test_daemon_list_modules(daemon_and_cookies, json_config):
     time.sleep(1)
     host = f"http://{daemon.hostname}:{daemon.port}/"
     response = requests.request("GET", host + "list_global_modules", cookies=cookies)
-    assert isinstance(json.loads(response.content), list)
-    assert isinstance(json.loads(response.content)[1], dict)
+    assert isinstance(json.loads(response.content), dict)
     mods = json.loads(response.content)
     expected = {"autoloads": ["torch", "ModelStep", "sys",
                               "ClassificationStep",
@@ -130,9 +129,9 @@ def test_daemon_list_modules(daemon_and_cookies, json_config):
                               "CheckGreaterName",
                               "CheckLesserName",
                               "CheckAccuracy"]}
-    for k in mods[1]:
+    for k in mods:
         assert k in expected
-        assert set(mods[1][k]) == set(expected[k])
+        assert set(mods[k]) == set(expected[k])
 
 
 @pytest.mark.http

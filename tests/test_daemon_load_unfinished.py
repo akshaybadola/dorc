@@ -1,6 +1,5 @@
 import pytest
 import os
-import shutil
 import requests
 import time
 import json
@@ -70,4 +69,5 @@ def test_load_unfinished_sessions(daemon_and_cookies, json_config):
                                    cookies=cookies).content
         assert smod.parse_obj(json.loads(content)).status
     util.stop_test_daemon(port+5)
+    util.make_test_daemon(port=port, no_clear=True)
     time.sleep(1)

@@ -817,6 +817,15 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
     def compare_sessions(self):
         pass
 
+    def _sessions_list_subroutine(self, val, v, ts, scan_state="scan_done"):
+        session = v["sessions"][ts]
+        val["loaded"] = scan_state == "scan_done" and\
+            "process" in session and session["process"].poll() is None
+        val["port"] = session["port"] if val["loaded"] else None
+        val["state"] = session["state"]
+        val["finished"] = self._session_finished_p(session["state"])
+        return val
+
     # FIXME: merge state and config here.
     #        What if the config changes in the middle? It should update automatically.
     @property
@@ -828,18 +837,15 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
                 key = k + "/" + ts
                 val: Dict[str, Any] = {}
                 scan_state = self._scan_state.get(key, "scan_not_started")
-                if not scan_state == "scan_done":
+                if self._already_scanned:
+                    val = self._sessions_list_subroutine(val, v, ts)
+                elif not scan_state == "scan_done":
                     val["loaded"] = False
                     val["port"] = None
                     val["state"] = models.NotScanned(state=scan_state)
                     val["finished"] = False
                 else:
-                    session = v["sessions"][ts]
-                    val["loaded"] = scan_state == "scan_done" and\
-                        "process" in session and session["process"].poll() is None
-                    val["port"] = session["port"] if val["loaded"] else None
-                    val["state"] = session["state"]
-                    val["finished"] = self._session_finished_p(session["state"])
+                    val = self._sessions_list_subroutine(val, v, ts, scan_state)
                 retval[key] = models.Session.parse_obj(val)
         return retval
 

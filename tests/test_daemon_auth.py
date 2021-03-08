@@ -1,25 +1,25 @@
 import os
-import sys
+import random
 import time
-import json
 import shutil
 import requests
 import unittest
-sys.path.append("../")
+import pytest
 from dorc.util import make_test_daemon
 
 
+@pytest.mark.http
 class DaemonHTTPTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.data_dir = ".test_dir"
+        cls.data_dir = ".test_auth_dir"
         if os.path.exists(cls.data_dir):
             shutil.rmtree(cls.data_dir)
         if not os.path.exists(cls.data_dir):
             os.mkdir(cls.data_dir)
-        cls.port = 23232
+        cls.port = random.randint(24432, 25000)
         cls.hostname = "127.0.0.1"
-        cls.daemon = make_test_daemon(cls.hostname, cls.port, ".test_dir")
+        cls.daemon = make_test_daemon(cls.hostname, cls.port, cls.data_dir)
         cls.host = "http://" + ":".join([cls.hostname, str(cls.port) + "/"])
         time.sleep(.5)
 
@@ -29,13 +29,11 @@ class DaemonHTTPTest(unittest.TestCase):
         self.assertIn("not", response.content.decode().lower())
         self.assertIn("authorized", response.content.decode().lower())
         response = requests.request("POST", self.host + "login",
-                                    data={"username": "admin", "password": "admin"})
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(json.loads(response.content)[0])
+                                    json={"username": "admin", "password": "admin"})
+        self.assertEqual(response.status_code, 401)
         response = requests.request("POST", self.host + "login",
-                                    data={"username": "admin", "password": "AdminAdmin_33"})
+                                    json={"username": "admin", "password": "AdminAdmin_33"})
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(json.loads(response.content)[0])
         cookies = response.cookies
         response = requests.request("GET", self.host + "sessions", allow_redirects=False,
                                     cookies=cookies)
@@ -44,15 +42,13 @@ class DaemonHTTPTest(unittest.TestCase):
     @classmethod
     def shutdown_daemon(cls, host):
         cookies = requests.request("POST", host + "login",
-                                   data={"username": "admin",
+                                   json={"username": "admin",
                                          "password": "AdminAdmin_33"}).cookies
         response = requests.request("GET", host + "_shutdown", cookies=cookies, timeout=2)
         return response
 
     @classmethod
     def tearDownClass(cls):
-        if cls.daemon._fwd_ports_thread is not None:
-            cls.daemon._fwd_ports_thread.kill()
         cls.shutdown_daemon(cls.host)
         if os.path.exists(cls.data_dir):
             shutil.rmtree(cls.data_dir)

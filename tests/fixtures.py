@@ -195,7 +195,8 @@ def params_and_iface():
     with open("_setup_py.py", "rb") as f:
         conf_bytes = f.read()
     util.write_py_config(conf_bytes, data_dir, gmods_dir, gdata_dir)
-    iface = FlaskInterface(hostname, port, data_dir, gmods_dir, gdata_dir, no_start=True)
+    iface = FlaskInterface(hostname, port, data_dir, gmods_dir, gdata_dir,
+                           host, no_start=True)
     # from global_modules import autoloads
     status, message = iface.create_trainer()
     iface_thread = Thread(target=iface.start)
@@ -229,14 +230,10 @@ def daemon_and_cookies():
     host = "http://" + ":".join([hostname, str(port) + "/"])
     time.sleep(.5)
     cookies = requests.request("POST", host + "login",
-                               data={"username": "admin",
+                               json={"username": "admin",
                                      "password": "AdminAdmin_33"}).cookies
     yield (daemon, cookies)
-    try:
-        requests.get(host + "_shutdown", cookies=cookies)
-    except Exception:
-        # in case shutdown in the test
-        pass
+    requests.get(host + "_shutdown", cookies=cookies)
 
 
 @pytest.fixture

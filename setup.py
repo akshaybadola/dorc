@@ -73,7 +73,7 @@ setup(
                       "ptyprocess==0.6.0",
                       "Pygments==2.5.2",
                       "pydantic @ git+https://github.com/akshaybadola/pydantic.git@master",
-                      "flask_docspec @ git+https://github.com/akshaybadola/flask-docspec.git@master",
+                      "flask_docspec @ git+https://github.com/akshaybadola/flask-docspec.git@main",
                       "pynvml==8.0.3",
                       "pyparsing==2.4.6",
                       "python-dateutil==2.8.1",

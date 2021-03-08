@@ -1,6 +1,6 @@
 #! /bin/bash
 
-pytest --cov=../dorc --cov-report=html --cov-append -m 'quick and not spec and not todo' \
+pytest --cov=../dorc --cov-report=html -m 'quick and not spec and not todo' \
        -k 'not test_trainer_models and not test_trainer_device'
 echo "Finished quick tests"
 pytest --cov=../dorc --cov-report=html --cov-append -m 'threaded and not todo'

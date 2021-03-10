@@ -1,4 +1,4 @@
-name: Test and Validate OpenAPI Spec
+name: Validate OpenAPI Spec Generation
 on: [push]
 
 jobs:
@@ -22,17 +22,14 @@ jobs:
         key: ${{ runner.os }}-pip-${{ hashFiles(env.cache-file-name) }}
         restore-keys: |
           ${{ runner.os }}-pip-${{ hashFiles(env.cache-file-name) }}
+    - name: Unzip MNIST
+      run: cd ./tests && unzip data.zip && cd ../
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         export SKIP_CYTHON=1
         if [ -f requirements-${{ matrix.python-version }}.txt ]; then python -m pip install -r requirements-${{ matrix.python-version }}.txt; fi
-        python -m pip install pytest==6.2.1
-        python -m pip install pytest-timeout==1.4.2
         python -m pip install openapi-spec-validator==0.2.9
-    - name: Test spec generation
-      run: |
-        cd tests && pytest -m 'spec and not todo and not bug' && cd ..
     - name: Validate OpenAPI spec generation
       run: |
         bash make_spec no

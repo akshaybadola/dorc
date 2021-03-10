@@ -22,12 +22,8 @@ jobs:
         key: ${{ runner.os }}-pip-${{ hashFiles(env.cache-file-name) }}
         restore-keys: |
           ${{ runner.os }}-pip-${{ hashFiles(env.cache-file-name) }}
-    - name: Cache MNIST
-      uses: actions/cache@v2
-      with:
-        path: ./tests/.data
-        key: mnist-data
-        restore-keys: mnist-data
+    - name: Unzip MNIST
+      run: cd ./tests/.data && unzip data.zip && cd ../../
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip

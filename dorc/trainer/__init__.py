@@ -144,7 +144,7 @@ class Trainer:
 
     def __init__(self, model_params, criteria, optimizers, update_functions,
                  extra_metrics, trainer_params, data_params, dataloader_params, data_dir,
-                 global_modules_dir, global_datasets_dir,
+                 global_modules_dir, global_datasets_dir, extra_opts=None,
                  log_levels={"file": "debug", "stream": "info"}):
         """Initializes the :class:`Trainer` object. This is supposed to be a catch all
         trainer which is robust and easy to train and can generate graphs
@@ -170,19 +170,11 @@ class Trainer:
         :param test_loader: a test data loader usually :class:`torch.utils.data.Dataloader`
 
         """
-        # DONE: model, train_loader, val_loader should be resettable from the interface
-        #       Say, trainer.reset() is called, then the interface should place a hook there
-        #       that automatically resets the trainloader and the valloader
-        #       Mostly Done.
-        # Basic assign parameters
-
+        extra_opts = extra_opts or {}
         if "params" in update_functions and update_functions["params"]:
             update_functions = config.UpdateFunctions(
                 function=update_functions["function"],
                 params=config.UpdateFunctionsParams(**update_functions["params"]))
-        # else:
-        #     update_functions = update_functions
-        #     update_functions = config.UpdateFunctions(**update_functions)
         self.config = config.Config(model_params={k: config.ModelParams(**v)
                                                   for k, v in model_params.items()},
                                     trainer_params=config.TrainerParams(**trainer_params),
@@ -190,12 +182,10 @@ class Trainer:
                                               for k, v in criteria.items()},
                                     optimizers={k: config.Optimizer(**v)
                                                 for k, v in optimizers.items()},
-                                    data_params=config.DataParams(name=data_params["name"],
-                                                                  train=data_params["train"],
-                                                                  val=data_params["val"],
-                                                                  test=data_params["test"]),
-                                    dataloader_params=config.DataLoaderParams(
-                                        **dataloader_params),
+                                    data_params=config.DataParams(**data_params),
+                                    dataloader_params=(dataloader_params and
+                                                       config.DataLoaderParams(
+                                                           **dataloader_params)),
                                     update_functions=update_functions,
                                     extra_metrics={k: Metric(**v)
                                                    for k, v in extra_metrics.items()},

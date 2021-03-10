@@ -86,7 +86,7 @@ class ModelParams(BaseModel):
     gpus: Union[List[int], int, str, None]
     loaded: Optional[bool]
     _validate_gpus = validator("gpus", allow_reuse=True)(gpus_could_be_list_of_int_or_str)
-    _validate_model = validator("model", allow_reuse=True)(model_must_be_torch_nn_module)
+    # _validate_model = validator("model", allow_reuse=True)(model_must_be_torch_nn_module)
 
 
 class Optimizer(BaseModel):
@@ -441,11 +441,12 @@ class Config(PydanticBaseModel):
     update_functions: UpdateFunctions
     data_params: DataParams
     extra_metrics: Dict[str, Metric]
-    dataloader_params: DataLoaderParams
+    dataloader_params: Optional[DataLoaderParams]
     # NOTE: following is given by interface
     data_dir: Path
     global_modules_dir: Path
     global_datasets_dir: Path
+    extra_opts: Optional[Dict]
 
     @validator("model_params")
     def model_params_must_not_be_empty(cls, v):
@@ -458,6 +459,12 @@ class Config(PydanticBaseModel):
         for k, x in v.items():
             if not hasattr(x.function, 'forward'):
                 raise AttributeError(f"{k}, {x} has no attribute 'forward'")
+        return v
+
+    @validator("dataloader_params")
+    def dataloader_params_can_only_be_none_if_custom_dataloader_is_not_none(cls, v, values):
+        if v is None and values["data_params"].loader is None:
+            raise AttributeError(f"dataloader_params can only be None if data_params[loader] is None")
         return v
 
     class Config:

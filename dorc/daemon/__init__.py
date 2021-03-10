@@ -354,7 +354,9 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
         iface = FlaskInterface(None, None, data_dir,
                                self.modules_dir, self.datasets_dir,
                                self.url, no_start=True)
-        iface.create_trainer()
+        status, message = iface.create_trainer()
+        if not status:
+            self._loge(message)
         del iface
 
     def _find_open_port(self):
@@ -551,6 +553,9 @@ if "{os.path.dirname(self.root_dir)}" not in sys.path:
             self._logd("No existing modules dir. Creating")
             os.mkdir(mods_dir)
         raise NotImplementedError
+
+    def _create_new_session_if_no_state(self, state_path):
+        pass
 
     def remove_empty_directories(self, dirnames: List[str]):
         """Remove empty directories if any.

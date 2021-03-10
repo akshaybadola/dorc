@@ -230,23 +230,57 @@ def make_test_daemon(hostname="127.0.0.1", port=23232,
         return daemon
 
 
-def make_test_interface(setup_path, autoloads_path):
+def prompt(string, p_t, p_f):
+    x = input(string).strip()
+    if isinstance(p_t, str):
+        p_t = {p_t}
+    if isinstance(p_f, str):
+        p_f = {p_f}
+    valid_inputs = {*p_t, *p_f}
+    while x not in valid_inputs:
+        x = input(string + f"\nPlease type one of {valid_inputs} ").strip()
+    if x in p_t:
+        return True
+    elif x in p_f:
+        return False
+
+
+def prompt_yes_no(string):
+    return prompt(string + " (yes or no) ", "yes", "no")
+
+
+def prompt_y_n(string):
+    return prompt(string + " (y, n) ", {"yes", "y"}, {"no", "n"})
+
+
+def create_iface(setup_path, autoloads_path, root_dir,
+                 data_dir, dump_json=False,
+                 hostname="127.0.0.1", port=12321,
+                 clear=False, force=False):
     from threading import Thread
     from .interfaces import FlaskInterface
-
-    hostname = "127.0.0.1"
-    port = 12321
-    data_dir = ".test_dir"
-    if os.path.exists(data_dir):
-        shutil.rmtree(data_dir)
+    hostname = hostname
+    port = port
+    if clear and os.path.exists(root_dir):
+        if clear and force and ".test" in root_dir:
+            shutil.rmtree(root_dir)
+        elif clear and force and\
+             prompt_yes_no(f"Really remove {root_dir} and all its contents?"):
+            shutil.rmtree(root_dir)
+    if not os.path.exists(root_dir):
+        os.mkdir(root_dir)
+    gmods_dir = os.path.abspath(os.path.join(root_dir, "global_modules"))
+    gdata_dir = os.path.abspath(os.path.join(root_dir, "global_datasets"))
+    if not os.path.exists(gmods_dir):
+        create_module(gmods_dir,
+                      [os.path.abspath(autoloads_path)])
+    if not os.path.exists(gdata_dir):
+        create_module(gdata_dir)
+    sys.path.append(os.path.abspath(root_dir))
+    if root_dir not in data_dir:
+        data_dir = os.path.join(root_dir, data_dir)
     if not os.path.exists(data_dir):
-        os.mkdir(data_dir)
-    gmods_dir = os.path.abspath(os.path.join(data_dir, "global_modules"))
-    gdata_dir = os.path.abspath(os.path.join(data_dir, "global_datasets"))
-    create_module(gmods_dir,
-                  [os.path.abspath(autoloads_path)])
-    create_module(gdata_dir)
-    sys.path.append(os.path.abspath(data_dir))
+        os.makedirs(data_dir)
     iface = FlaskInterface(hostname, port, data_dir, gmods_dir, gdata_dir,
                            f"http://{hostname}:{port}/", no_start=True)
     setup_dir = os.path.dirname(setup_path)
@@ -256,10 +290,17 @@ def make_test_interface(setup_path, autoloads_path):
     exec(f"from {sfile} import config", globals(), ldict)
     config = ldict["config"]
     sys.path.remove(setup_dir)
-    with open(data_dir + "/config.json", "w") as f:
-        json.dump(config, f)
-    status, message = iface.create_trainer()
+    if dump_json:
+        with open(os.path.join(data_dir, "config.json"), "w") as f:
+            json.dump(config, f)
+    iface = FlaskInterface(None, None, data_dir,
+                           gmods_dir, gdata_dir,
+                           "http://localhost:20202/",
+                           no_start=True)
+    status, message = iface.create_trainer(True)
     if status:
+        iface.api_host = hostname
+        iface.api_port = port
         iface_thread = Thread(target=iface.start)
     else:
         print("Could not create trainer")
@@ -267,6 +308,11 @@ def make_test_interface(setup_path, autoloads_path):
     iface_thread.start()
     time.sleep(1)
     return iface
+
+
+def make_test_interface(setup_path, autoloads_path):
+    return create_iface(setup_path, autoloads_path, ".test_dir", "test_session",
+                        dump_json=True, clear=True, force=True)
 
 
 def stop_test_interface():

@@ -99,25 +99,31 @@ class FlaskInterface:
         self._logw = log._logw
         self._orig_config = None
         self._current_config = None
-        if (self.api_host and self.api_port and self.config_exists):
-            self._logi("Creating Trainer")
-            status, message = self.create_trainer()
-            if status and no_start:
-                self._logi("no_start given. Not starting")
-            elif status and not no_start:
-                self._logi("Starting server")
-                self.start()
-            else:
-                self._loge(f"Error creating trainer {message}")
+        if self.api_host and self.api_port and self.config_exists:
+            self._create_trainer_if_config_exists(no_start)
         elif (not self.state_exists and self.config_exists and
-                not self.api_host and not self.api_port):
-            self._logi(f"Initializing Trainer State")
-            status, message = self.create_trainer()
-            self._logd(f"{status}, {message}")
-            self.trainer: Optional[Trainer] = None
-            del self.trainer
+              not self.api_host and not self.api_port):
+            self.init_trainer_and_dump_state()
         elif not self.state_exists and not self.config_exists:
             self._logd(f"Config doesn't exist. Cannot create trainer")
+
+    def _create_trainer_if_config_exists(self, no_start):
+        self._logi("Creating Trainer")
+        status, message = self.create_trainer()
+        if status and no_start:
+            self._logi("no_start given. Not starting")
+        elif status and not no_start:
+            self._logi("Starting server")
+            self.start()
+        else:
+            self._loge(f"Error creating trainer {message}")
+
+    def init_trainer_and_dump_state(self):
+        self._logi(f"Initializing Trainer State")
+        status, message = self.create_trainer(True)
+        self._logd(f"{status}, {message}")
+        self.trainer: Optional[Trainer] = None
+        del self.trainer
 
     @property
     def config_file(self) -> str:
@@ -315,44 +321,37 @@ class FlaskInterface:
         self._write_overrides(overrides_files, self.config_overrides)
         self._current_config = config
 
-    def _create_trainer_helper(self):
+    def _create_trainer_helper(self, ignore_devices):
         if self._config_json_file:
             with open(self.config_file) as f:
                 tlayer = self.get_tlayer(json.load(f))
             config = tlayer.from_json()
             config.pop("model_step_params", None)
         else:
+            if os.path.dirname(self.gmods_dir) not in sys.path:
+                sys.path.append(os.path.dirname(self.gmods_dir))
             if self.data_dir not in sys.path:
                 sys.path.append(self.data_dir)
-                from session_config import config
-                sys.path.remove(self.data_dir)
-            else:
-                from session_config import config
+            from session_config import config
             config.update(self.config_extra_opts)
         try:
             self.trainer = Trainer(**config)
-            self.trainer._reserved_gpus = lambda: self.reserved_gpus
-            self.trainer.reserve_gpus = self.reserve_gpus
+            if ignore_devices:
+                self.trainer._reserved_gpus = lambda *x: []
+                self.trainer.reserve_gpus = lambda x: [True, None]
+            else:
+                self.trainer._reserved_gpus = lambda: self.reserved_gpus
+                self.trainer.reserve_gpus = self.reserve_gpus
             self.trainer._init_all()
             return True, "Created Trainer"
         except Exception as e:
             return False, f"{e}" + "\n" + traceback.format_exc()
 
-    def create_trainer(self):
+    def create_trainer(self, ignore_devices=False):
         if self.config_exists:
-            return self._create_trainer_helper()
+            return self._create_trainer_helper(ignore_devices)
         elif not self.config_exists:
             return False, "No existing config"
-        # elif not self.config_exists and config is not None:
-        #     try:
-        #         self._read_config()
-        #     except Exception as e:
-        #         status = False
-        #         result = f"Error occurred {e}"
-        #     if status:
-        #         return self._create_trainer_helper()
-        #     else:
-        #         return status, result
 
     # TODO: I might have to give the names for various thingies while generating
     #       certificates for it to work correctly.

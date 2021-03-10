@@ -121,3 +121,10 @@
 - Separated `spec` as a separate package.
   See [flask-docspec](https://github.com/akshaybadola/flask-docspec)
 - Some minor refactorings of `Daemon` responses.
+
+## [2021-03-10 Wed 14:17]
+- Fixed some issues with dumping and loading json in `FlaskInterface`.
+- Changed `util.make_test_interface`. It depends on `util.create_iface` which is
+  more generic.
+- A minor fix to `trainer.config` and added `dataloader_params` validator
+- Added `scripts/kill_if_runs.py`

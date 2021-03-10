@@ -23,7 +23,7 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-${{ hashFiles(env.cache-file-name) }}
     - name: Unzip MNIST
-      run: cd ./tests/.data && unzip data.zip && cd ../../
+      run: cd ./tests && unzip data.zip && cd ../
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip

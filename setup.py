@@ -62,7 +62,7 @@ setup(
                       "parso==0.6.2",
                       "pexpect==4.8.0",
                       "pickleshare==0.7.5",
-                      "Pillow==6.0.0",
+                      "Pillow==7.1.0",
                       "pockets==0.9.1",
                       "prompt-toolkit==3.0.3",
                       "psutil==5.6.3",

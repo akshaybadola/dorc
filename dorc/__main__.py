@@ -1,5 +1,6 @@
 import os
 import sys
+import signal
 import argparse
 import configargparse
 import dorc
@@ -7,6 +8,30 @@ from . import daemon
 from . import interfaces
 from . import trainer
 from .version import __version__
+
+
+TIMEOUT = 3                     # number of seconds your want for timeout
+
+
+def interrupted(signum, frame):
+    "called when read times out"
+    raise Exception('interrupted!')
+
+
+def _input():
+    try:
+        return input("Could not get hostname. Proceed with unknown, or enter: ")
+    except Exception:
+        print("Setting host to 'unknown'")
+        return "unknown"
+
+
+HOST = os.environ.get("HOSTNAME")
+if not HOST:
+    signal.signal(signal.SIGALRM, interrupted)
+    signal.alarm(TIMEOUT)
+    HOST = _input()
+signal.alarm(0)
 
 
 def update_security_schemes(spec):
@@ -186,7 +211,7 @@ def load_or_create_config(arglist):
                help="Port on which to serve. Default is 444")
     parser.add("-p", "--trainer-port-start", default=20202,
                help="Port range to which trainers will bind start")
-    parser.add("--daemon-name", default="dorc_" + os.environ.get("HOSTNAME"),
+    parser.add("--daemon-name", default="dorc_" + HOST,
                help="Name of the server.")
     parser.add("-v", dest="verbose", help="verbose", action="store_true")
     opts = parser.parse_args(arglist)

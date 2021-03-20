@@ -215,12 +215,17 @@ def main():
     parser.add_argument("cmd", help="""Command to run. One of 'run' or 'generate_spec'
 
 Type dorc cmd --help to get help about the command.""")
+    parser.add_argument("--version", action="store_true",
+                        help="Print version and exit")
     if len(sys.argv) == 1:
         print(f"No command given\n")
         parser.print_help()
         sys.exit(1)
     elif sys.argv[1] in {"-h", "--help"}:
         parser.print_help()
+        sys.exit(0)
+    elif sys.argv[1] == "--version":
+        print(f"Deep learning OrChestrator version (DORC) {__version__}")
         sys.exit(0)
     try:
         args, sub_args = parser.parse_known_args()

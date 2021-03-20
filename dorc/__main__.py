@@ -3,35 +3,11 @@ import sys
 import signal
 import argparse
 import configargparse
-import dorc
 from . import daemon
 from . import interfaces
 from . import trainer
+from . import util
 from .version import __version__
-
-
-TIMEOUT = 3                     # number of seconds your want for timeout
-
-
-def interrupted(signum, frame):
-    "called when read times out"
-    raise Exception('interrupted!')
-
-
-def _input():
-    try:
-        return input("Could not get hostname. Proceed with unknown, or enter: ")
-    except Exception:
-        print("Setting host to 'unknown'")
-        return "unknown"
-
-
-HOST = os.environ.get("HOSTNAME")
-if not HOST:
-    signal.signal(signal.SIGALRM, interrupted)
-    signal.alarm(TIMEOUT)
-    HOST = _input()
-signal.alarm(0)
 
 
 def update_security_schemes(spec):
@@ -130,17 +106,16 @@ def generate_spec(arglist):
         else:
             aliases = {}
         spec_dict, err, ex = openapi_spec(dmn.app, excludes, args.gen_opid,
-                                          args.opid_template, {"dorc": dorc,
-                                                               "trainer": trainer,
+                                          args.opid_template, {"trainer": trainer,
                                                                "daemon": daemon,
                                                                "interfaces": interfaces},
                                           [trainer.models.Return,
                                            trainer.models.ReturnBinary,
                                            trainer.models.ReturnExtraInfo,
                                            trainer.models.TrainerState,
-                                           dorc.daemon.models.Session,
-                                           dorc.daemon.models.SessionMethodResponseModel,
-                                           dorc.daemon.models.CreateSessionModel],
+                                           daemon.models.Session,
+                                           daemon.models.SessionMethodResponseModel,
+                                           daemon.models.CreateSessionModel],
                                           aliases)
         spec_dict["info"] = {'title': 'DORC Server Daemon',
                              'description': 'API specification for Deep Learning ORChestrator',
@@ -173,8 +148,7 @@ def generate_spec(arglist):
         else:
             aliases = {}
         spec_dict, err, ex = openapi_spec(iface.app, excludes, args.gen_opid,
-                                          args.opid_template, {"dorc": dorc,
-                                                               "trainer": trainer,
+                                          args.opid_template, {"trainer": trainer,
                                                                "daemon": daemon,
                                                                "interfaces": interfaces},
                                           [trainer.models.Return,
@@ -198,6 +172,25 @@ def generate_spec(arglist):
 
 
 def load_or_create_config(arglist):
+    def interrupted(signum, frame):
+        "called when read times out"
+        raise Exception('interrupted!')
+
+    def _input():
+        try:
+            return input("Could not get hostname. Proceed with unknown, or enter: ")
+        except Exception:
+            print("Setting host to 'unknown'")
+            return "unknown"
+
+    timeout = 3
+    host = util.get_hostname()
+    if not host:
+        signal.signal(signal.SIGALRM, interrupted)
+        signal.alarm(timeout)
+        host = _input()
+    signal.alarm(0)
+
     parser = configargparse.ArgParser(
         "Run dorc Daemon",
         default_config_files=[os.path.expanduser("~/.dorc/config.ini")])
@@ -211,7 +204,7 @@ def load_or_create_config(arglist):
                help="Port on which to serve. Default is 444")
     parser.add("-p", "--trainer-port-start", default=20202,
                help="Port range to which trainers will bind start")
-    parser.add("--daemon-name", default="dorc_" + HOST,
+    parser.add("--daemon-name", default="",
                help="Name of the server.")
     parser.add("-v", dest="verbose", help="verbose", action="store_true")
     opts = parser.parse_args(arglist)

@@ -20,12 +20,6 @@ def load_json(data):
         return None
 
 
-def get_hostname() -> str:
-    p = Popen("hostname", stdout=PIPE, stderr=PIPE)
-    out, err = p.communicate()
-    return out.decode("utf-8")
-
-
 def check_ssh_port(host: str, port: Union[int, str]) -> Union[int, str]:
     timeout = 2
     while True:

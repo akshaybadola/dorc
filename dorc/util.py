@@ -12,6 +12,7 @@ from threading import Thread
 import requests
 from flask import Response
 from enum import Enum
+from subprocess import Popen, PIPE
 
 
 class StatusCodes(int, Enum):
@@ -55,6 +56,12 @@ def concat(list_var: Iterable[List]) -> List:
     for x in list_var:
         temp.extend(x)
     return temp
+
+
+def get_hostname() -> str:
+    p = Popen("hostname", stdout=PIPE, stderr=PIPE)
+    out, err = p.communicate()
+    return out.decode("utf-8").strip()
 
 
 # def deprecated(f: Union[Callable, property]) -> Union[Callable, property]:

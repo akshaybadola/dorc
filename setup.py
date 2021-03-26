@@ -76,7 +76,7 @@ setup(
                       "python-dateutil==2.8.1",
                       "python-magic==0.4.15",
                       "PyWavelets==1.1.1",
-                      "PyYAML==5.3.1",
+                      "PyYAML==5.4",
                       "requests==2.22.0",
                       "six>=1.14.0,<1.16.0",
                       "traitlets==4.3.3",

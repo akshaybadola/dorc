@@ -26,7 +26,7 @@ pockets==0.9.1
 prompt-toolkit==3.0.3
 psutil==5.7.2
 ptyprocess==0.6.0
-Pygments==2.5.2
+Pygments==2.7.4
 git+https://github.com/akshaybadola/pydantic.git@master
 git+https://github.com/akshaybadola/flask-docspec.git@main
 Flask-Pydantic==0.6.0

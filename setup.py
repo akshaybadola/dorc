@@ -50,7 +50,7 @@ setup(
                       "cycler==0.10.0",
                       "decorator==4.4.2",
                       "Flask>=1.1.1,<1.2.0",
-                      "Flask-Cors==3.0.8",
+                      "Flask-Cors==5.0.0",
                       "Flask-Login==0.5.0",
                       "idna==2.8",
                       "itsdangerous==1.1.0",
